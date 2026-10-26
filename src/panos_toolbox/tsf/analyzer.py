@@ -23,6 +23,8 @@ import os
 import re
 import sys
 import tarfile
+import webbrowser
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------------------------------
@@ -663,7 +665,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog='panos-toolbox tsf analyze', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('inputs', nargs='+', help='TSF (.tgz/.tar.gz), directory or dp-monitor.* file')
-    ap.add_argument('-o', '--outdir', default='.', help='output directory (default: .)')
+    ap.add_argument('-o', '--outdir', default='output', help='output directory (default: output)')
+    ap.add_argument('--open', action='store_true', help='open the report in the default browser')
     args = ap.parse_args(argv)
 
     tpl = TEMPLATE
@@ -703,6 +706,10 @@ def main(argv=None):
         with open(os.path.join(args.outdir, 'index.html'), 'w', encoding='utf-8') as fh:
             fh.write(render_index(index_rows))
         print(f'[OK] summary -> {os.path.join(args.outdir, "index.html")}')
+
+    if index_rows and args.open:
+        target = 'index.html' if len(index_rows) > 1 else index_rows[0]['file']
+        webbrowser.open(Path(args.outdir, target).resolve().as_uri())
 
 
 if __name__ == '__main__':
