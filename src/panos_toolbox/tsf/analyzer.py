@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-tsf_throughput.py - Estrae Throughput (kbps) e metriche correlate dai file
+tsf.analyzer - Estrae Throughput (kbps) e metriche correlate dai file
 dp-monitor.* di un Tech Support File (TSF) Palo Alto Networks e genera un
 report HTML autonomo (tabella filtrabile/esportabile + grafici interattivi, inclusa la CPU load per gruppo).
 
 Solo libreria standard. Python >= 3.8.
 
 Uso:
-    tsf_throughput.py tsf1.tgz [tsf2.tgz ...] [-o OUTDIR]
-    tsf_throughput.py /percorso/directory_TSF_estratto
-    tsf_throughput.py dp-monitor.log            # singolo file
+    panos-toolbox tsf analyze tsf1.tgz [tsf2.tgz ...] [-o OUTDIR]
+    panos-toolbox tsf analyze /percorso/directory_TSF_estratto
+    panos-toolbox tsf analyze dp-monitor.log    # singolo file
+    python -m panos_toolbox.tsf.analyzer ...    # equivalente
 
 Ogni TSF produce <nome>_throughput.html; con piu' input viene creato anche
 index.html di riepilogo.
@@ -657,12 +658,12 @@ def render_index(rows):
             f'<th>Picco</th><th>Avvisi</th></tr>{body}</table>')
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='panos-toolbox tsf analyze', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('inputs', nargs='+', help='TSF (.tgz/.tar.gz), directory o file dp-monitor.*')
     ap.add_argument('-o', '--outdir', default='.', help='directory di output (default: .)')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -704,4 +705,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
