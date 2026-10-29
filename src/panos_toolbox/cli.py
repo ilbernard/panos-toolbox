@@ -11,6 +11,10 @@ import sys
 from panos_toolbox import __version__
 
 TOOLS = {
+    ("firewall", "console"): (
+        "panos_toolbox.firewall.console",
+        "Desktop GUI: connect to Panorama, list managed firewalls, run actions",
+    ),
     ("tsf", "analyze"): (
         "panos_toolbox.tsf.analyzer",
         "Throughput/CPU HTML report from a Tech Support File (dp-monitor.*)",
@@ -25,7 +29,7 @@ def _usage():
     lines = ["usage: panos-toolbox <area> <tool> [args...]", "", "available tools:"]
     for area, tools in areas.items():
         for name, desc in tools:
-            lines.append(f"  {area} {name:<12} {desc}")
+            lines.append(f"  {area + ' ' + name:<18} {desc}")
     lines += ["", "Run 'panos-toolbox <area> <tool> -h' for tool options."]
     return "\n".join(lines)
 

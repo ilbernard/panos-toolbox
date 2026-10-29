@@ -13,8 +13,9 @@ dependencies = []
 
 [project.optional-dependencies]
 firewall = ["pan-os-python"]
+console = ["pan-os-python", "PySide6"]
 scm = ["pan-scm-sdk; python_version >= '3.10'"]
-all = ["pan-os-python", "pan-scm-sdk; python_version >= '3.10'"]
+all = ["pan-os-python", "PySide6", "pan-scm-sdk; python_version >= '3.10'"]
 dev = ["pytest", "ruff"]
 
 [project.scripts]

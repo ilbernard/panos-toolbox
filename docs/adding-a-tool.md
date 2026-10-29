@@ -10,3 +10,7 @@
 5. Add a test under `tests/` (mock the SDK; no test may touch a real device).
 
 Tools run as `panos-toolbox <area> <tool>` or `python -m panos_toolbox.<area>.<tool>`.
+
+A tool may be a package instead of a single module (see `firewall/console/`) as long as
+`panos_toolbox.<area>.<tool>` exposes `main(argv=None)`. To add a new *action* to the
+Panorama console, see [console/adding-an-action.md](console/adding-an-action.md).
