@@ -34,7 +34,7 @@ To use `panos-toolbox` from anywhere without managing a venv, install it with
 | Command | Description |
 |---------|-------------|
 | `panos-toolbox firewall console [--profiles-file FILE]` | Desktop GUI (Windows/macOS/Linux, needs `.[console]`): log in to Panorama with username/password, list the managed firewalls (filter by any column) and run actions on the selection, all proxied through Panorama. First action: Reboot. Saved connection profiles never contain passwords. See [docs/console/](docs/console/) |
-| `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags); output goes to `./output/` by default |
+| `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags, explained in a Help tab); output goes to `./output/` by default |
 
 Run `panos-toolbox` with no arguments for the full list.
 
