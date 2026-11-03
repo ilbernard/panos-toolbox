@@ -17,8 +17,12 @@ TEMPLATE_HEAD = r'''<!doctype html>
 # Stylesheet rules (CSS variables, layout, tabs, tables, badges).
 TEMPLATE_CSS = r''':root{--ink:#1c2530;--mute:#5d6b7a;--line:#d8dde3;--bg:#f4f6f8;--card:#fff;--acc:#1f6f8b;--warn-bg:#fff4d6;--warn-bd:#c98a00}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+/* Layout: designed for Full HD (1920x1080) or larger; 1900 leaves room for a classic scrollbar. Below 1900 CSS px the page keeps
+   its width and scrolls horizontally, so no layout reflows at smaller sizes. The main
+   column grows with the window; it is capped at 3200px on ultrawide and 4K screens so
+   that lines of tables and text do not run across the whole display. */
+body{margin:0;min-width:1900px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:3200px;margin:0 auto;padding:20px 24px 48px}
 h1{font-size:20px;margin:0 0 2px}
 h2{font-size:15px;margin:0 0 10px}
 .sub{color:var(--mute);margin:0 0 14px}
@@ -40,7 +44,10 @@ table{border-collapse:collapse;width:100%}
 th,td{padding:5px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
 th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
 th{cursor:pointer;background:#eef1f4;position:sticky;top:0}
-.scroll{max-height:460px;overflow:auto;border:1px solid var(--line)}
+/* Scrollable tables: show more rows on taller screens (100vh minus room for the header and
+   filters), between 460px and 1200px. */
+.scroll{max-height:clamp(460px,calc(100vh - 400px),1200px);overflow:auto;border:1px solid var(--line)}
+.pgrid>div+div{margin-top:16px}
 .stats td,.stats th{cursor:default;position:static}
 .stats th:nth-child(2),.stats td:nth-child(2){text-align:right}
 .tabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line);margin:0}
@@ -65,6 +72,14 @@ tr.anom-warn td:first-child{box-shadow:inset 4px 0 0 var(--warn-bd)}
 .meter i{display:block;height:100%;background:var(--acc);border-radius:2px}
 summary{cursor:pointer}
 .help{max-width:920px;line-height:1.5}
+/* Wide screens only (2560 px and up): two-column POW tables, larger text and a wider Help
+   column. Below 2560 px every block stays single column, as on 1080p. */
+@media (min-width:2560px){
+  body{font-size:15px}
+  .help{max-width:1100px}
+  .pgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 24px;align-items:start}
+  .pgrid>div+div{margin-top:0}
+}
 .help h2{font-size:16px;margin:20px 0 8px}
 .help h2:first-child{margin-top:0}
 .help h3{font-size:14px;margin:14px 0 6px}
@@ -141,10 +156,12 @@ TEMPLATE_BODY = r'''</style>
     <button id="pcsv" type="button">Export CSV</button>
     <span class="hint" id="pmeta"></span>
   </div>
-  <h2>Workgroups</h2>
-  <div class="scroll"><table id="pgt"></table></div>
-  <h2 style="margin-top:16px">Functions</h2>
-  <div class="scroll"><table id="pft"></table></div>
+  <div class="pgrid">
+  <div><h2>Workgroups</h2>
+  <div class="scroll"><table id="pgt"></table></div></div>
+  <div><h2>Functions</h2>
+  <div class="scroll"><table id="pft"></table></div></div>
+  </div>
   <div class="sep"><h2>Function CPU share by category</h2><table class="stats" id="pcat"></table></div>
   <div class="sep"><h2>Histograms (processing time per call)</h2><div id="phist"></div></div>
   <div class="sep"><h2>Workgroup total-us per core</h2><p class="hint">Darker cell = more CPU time. Use the View selector to see one core's functions.</p><div class="scroll"><table id="pmx"></table></div></div>
@@ -204,12 +221,15 @@ $('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
 
 // reusable chart
+// Chart height follows the window height: 360px (the 1080p size) up to 720px on 4K.
+// The width comes from the container, so the viewBox ratio gives the drawn height.
+const chartH = () => Math.round(Math.min(720, Math.max(360, 0.38*window.innerHeight)));
 function makeChart(svg, tip, wrap){
   let view=null;
   const el=(n,a)=>{const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); svg.appendChild(e); return e;};
   const niceMax=v=>{ if(v<=0) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))), n=v/p; return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p; };
   function draw(series,o){
-    const W=Math.max(480,wrap.clientWidth), H=360, L=70,R=16,T=12,B=34, u=o.u;
+    const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=16,T=12,B=34, u=o.u;
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
     const all=series.flatMap(s=>s.d.map(p=>p.v));
     const x0=state.range[0]!==null?state.range[0]:TMIN, x1=state.range[1]!==null?state.range[1]:TMAX;
@@ -548,7 +568,9 @@ $('#tabs').onkeydown=e=>{
   if(e.key==='ArrowRight') j=(i+1)%TABS.length; else if(e.key==='ArrowLeft') j=(i+TABS.length-1)%TABS.length; else if(e.key==='Home') j=0; else if(e.key==='End') j=TABS.length-1;
   if(j<0) return; e.preventDefault(); showTab(TABS[j]); $('#tab-'+TABS[j]).focus();
 };
-window.addEventListener('resize',renderActive);
+// Debounced: re-draws the visible tab at the new size. Zoom range and selections are state, so they are kept.
+let resizeTimer=null;
+window.addEventListener('resize',()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(renderActive,150); });
 showTab(TABS[0]);
 </script>
 </body>
