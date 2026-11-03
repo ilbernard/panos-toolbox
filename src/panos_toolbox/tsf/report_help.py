@@ -20,6 +20,9 @@ data is in the file.</p>
 <li><b>POW performance</b> reads the <code>tmp/cli/*.txt</code> files that contain
 <code>debug dataplane pow performance</code> output.</li>
 </ul>
+<p><b>Display.</b> The report is designed for Full HD (1920x1080) or larger screens. The charts and
+tables use the available width and height, and on screens of 2560 px wide or more the POW
+tables sit side by side. Below 1900 px wide the page scrolls horizontally.</p>
 <p><b>Time zone.</b> All dp-monitor timestamps are converted to UTC. The original firewall
 offsets are listed in the note above the tabs. The POW "Collected at" line is the raw
 <code>show clock</code> string from the firewall and is not converted.</p>
