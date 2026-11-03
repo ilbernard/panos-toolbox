@@ -3,7 +3,8 @@
 tsf.analyzer - Extracts Throughput (kbps) and related metrics from the
 dp-monitor.* files of a Palo Alto Networks Tech Support File (TSF) and builds a
 standalone HTML report (filterable/exportable table + interactive charts,
-including CPU load by group).
+including CPU load by group). The output of `debug dataplane pow performance`
+(tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py).
 
 Standard library only.
 
@@ -11,10 +12,11 @@ Usage:
     panos-toolbox tsf analyze tsf1.tgz [tsf2.tgz ...] [-o OUTDIR]
     panos-toolbox tsf analyze /path/to/extracted_TSF_dir
     panos-toolbox tsf analyze dp-monitor.log    # single file
+    panos-toolbox tsf analyze cli_output.txt    # single file with POW output
     python -m panos_toolbox.tsf.analyzer ...    # equivalent
 
-Each TSF produces <name>_throughput.html; with multiple inputs a summary
-index.html is also created.
+Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
+data); with multiple inputs a summary index.html is also created.
 """
 import argparse
 import html
@@ -27,10 +29,13 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+from .pow_perf import evaluate, has_data, parse_pow
+
 # --------------------------------------------------------------------------
 # Parsing
 # --------------------------------------------------------------------------
 DP_FILE_RE = re.compile(r'(?:^|/)var/log/pan/(dp-monitor\.[^/]+)$')
+CLI_FILE_RE = re.compile(r'(?:^|/)tmp/cli/[^/]+\.txt$')
 HDR_RE = re.compile(
     r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d+))? '
     r'([+-])(\d{2})(\d{2})\s+---\s+(\S+)')
@@ -194,9 +199,14 @@ def iter_text_lines(fobj):
 
 
 def collect(path, warnings):
-    """Returns (samples, offsets, n_files) for a TSF / directory / file."""
+    """Returns (samples, offsets, n_files, pow_data) for a TSF / directory / file.
+
+    pow_data is the parse_pow() result of the first 'debug dataplane pow
+    performance' output found (tmp/cli/*.txt, or a single input file), or None.
+    """
     samples, seen, offsets = [], set(), set()
     n_files = 0
+    pow_found = []
 
     def handle(name, fobj):
         nonlocal n_files
@@ -216,6 +226,16 @@ def collect(path, warnings):
         if found == 0:
             warnings.append(f'{base}: no Throughput samples found')
 
+    def handle_cli(name, fobj):
+        base = os.path.basename(name)
+        try:
+            parsed = parse_pow(iter_text_lines(fobj), src=base)
+        except (OSError, EOFError, tarfile.TarError) as exc:  # truncated archive
+            warnings.append(f'{base}: POW read error ({exc}), skipped')
+            return
+        if has_data(parsed):
+            pow_found.append((base, parsed))
+
     if os.path.isdir(path):
         for root, _dirs, files in os.walk(path):
             for f in sorted(files):
@@ -224,19 +244,33 @@ def collect(path, warnings):
                 if DP_FILE_RE.search('/' + rel):
                     with open(full, 'rb') as fh:
                         handle(rel, fh)
+                elif CLI_FILE_RE.search('/' + rel):
+                    with open(full, 'rb') as fh:
+                        handle_cli(rel, fh)
     elif tarfile.is_tarfile(path):
         with tarfile.open(path, 'r:*') as tf:
             for m in tf:                      # single-pass read
-                if m.isfile() and DP_FILE_RE.search(m.name.lstrip('./')):
+                if not m.isfile():
+                    continue
+                if DP_FILE_RE.search(m.name.lstrip('./')):
                     handle(m.name, tf.extractfile(m))
-    else:                                     # single log file
+                elif CLI_FILE_RE.search(m.name.lstrip('./')):
+                    handle_cli(m.name, tf.extractfile(m))
+    else:                                     # single file: POW output or log
         with open(path, 'rb') as fh:
-            handle(path, fh)
+            handle_cli(path, fh)
+        if not pow_found:
+            with open(path, 'rb') as fh:
+                handle(path, fh)
 
-    if n_files == 0:
+    if n_files == 0 and not pow_found:
         warnings.append('no dp-monitor.* file found in /var/log/pan')
+    if len(pow_found) > 1:
+        warnings.append(f'POW output found in {len(pow_found)} files, '
+                        f'using {pow_found[0][0]}')
     samples.sort(key=lambda r: (r['t'], r['dp']))
-    return samples, offsets, n_files
+    pow_data = pow_found[0][1] if pow_found else None
+    return samples, offsets, n_files, pow_data
 
 
 def add_aggregate(samples):
@@ -269,7 +303,7 @@ TEMPLATE = r'''<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Throughput - __TITLE__</title>
+<title>__KIND__ - __TITLE__</title>
 <style>
 :root{--ink:#1c2530;--mute:#5d6b7a;--line:#d8dde3;--bg:#f4f6f8;--card:#fff;--acc:#1f6f8b;--warn-bg:#fff4d6;--warn-bd:#c98a00}
 *{box-sizing:border-box}
@@ -307,6 +341,19 @@ th{cursor:pointer;background:#eef1f4;position:sticky;top:0}
 .sep{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 details{margin-top:8px}
 .hint{color:var(--mute);font-size:12px}
+.banner{list-style:none;margin:0 0 12px;padding:0}
+.banner li{border-left:4px solid var(--line);background:#f7f9fb;padding:6px 10px;margin:0 0 6px;border-radius:2px}
+.banner li.lvl-crit{border-color:#b42318;background:#fdecea}
+.banner li.lvl-warn{border-color:var(--warn-bd);background:var(--warn-bg)}
+.badge{display:inline-block;color:#fff;border-radius:3px;padding:0 6px;margin:0 3px 2px 0;font-size:11px;line-height:17px;white-space:nowrap}
+.b-crit{background:#b42318}.b-warn{background:#b7791f}.b-info{background:#5d6b7a}
+tr.anom-crit td{background:#fdecea}
+tr.anom-warn td{background:var(--warn-bg)}
+tr.anom-crit td:first-child{box-shadow:inset 4px 0 0 #b42318}
+tr.anom-warn td:first-child{box-shadow:inset 4px 0 0 var(--warn-bd)}
+.meter{height:8px;min-width:120px;background:#e3e7ec;border-radius:2px}
+.meter i{display:block;height:100%;background:var(--acc);border-radius:2px}
+summary{cursor:pointer}
 </style>
 </head>
 <body>
@@ -319,6 +366,7 @@ details{margin-top:8px}
 <div class="tabs" id="tabs" role="tablist" aria-label="Report sections">
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
+  <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
@@ -357,6 +405,27 @@ details{margin-top:8px}
   <table class="stats" id="gstats"></table>
 </section>
 
+<section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
+  <p class="hint" id="pinfo"></p>
+  <details id="pwarn" style="display:none;margin:0 0 12px"><summary id="pwarnsum"></summary><ul id="pwarnlist"></ul></details>
+  <ul class="banner" id="pbanner"></ul>
+  <div class="bar">
+    <label>View <select id="pview"></select></label>
+    <label>Search <input type="search" id="pq" placeholder="name or category"></label>
+    <label><input type="checkbox" id="panom"> only anomalous rows</label>
+    <label><input type="checkbox" id="pidle" checked> hide rows without calls</label>
+    <button id="pcsv" type="button">Export CSV</button>
+    <span class="hint" id="pmeta"></span>
+  </div>
+  <h2>Workgroups</h2>
+  <div class="scroll"><table id="pgt"></table></div>
+  <h2 style="margin-top:16px">Functions</h2>
+  <div class="scroll"><table id="pft"></table></div>
+  <div class="sep"><h2>Function CPU share by category</h2><table class="stats" id="pcat"></table></div>
+  <div class="sep"><h2>Histograms (processing time per call)</h2><div id="phist"></div></div>
+  <div class="sep"><h2>Workgroup total-us per core</h2><p class="hint">Darker cell = more CPU time. Use the View selector to see one core's functions.</p><div class="scroll"><table id="pmx"></table></div></div>
+</section>
+
 </main>
 
 <script>
@@ -373,6 +442,7 @@ const METRICS = {
 const PALETTE = ['#1c2530','#1f6f8b','#c2410c','#2f855a','#7c3aed','#b7791f','#be185d','#0e7490','#4d7c0f'];
 const colors = {}; D.series.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
 const hasG = D.groups.length>0;
+const hasSamples = D.samples.length>0;
 const GCOL = D.groups.map((_,i)=>'hsl('+Math.round(i*360/D.groups.length)+',62%,40%)');
 const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false};
 const gs = {dp:null, hidden:new Set()};
@@ -396,9 +466,10 @@ function scaleFor(vals){
 const fmt = (v,div) => (v/div).toLocaleString('en-US',{maximumFractionDigits: div===1&&Number.isInteger(v)?0:2});
 
 // header
-$('#title').textContent = 'Throughput - ' + D.name;
-$('#sub').textContent = D.samples.length ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : '';
+$('#title').textContent = D.kind + ' - ' + D.name;
+$('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : '');
 $('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (D.series[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization it is the maximum value).' : '');
+$('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
 
 // reusable chart
@@ -503,10 +574,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else drawGroups(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(hasPow) renderPow(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','pow'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -589,8 +660,151 @@ $('#csv').onclick=()=>{
   a.download=D.name+'_throughput.csv'; a.click(); URL.revokeObjectURL(a.href);
 };
 
-const TABS=['chart'].concat(hasG?['cpu']:[]);
-if(!hasG) $('#tabs').style.display='none';
+// POW performance tab (debug dataplane pow performance)
+const P = D.pow || null;
+const hasPow = !!P;
+const powState = {view:'global', q:'', anom:false, idle:true, sort:{g:{k:'total',dir:-1}, f:{k:'share',dir:-1}}};
+const rowLevel = r => r.flags.some(f=>f.level==='crit') ? 'crit' : (r.flags.some(f=>f.level==='warn') ? 'warn' : '');
+const avgTxt = v => v===null||v===undefined ? '' : v.toLocaleString('en-US',{maximumFractionDigits:1});
+const POW_COLS = [
+  {k:'name', l:'Name', get:r=>r.name, f:r=>r.name},
+  {k:'category', l:'Category', get:r=>r.category, f:r=>r.category},
+  {k:'max', l:'max-us', get:r=>r.max_us, f:r=>num(r.max_us)},
+  {k:'avg', l:'avg-us', get:r=>r.avg_us, f:r=>avgTxt(r.avg_us)},
+  {k:'count', l:'count', get:r=>r.count, f:r=>num(r.count)},
+  {k:'total', l:'total-us', get:r=>r.total_us, f:r=>num(r.total_us)},
+  {k:'share', l:'share %', get:r=>r.share, f:r=>r.share.toFixed(2)},
+  {k:'acmax', l:'ac-max-us', ac:true, get:r=>r.ac_max_us, f:r=>num(r.ac_max_us)},
+  {k:'acavg', l:'ac-avg-us', ac:true, get:r=>r.ac_avg_us, f:r=>avgTxt(r.ac_avg_us)},
+  {k:'account', l:'ac-count', ac:true, get:r=>r.ac_count, f:r=>num(r.ac_count)},
+  {k:'actotal', l:'ac-total-us', ac:true, get:r=>r.ac_total_us, f:r=>num(r.ac_total_us)},
+  {k:'ratio', l:'count / ac-count', ac:true, get:r=>r.ratio, f:r=>r.ratio===null?'':r.ratio.toFixed(2)},
+  {k:'flags', l:'Flags', get:r=>r.flags.length, f:null}
+];
+const powCols = () => POW_COLS.filter(c=>!(c.ac && P.format==='legacy'));
+const powView = () => powState.view==='global' ? P.global : P.cores[powState.view];
+function powFilter(rows){
+  const q=powState.q;
+  return rows.filter(r=>(!powState.idle || r.count>0 || r.ac_count>0 || r.flags.length>0)
+    && (!q || (r.name+' '+r.category).toLowerCase().includes(q))
+    && (!powState.anom || rowLevel(r)!==''));
+}
+function flagCell(td,r){
+  td.style.textAlign='left';
+  r.flags.forEach(f=>{ const s=document.createElement('span'); s.className='badge b-'+f.level; s.textContent=f.code; s.title=f.text; td.appendChild(s); });
+}
+function powTable(t,key,rows){
+  const st=powState.sort[key], C=powCols();
+  t.replaceChildren();
+  const hr=t.createTHead().insertRow();
+  C.forEach(c=>{
+    const th=document.createElement('th'); th.textContent=c.l+(st.k===c.k?(st.dir>0?' ▲':' ▼'):''); th.tabIndex=0;
+    const go=()=>{ powState.sort[key]=st.k===c.k?{k:c.k,dir:-st.dir}:{k:c.k,dir:(c.k==='name'||c.k==='category')?1:-1}; renderPow(); };
+    th.onclick=go; th.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}}; hr.appendChild(th);
+  });
+  const c=C.find(x=>x.k===st.k)||C[0];
+  const sorted=rows.slice().sort((a,b)=>{
+    const x=c.get(a), y=c.get(b);
+    if(x===y) return a.name<b.name?-1:(a.name>b.name?1:0);
+    if(x===null||x===undefined) return 1;
+    if(y===null||y===undefined) return -1;
+    return (x<y?-1:1)*st.dir;
+  });
+  const tb=t.createTBody();
+  sorted.forEach(r=>{
+    const tr=tb.insertRow(), lv=rowLevel(r);
+    if(lv) tr.className='anom-'+lv;
+    C.forEach(col=>{
+      const td=tr.insertCell();
+      if(col.f) td.textContent=col.f(r); else flagCell(td,r);
+      if(col.k==='name' && r.description) td.title=r.description;
+    });
+  });
+}
+function renderPowInfo(){
+  $('#pinfo').textContent='Collected at '+(P.collected_at||'unknown (no show clock output)')+' | format: '+P.format+(P.format==='legacy'?' (pre-9.1: max-us, avg-us, count only)':' (total-us and ac-* columns present)')+' | cores with data: '+(Object.keys(P.cores).join(', ')||'none');
+  const ul=$('#pbanner'); ul.replaceChildren();
+  if(!P.banner.length){ const li=document.createElement('li'); li.textContent='No anomaly flags with the current thresholds.'; ul.appendChild(li); }
+  P.banner.forEach(b=>{ const li=document.createElement('li'); li.className='lvl-'+b.level; li.textContent=b.text; ul.appendChild(li); });
+  if(P.warnings.length){
+    $('#pwarn').style.display=''; $('#pwarnsum').textContent=P.warnings.length+' warnings while parsing the POW output';
+    P.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#pwarnlist').appendChild(li); });
+  }
+}
+function renderPowCats(V){
+  const t=$('#pcat'); t.replaceChildren();
+  const s=V.func_summary, hr=t.createTHead().insertRow();
+  ['Category','total-us','share %',''].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; hr.appendChild(th); });
+  const tb=t.createTBody();
+  if(!s.by_category.length){ const c=tb.insertRow().insertCell(); c.colSpan=4; c.textContent='No function CPU time in this view.'; return; }
+  s.by_category.forEach(b=>{
+    const r=tb.insertRow(); r.insertCell().textContent=b.category; r.insertCell().textContent=num(b.total_us); r.insertCell().textContent=b.share.toFixed(2);
+    const m=document.createElement('div'); m.className='meter'; const i=document.createElement('i'); i.style.width=Math.min(100,b.share)+'%'; m.appendChild(i); r.insertCell().appendChild(m);
+  });
+}
+function renderPowHist(list){
+  const box=$('#phist'); box.replaceChildren();
+  if(!list.length){ box.textContent='No histograms in this view.'; return; }
+  const LV={crit:2,warn:1,info:0}, rank=h=>h.flags.reduce((m,f)=>Math.max(m,LV[f.level]),-1);
+  list.map((h,i)=>({h,i})).sort((a,b)=>rank(b.h)-rank(a.h)||a.i-b.i).forEach(({h})=>{
+    const d=document.createElement('details'), s=document.createElement('summary');
+    s.textContent=h.name+' ('+h.kind+') | calls '+num(h.count)+' | p50 '+avgTxt(h.p50_us)+' us | p99 '+avgTxt(h.p99_us)+' us | max bin '+avgTxt(h.max_bin_us)+' us ';
+    h.flags.forEach(f=>{ const b=document.createElement('span'); b.className='badge b-'+f.level; b.textContent=f.code; b.title=f.text; s.appendChild(b); });
+    d.appendChild(s);
+    const t=document.createElement('table'), hr=t.createTHead().insertRow();
+    ['col','avg-ticks','avg-us','count','total-us'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; hr.appendChild(th); });
+    const tb=t.createTBody();
+    h.bins.forEach(b=>{ const r=tb.insertRow(); b.forEach((v,i)=>{ r.insertCell().textContent=i===2?avgTxt(v):num(v); }); });
+    const wrap=document.createElement('div'); wrap.className='scroll'; wrap.appendChild(t); d.appendChild(wrap);
+    box.appendChild(d);
+  });
+}
+function renderPowMatrix(){
+  const t=$('#pmx'); t.replaceChildren();
+  const cores=Object.keys(P.cores).map(Number).sort((a,b)=>a-b);
+  const names=P.global.groups.map(g=>g.name);
+  const val=(c,g)=>{ const r=P.cores[c].groups.find(x=>x.name===g); return r&&r.total_us?r.total_us:0; };
+  let mx=0; names.forEach(g=>cores.forEach(c=>{ mx=Math.max(mx,val(c,g)); }));
+  const hr=t.createTHead().insertRow();
+  ['Workgroup'].concat(cores.map(c=>'Core '+c)).forEach(x=>{ const th=document.createElement('th'); th.textContent=x; hr.appendChild(th); });
+  const tb=t.createTBody(), tot=new Array(cores.length).fill(0);
+  names.forEach(g=>{
+    const r=tb.insertRow(); r.insertCell().textContent=g;
+    cores.forEach((c,j)=>{ const v=val(c,g), td=r.insertCell(); tot[j]+=v; td.textContent=num(v); if(mx>0 && v>0) td.style.background='rgba(31,111,139,'+(0.08+0.6*v/mx).toFixed(3)+')'; });
+  });
+  const r=tb.insertRow(); r.insertCell().textContent='Total';
+  tot.forEach(v=>{ r.insertCell().textContent=num(v); });
+}
+function renderPowView(){
+  const V=powView();
+  renderPowCats(V); renderPowHist(V.hist);
+}
+function renderPow(){
+  const V=powView(), g=powFilter(V.groups), f=powFilter(V.funcs);
+  powTable($('#pgt'),'g',g); powTable($('#pft'),'f',f);
+  $('#pmeta').textContent='Workgroups '+g.length+' of '+V.groups.length+' | functions '+f.length+' of '+V.funcs.length+' | CPU share basis: '+(V.func_summary.basis||'n/a');
+}
+function powCsv(){
+  const q=v=>'"'+String(v).replace(/"/g,'""')+'"', nz=v=>v===null||v===undefined?'':(typeof v==='string'?q(v):v);
+  const V=powView(), lines=['table,name,category,max_us,avg_us,count,total_us,share_pct,ac_max_us,ac_avg_us,ac_count,ac_total_us,count_ratio,flags,description'];
+  [['workgroups',powFilter(V.groups)],['functions',powFilter(V.funcs)]].forEach(([tn,rows])=>rows.forEach(r=>lines.push([tn,r.name,r.category,r.max_us,r.avg_us,r.count,r.total_us,r.share,r.ac_max_us,r.ac_avg_us,r.ac_count,r.ac_total_us,r.ratio,r.flags.map(f=>f.code+':'+f.level).join(';'),r.description].map(nz).join(','))));
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
+  a.download=D.name+'_pow_'+powState.view+'.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+if(hasPow){
+  const pv=$('#pview');
+  ['global'].concat(Object.keys(P.cores)).forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v==='global'?'Global':'Core '+v; pv.appendChild(o); });
+  pv.onchange=()=>{ powState.view=pv.value; renderPowView(); renderPow(); };
+  $('#pq').oninput=e=>{ powState.q=e.target.value.trim().toLowerCase(); renderPow(); };
+  $('#panom').onchange=e=>{ powState.anom=e.target.checked; renderPow(); };
+  $('#pidle').onchange=e=>{ powState.idle=e.target.checked; renderPow(); };
+  $('#pcsv').onclick=powCsv;
+  renderPowInfo(); renderPowMatrix(); renderPowView(); renderPow();
+}
+
+const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[]);
+['chart','cpu','pow'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+$('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
   const i=TABS.indexOf(activeTab); let j=-1;
@@ -598,7 +812,7 @@ $('#tabs').onkeydown=e=>{
   if(j<0) return; e.preventDefault(); showTab(TABS[j]); $('#tab-'+TABS[j]).focus();
 };
 window.addEventListener('resize',renderActive);
-showTab('chart');
+showTab(TABS[0]);
 </script>
 </body>
 </html>
@@ -617,15 +831,17 @@ def utc_str(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def render_report(name, samples, series, offsets, warnings, n_files, tpl):
+def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None):
     data = {
         'name': name,
+        'kind': 'TSF analysis' if pow_view else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
         'warnings': warnings,
         'series': series,
         'samples': samples,
+        'pow': pow_view,
     }
     groups = []
     for smp in samples:
@@ -642,6 +858,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl):
     data['samples'] = rows
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     return (tpl.replace('__DATA__', blob)
+               .replace('__KIND__', data['kind'])
                .replace('__TITLE__', html.escape(name)))
 
 
@@ -677,30 +894,42 @@ def main(argv=None):
         warnings = []
         name = re.sub(r'(\.tar\.gz|\.tgz|\.tar)$', '', os.path.basename(path.rstrip('/')))
         try:
-            samples, offsets, n_files = collect(path, warnings)
+            samples, offsets, n_files, pow_data = collect(path, warnings)
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
-        if not samples:
+        if not samples and pow_data is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
             continue
-        series = add_aggregate(samples)
-        out = os.path.join(args.outdir, f'{name}_throughput.html')
+        series = add_aggregate(samples) if samples else []
+        pow_view = evaluate(pow_data) if pow_data else None
+        pow_warnings = pow_data['warnings'] if pow_data else []
+        suffix = '_throughput.html' if samples else '_pow.html'
+        out = os.path.join(args.outdir, f'{name}{suffix}')
         with open(out, 'w', encoding='utf-8') as fh:
-            fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl))
-        base = [s for s in samples if s['dp'] == series[0]]
-        peak = max(base, key=lambda s: s['kbps'])
-        print(f'[OK] {path}: {len(base)} samples, {len(series) - (series[0] == "ALL")} DP, '
-              f'{len(warnings)} warnings -> {out}')
-        for w in warnings:
+            fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
+                                   pow_view))
+        n_warn = len(warnings) + len(pow_warnings)
+        row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
+               'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
+        if samples:
+            base = [s for s in samples if s['dp'] == series[0]]
+            peak = max(base, key=lambda s: s['kbps'])
+            print(f'[OK] {path}: {len(base)} samples, {len(series) - (series[0] == "ALL")} DP, '
+                  f'{n_warn} warnings -> {out}')
+            row.update(samples=len(base), start=utc_str(base[0]['t']),
+                       end=utc_str(base[-1]['t']),
+                       peak=f"{fmt_kbps(peak['kbps'])} ({utc_str(peak['t'])})")
+        else:
+            g = pow_data['global']
+            print(f'[OK] {path}: POW performance only ({len(g["funcs"])} functions, '
+                  f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
+                  f'{n_warn} warnings -> {out}')
+        for w in warnings + pow_warnings:
             print('  -', w, file=sys.stderr)
-        index_rows.append({
-            'file': os.path.basename(out), 'name': name, 'samples': len(base),
-            'start': utc_str(base[0]['t']), 'end': utc_str(base[-1]['t']),
-            'peak': f"{fmt_kbps(peak['kbps'])} ({utc_str(peak['t'])})",
-            'warnings': len(warnings)})
+        index_rows.append(row)
 
     if len(index_rows) > 1:
         with open(os.path.join(args.outdir, 'index.html'), 'w', encoding='utf-8') as fh:
