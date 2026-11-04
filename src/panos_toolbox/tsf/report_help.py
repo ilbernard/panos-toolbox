@@ -4,7 +4,8 @@ Every tab and panel of the report has its own short, collapsed help (a "? Help" 
 that expands a text at the top of that section). There is no global help page.
 
 SECTION_HELP maps a section id to an HTML template. Its {name} placeholders are filled
-with the live values of pow_perf.POW_THRESHOLDS by render_section_help(). Literal braces
+with the live values of pow_perf.POW_THRESHOLDS by render_section_help(). The thresholds of
+the Interface Errors tab (interface_errors.IF_THRESHOLDS) are available as {if_<name>}. Literal braces
 in the HTML are doubled. The report template contains the placeholders __HB_<id>__
 (the button) and __HP_<id>__ (the collapsible text) for each id.
 
@@ -12,6 +13,8 @@ Standard library only.
 """
 import html
 
+from . import if_glossary
+from .interface_errors import IF_THRESHOLDS
 from .pow_perf import POW_THRESHOLDS
 
 # Titles are used for the accessible name of the buttons.
@@ -20,6 +23,8 @@ SECTION_TITLES = {
     'pow': 'POW performance', 'pflags': 'Findings and flag reference', 'ptop': 'Top functions',
     'pgroups': 'Workgroups', 'pfuncs': 'Functions', 'pcat': 'Function CPU share by category',
     'phist': 'Histograms', 'pmx': 'Workgroup total-us per core', 'plat': 'Latency counters',
+    'ifc': 'Interface errors', 'iflags': 'Interface findings and flag reference',
+    'itable': 'Interfaces table', 'ixchk': 'Cross-check with the global counters',
 }
 
 SECTION_HELP = {
@@ -264,21 +269,110 @@ row sums each core.</p>
     'plat': """
 <p>Counters named <code>*_latency</code> (and the glossary family "Latency measures") measure elapsed time between two events, not CPU time spent. Their totals are huge and would hide real work, so they are left out of the rankings, shares and category roll-ups and listed only here. The <code>LATENCY_HIGH</code> flag marks a window average above the threshold.</p>
 """,
+    'ifc': """
+<p>Built from the interface counters in the CLI output of the TSF (<code>tmp/cli/*.txt</code>, recognised by content), or from a plain text file with that output. Commands used (all optional; a missing one is skipped with a warning):</p>
+<ul>
+<li><code>show counter interface all</code>: per interface the physical port counters read from the MAC, the hardware counters read from the CPU, and the logical interface counters (flow drops).</li>
+<li><code>show interface ethernetX/Y</code>: link state, speed and duplex, zone, address and the detailed physical counters (CRC, fifo overrun, collisions...). Present for some ports only.</li>
+<li><code>show interface all</code>: link table of the hardware interfaces and table of the logical interfaces (zone, virtual router, tag, address).</li>
+<li><code>show system info</code> and <code>show clock</code>: host, model, PAN-OS version, uptime and capture time.</li>
+<li><code>show counter global</code>: global drop counters for the cross-check. <code>show transceiver all</code> and <code>show lacp aggregate-ethernet all</code> are shown when they hold data.</li>
+</ul>
+<h3>Counters are cumulative since boot</h3>
+<p>Every counter counts from the last boot. The <b>uptime</b> in the summary tells how much time the numbers cover. With a short uptime (below short_uptime_s = {if_short_uptime_s} s) the report raises <code>UPTIME_SHORT</code> and the counts are low-significance: drops right after a boot are often transient (routes and ARP not yet learned, sessions lost). Capture again after the firewall has been up for a while, or take two captures and compare them.</p>
+<h3>Three layers of counters</h3>
+<ul>
+<li><b>Physical (MAC)</b>: what the Ethernet port itself saw. Any CRC, fifo overrun, collision, jabber, undersized or oversized count points to the cable, SFP, port or duplex.</li>
+<li><b>CPU / hardware</b>: what the dataplane driver counted for the port. Errors here with a clean MAC mean packets were lost inside the firewall.</li>
+<li><b>Logical / flow</b>: drops decided by the flow engine for the interface or sub-interface: no route, ARP not found, flow state check, zone protection, zone change...</li>
+</ul>
+<p>Hover or focus a counter name or a column header for a tooltip with its category, confidence code and meaning (codes: <b>D</b> documented, <b>G</b> well-known behaviour with our own wording, <b>I</b> inferred from the name only, <b>U</b> unknown). The tables below carry the same meanings. Treat G and I entries as hypotheses.</p>
+{if_counter_table}
+<h3>Limitations</h3>
+<ul>
+<li>Flags are heuristics that point to what to investigate. They are not verdicts.</li>
+<li>The outputs of the commands are captured at slightly different moments; a few packets of difference between the sources are normal.</li>
+<li>Several dataplanes in one output: only the first one is analysed and a warning lists the others. A second copy of the same section is ignored.</li>
+<li>Counter columns are shown only when at least one interface has a non-zero value for the counter.</li>
+</ul>
+""",
+    'iflags': """
+<p>The heuristics in <code>interface_errors.py</code> attach these flags to the interfaces. Levels: <b>crit</b> = high, <b>warn</b> = medium, <b>info</b> = context only. The last column shows the live thresholds used for this report. Thresholds not listed for a code do not apply.</p>
+<table>
+<tr><th>Code</th><th>Level</th><th>Applies to</th><th>Meaning and suggestion</th><th>Live thresholds</th></tr>
+<tr><td><code>UPTIME_SHORT</code></td><td>warn</td><td>whole report</td><td>The uptime is shorter than short_uptime_s, so the cumulative counters cover little time and are low-significance. Capture again later.</td><td>short_uptime_s = {if_short_uptime_s}</td></tr>
+<tr><td><code>PHY_ERRORS</code></td><td>crit</td><td>physical ports</td><td>A physical-layer error counter is above the limit: CRC, receive fifo overrun, undersized, oversized, jabber, fragments, collisions (also late and excessive), MAC receive or transmit errors, bad octets. Check cable, SFP, port, duplex and speed on both ends. Oversized frames can also come from an MTU or jumbo mismatch.</td><td>phy_error_min = {if_phy_error_min}</td></tr>
+<tr><td><code>PHY_MINOR</code></td><td>info</td><td>physical ports</td><td>Flow control (pause) frames or deferred/multiple transmissions seen. Pause frames mean congestion at one end; deferred/multiple transmissions only occur on half-duplex links.</td><td>none</td></tr>
+<tr><td><code>HW_ERRORS</code></td><td>warn</td><td>physical ports</td><td>The hardware (CPU side) counters show receive errors, discards or drops. With a clean MAC the packets were lost inside the firewall (overload, buffers).</td><td>hw_error_min = {if_hw_error_min}</td></tr>
+<tr><td><code>DROP_PCT</code></td><td>warn; crit at the crit percentage</td><td>all interfaces</td><td>The logical "packets dropped" is at least drop_pct_warn percent of the packets received, with enough packets and drops that the percentage means something. Look at the specific counters of the interface.</td><td>drop_pct_warn = {if_drop_pct_warn}%; drop_pct_crit = {if_drop_pct_crit}%; min_packets = {if_min_packets}; min_drops = {if_min_drops}</td></tr>
+<tr><td><code>NO_ROUTE</code></td><td>warn</td><td>all interfaces</td><td>"no route" drops reach the minimum. The text says how much of the total sits on this interface (concentrated above the share limit) and, for a sub-interface, suggests checking the routes of its virtual router, default route included.</td><td>no_route_min = {if_no_route_min}; concentration_share = {if_concentration_share}%</td></tr>
+<tr><td><code>ARP_NOT_FOUND</code></td><td>warn</td><td>all interfaces</td><td>Packets were dropped because ARP could not be resolved. Check that the next-hop hosts exist and answer, the subnet mask and the ARP table.</td><td>arp_min = {if_arp_min}; concentration_share = {if_concentration_share}%</td></tr>
+<tr><td><code>L2_RESOLUTION</code></td><td>warn</td><td>all interfaces</td><td>Neighbor not found, neighbor info pending or MAC not found drops reach the minimum (IPv6 neighbor discovery or layer-2 forwarding table).</td><td>l2_min = {if_l2_min}</td></tr>
+<tr><td><code>FLOW_STATE_CHECK</code></td><td>info with a short uptime, else warn</td><td>all interfaces</td><td>Packets dropped by the flow state check reach the minimum. Shortly after a boot this is most likely non-SYN TCP of sessions that existed before the reboot. On a long-running firewall look for asymmetric routing, short idle timeouts or a failover.</td><td>flow_state_min = {if_flow_state_min}; short_uptime_s = {if_short_uptime_s}</td></tr>
+<tr><td><code>IP_SPOOF</code></td><td>info on a WAN-like zone, else warn</td><td>all interfaces</td><td>Drops by the zone protection option <code>discard-ip-spoof</code>. On an internet-facing zone this is background noise; on an internal zone it points to asymmetric routing, a missing route or real spoofing. A zone counts as WAN-like when its name contains wan, untrust, outside, internet, external, isp or inet.</td><td>none (any count)</td></tr>
+<tr><td><code>ATTACK_COUNTERS</code></td><td>warn</td><td>all interfaces</td><td>Land, teardrop, ping-of-death, MAC spoof or ICMP fragment counters are non-zero. Check where the traffic comes from.</td><td>none (any count)</td></tr>
+<tr><td><code>FWD_ERRORS</code></td><td>warn</td><td>all interfaces</td><td>Forwarding errors or logical receive errors are non-zero.</td><td>none (any count)</td></tr>
+<tr><td><code>ZONE_CHANGE</code></td><td>info on tunnels, warn elsewhere</td><td>all interfaces</td><td>Packets were dropped because the route leads to a zone different from the session's. On a tunnel check proxy-IDs and the routes to the remote networks; elsewhere look for asymmetric routing or overlapping routes.</td><td>zone_change_min = {if_zone_change_min} (non-tunnel interfaces)</td></tr>
+<tr><td><code>LINK_HALF_DUPLEX</code></td><td>warn</td><td>physical ports</td><td>The link is up at half duplex, almost always a negotiation problem.</td><td>none</td></tr>
+<tr><td><code>LINK_MISMATCH</code></td><td>warn</td><td>physical ports</td><td>Configured speed or duplex (when not auto) differs from the running one. Needs the interface detail output.</td><td>none</td></tr>
+<tr><td><code>LINK_SPEED_LOW</code></td><td>warn</td><td>physical ports</td><td>The link negotiated a speed below the best the port supports. Check cable category and length and the peer port. Needs the interface detail output.</td><td>none</td></tr>
+<tr><td><code>UP_NO_TRAFFIC</code></td><td>info</td><td>physical ports</td><td>The link is up but no packet was received or sent since boot.</td><td>none</td></tr>
+<tr><td><code>DOWN_CONFIGURED</code></td><td>info</td><td>physical ports</td><td>The port is down but has a zone or an address configured. Expected for an unused port; otherwise check cable and peer.</td><td>none</td></tr>
+<tr><td><code>XCHECK_MISMATCH</code></td><td>info</td><td>whole report</td><td>The per-interface sum differs from the matching global counter beyond the tolerance (see the cross-check panel).</td><td>xcheck_tolerance_pct = {if_xcheck_tolerance_pct}%; xcheck_abs = {if_xcheck_abs}</td></tr>
+</table>
+<p>The summary above the table lists, for each flag, the interfaces that carry it. Down ports with nothing configured are listed there as "down / no traffic" without a flag.</p>
+<p class="hint">The thresholds are heuristics defined in <code>interface_errors.IF_THRESHOLDS</code>. In code, override them with <code>evaluate_interfaces(parsed, thresholds={{'drop_pct_warn': 2.0}})</code>. Unknown keys raise an error. On the command line use the <code>--if-&lt;name&gt;</code> options (for example <code>--if-drop-pct-warn 2</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report.</p>
+<h3>How to read the output</h3>
+<ol>
+<li><b>Check the uptime first.</b> A few minutes of uptime make every count unreliable.</li>
+<li><b>Physical errors first.</b> A <code>PHY_ERRORS</code> flag on a port with real traffic is the most actionable finding: replace the cable or SFP, then check duplex and speed on both ends.</li>
+<li><b>Then the drop percentage.</b> A high <code>DROP_PCT</code> only says there are drops; the counters next to it say why (no route, ARP, flow state, zone change, spoof).</li>
+<li><b>Use the cross-check.</b> It tells whether the per-interface counters and the global drop counters tell the same story, and the global counters show the drops that have no interface counter (policy deny, TTL, multicast...).</li>
+</ol>
+""",
+    'itable': """
+<ul>
+<li>One row per interface: physical ports, aggregate groups, sub-interfaces, tunnel, vlan and loopback. Columns: link, zone, address, packets and bytes since boot, the counter columns in three groups (Physical, CPU / hardware, Logical / flow; the group is marked on the top edge of the header and in the tooltip) and the drop percentage and flags.</li>
+<li><b>only interfaces with issues</b> (on by default) keeps rows that have a flag or a non-zero error counter. Untick it to list every interface.</li>
+<li><b>Type</b> and <b>Search</b> (name, zone, address, flag code) narrow the list.</li>
+<li>Click a column header to sort, and click again to reverse. Enter or Space works on a focused header. Red rows have a crit flag, yellow rows a warn flag.</li>
+<li>Counters equal to zero are shown as a dot.</li>
+<li><b>Export CSV</b> downloads the rows that match the filters with every counter column, as UTF-8 with a byte order mark.</li>
+</ul>
+<p><b>Drop %</b> is the logical "packets dropped" divided by the packets received on the same interface. It is left empty when no packet was received.</p>
+""",
+    'ixchk': """
+<p>The per-interface logical counters are added up and compared with the matching <code>show counter global</code> drop counters. If both tell the same story the interface counters can be trusted as the breakdown of the global ones. Values within the larger of xcheck_abs ({if_xcheck_abs}) and xcheck_tolerance_pct ({if_xcheck_tolerance_pct}%) are reported as <b>match</b>; others as <b>differs</b> (info flag <code>XCHECK_MISMATCH</code>); <b>related</b> rows only show values side by side.</p>
+<ul>
+<li>"no route" seems to add up to <code>flow_fwd_l3_noroute</code> plus <code>flow_policy_nofwd</code>. This was observed on real captures; it is not documented.</li>
+<li>The flow state check has no dedicated global counter: <code>flow_tcp_non_syn_drop</code> is one cause among others.</li>
+<li>The second table lists the other non-zero drop-related global counters (policy deny, TTL, multicast, broadcast...). They have no interface counter.</li>
+</ul>
+""",
 }
 
 
-def render_section_help(thresholds=None):
+def render_section_help(thresholds=None, if_thresholds=None):
     """Returns {placeholder: html} for every section (buttons and collapsible texts).
 
     thresholds: optional overrides with the keys of pow_perf.POW_THRESHOLDS. Unknown keys
-    raise ValueError, as in evaluate(). The values are escaped before insertion.
+    raise ValueError, as in evaluate(). if_thresholds: the same for
+    interface_errors.IF_THRESHOLDS (available as {if_<name>}). The values are escaped before
+    insertion.
     """
     th = dict(POW_THRESHOLDS)
     unknown = set(thresholds or {}) - set(POW_THRESHOLDS)
     if unknown:
         raise ValueError('unknown POW threshold(s): ' + ', '.join(sorted(unknown)))
     th.update(thresholds or {})
+    ith = dict(IF_THRESHOLDS)
+    unknown = set(if_thresholds or {}) - set(IF_THRESHOLDS)
+    if unknown:
+        raise ValueError('unknown interface threshold(s): ' + ', '.join(sorted(unknown)))
+    ith.update(if_thresholds or {})
     values = {k: html.escape(str(v)) for k, v in th.items()}
+    values.update({'if_' + k: html.escape(str(v)) for k, v in ith.items()})
+    values['if_counter_table'] = if_glossary.help_table_html()
     values['core_imbalance_crit'] = html.escape(str(2 * th['core_imbalance_ratio']))
     out = {}
     for sid, text in SECTION_HELP.items():
