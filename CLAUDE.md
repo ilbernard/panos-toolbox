@@ -33,6 +33,17 @@ Read these before changing anything in `firewall/console/`:
 **Keep these up to date:** update `docs/console/decisions.md` and
 `docs/console/roadmap.md` whenever a design decision is made or a roadmap item is done.
 
+## TSF report (`src/panos_toolbox/tsf/`)
+
+- `analyzer.py` collects data and renders; `report_template.py` is the page (HTML, CSS, JS);
+  `pow_perf.py` parses and evaluates `debug dataplane pow performance` (`POW_THRESHOLDS`, flags);
+  `pow_glossary.py` is the counter glossary (partly inferred, confidence D/G/I/U) behind the tooltips.
+- No global help page: every tab/panel has its own collapsed help in `report_help.py`
+  (`SECTION_HELP`, placeholders `__HB_<id>__`/`__HP_<id>__` in the template). When you add a panel
+  or a flag code, add its help and document the code there (a test checks flag codes).
+- Counter names and column headers in the report use `glName()` / `glTag()` for the shared tooltip.
+- Standard library only; the report is one offline HTML file.
+
 ## Commands
 
 Install for development (from the repo root):

@@ -18,6 +18,8 @@ import copy
 import re
 import statistics
 
+from . import pow_glossary
+
 # Every number used by evaluate(). Override any of them with
 # evaluate(parsed, thresholds={'key': value}); unknown keys raise ValueError.
 POW_THRESHOLDS = {
@@ -49,6 +51,16 @@ POW_THRESHOLDS = {
     'hist_tail_us': 10000,
     'hist_tail_crit_us': 100000,
     'hist_tail_share': 1.0,
+    # Latency counters (not CPU time): flag when the window avg-us reaches this value.
+    'latency_high_us': 1000,
+    # Decryption/crypto holding at least this percent of function CPU time is reported
+    # with a hint even below category_dominance.
+    'decrypt_share_warn': 15.0,
+    # Histogram: bins with avg-us >= hist_slow_us that hold at least hist_slow_share
+    # percent of the histogram time, over at least hist_slow_min_count calls.
+    'hist_slow_us': 1000,
+    'hist_slow_share': 5.0,
+    'hist_slow_min_count': 10,
 }
 
 def _names(text):
@@ -109,6 +121,11 @@ _CMD_CORES_RE = re.compile(r'^debug dataplane pow performance all core (\d+)-(\d
 _CLOCK_RE = re.compile(r'^[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \S+ \d{4}$')
 _CORE_RE = re.compile(r'^Core (\d+):$')
 _TABLE_RE = re.compile(r'^(group|func)\s')
+# CLI prompt, e.g. 'admin@PA-560(active)> debug dataplane pow performance all'.
+_PROMPT_RE = re.compile(r'^\S+@\S+?(?:\([^)]*\))?[>#]\s*(.*)$')
+# 'DP dp0:', 'target-dp: *.dp0' or a bare 'dp0:' header of a multi-dataplane output.
+_DP_RE = re.compile(r'^(?:(?:DP|target-dp)(?::\s*|\s+)|(?=(?:s\d+\.)?dp\d+\s*:))'
+                    r'(\*?\.?(?:s\d+\.)?[\w-]+)\s*:?\s*$', re.IGNORECASE)
 _HIST_RE = re.compile(r'^([A-Za-z_][\w.-]*) \((func|group)\)$')
 
 # Column labels of the table headers, from every release, mapped to field names.
@@ -128,6 +145,10 @@ _ROW_KEYS = ('max_us', 'avg_us', 'count', 'total_us',
 
 def classify_function(name):
     """Returns the category of a function name (see the module docstring)."""
+    # Latency counters (e.g. pbp_buf_latency, rsa_sign_hw_latency) measure waits, not CPU time.
+    if name.endswith('_latency') or \
+            pow_glossary.lookup(name)['category'] == pow_glossary.LATENCY_CATEGORY:
+        return 'latency'
     if name in L7_FUNCS:
         return 'L7'
     if name in DECRYPT_FUNCS or name.startswith(DECRYPT_PREFIXES):
@@ -136,8 +157,6 @@ def classify_function(name):
         return 'TUNNEL'
     if name in URL_FUNCS:
         return 'URL'
-    if name.endswith('_latency'):
-        return 'latency'     # latency counters (e.g. pbp_buf_latency), not CPU time
     return 'other'
 
 
@@ -205,11 +224,13 @@ def parse_pow(lines, src=None):
     hist = None
     hist_rows = False     # True after the histogram 'col' header
     clock_pending = False
+    first_dp = None
 
     for raw in lines:
         line = raw.rstrip()
-        if line.startswith('> '):
-            cmd = line[2:].strip()
+        prompt = _PROMPT_RE.match(line)
+        if line.startswith('> ') or prompt:
+            cmd = (prompt.group(1) if prompt else line[2:]).strip()
             table = cols = hist = None
             hist_rows = False
             section = None
@@ -235,12 +256,29 @@ def parse_pow(lines, src=None):
                 if _CLOCK_RE.match(stripped):
                     result['collected_at'] = stripped
             continue
-        if section in (None, 'dup', 'error'):
-            continue
-        if not stripped:
+        m = _DP_RE.match(stripped)
+        if m and not stripped.startswith('group') and not stripped.startswith('func'):
+            dp = m.group(1).lstrip('*.')
+            if first_dp is None:
+                first_dp = dp
+            elif dp != first_dp:
+                warnings.append(f'{prefix}several dataplanes in the output: only {first_dp} '
+                                f'is analysed, {dp} and later ones are ignored')
+                section = 'dup'
             table = cols = hist = None
             hist_rows = False
             continue
+        if section is None and not have_global and _TABLE_RE.match(stripped):
+            # Plain output without the command line (e.g. a pasted text file): the first
+            # valid group/func header starts the global section.
+            kind_word = _TABLE_RE.match(stripped).group(1)
+            if {'max_us', 'avg_us', 'count'} <= set(_header_columns(stripped[len(kind_word):])):
+                have_global = True
+                section, view = 'global', result['global']
+        if section in (None, 'dup', 'error'):
+            continue
+        if not stripped:
+            continue      # blank lines never end a table or a histogram: the next header does
 
         if section == 'cores':
             if stripped.startswith('Server error'):
@@ -261,7 +299,8 @@ def parse_pow(lines, src=None):
         if hist is not None and stripped.startswith('col ') and 'avg-ticks' in stripped:
             hist_rows = True
             continue
-        if hist is not None and hist_rows:
+        if hist is not None and hist_rows and not _HIST_RE.match(stripped) \
+                and not _TABLE_RE.match(stripped):
             bin_ = _parse_bin(stripped)
             if bin_ is None:
                 warnings.append(f'{prefix}histogram {hist["name"]}: unexpected row ignored')
@@ -332,6 +371,9 @@ def _eval_table(rows, kind, modern, th):
         if modern and r['ac_count']:
             r['ratio'] = round((r['count'] or 0) / r['ac_count'], 2)
         r['flags'] = []
+        g = pow_glossary.lookup(r['name'])
+        r['gcategory'], r['gconf'] = g['category'], g['conf']
+        r['known'] = r['name'] in pow_glossary.GLOSSARY
 
     top_n = th['top_n']
     ranked = sorted((r for r in cpu_rows if (r['total_us'] or 0) > 0),
@@ -374,8 +416,15 @@ def _eval_table(rows, kind, modern, th):
 
     for r in rows:
         avg, cnt = r['avg_us'] or 0.0, r['count'] or 0
+        if r['category'] == 'latency' and avg >= th['latency_high_us'] and cnt >= th['min_count']:
+            _flag(r, 'LATENCY_HIGH', 'info',
+                  f'latency counter (not CPU time): avg-us {avg:g} over {cnt} events')
+        ever = cnt or r['total_us'] or r['ac_count'] or r['ac_total_us'] or r['ac_max_us']
+        if (r['gconf'] == 'U' or r['gcategory'] == 'Unclassified') and ever:
+            _flag(r, 'UNKNOWN', 'warn' if cnt or r['total_us'] else 'info',
+                  'no known meaning for this counter; please report it so the glossary can grow')
         limit = th['high_avg_us_decrypt'] if r['category'] == 'DECRYPT' else th['high_avg_us']
-        if avg >= limit and cnt >= th['min_count']:
+        if avg >= limit and cnt >= th['min_count'] and r['category'] != 'latency':
             _flag(r, 'HIGH_AVG', 'warn', f'avg-us {avg:g} over {cnt} calls (limit {limit})')
 
 
@@ -397,6 +446,35 @@ def _category_summary(rows, modern, th):
     dominant = [b['category'] for b in by_cat
                 if b['category'] != 'other' and b['share'] >= th['category_dominance']]
     return {'basis': basis, 'total_us': total, 'by_category': by_cat, 'dominant': dominant}
+
+
+def _gloss_summary(rows):
+    """Roll-up of the CPU-time functions by glossary family (nothing is dropped)."""
+    cpu = [r for r in rows if r['category'] != 'latency']
+    tot = sum(r['total_us'] or 0 for r in cpu)
+    atot = sum(r['ac_total_us'] or 0 for r in cpu)
+    fam = {}
+    for r in cpu:
+        c = fam.setdefault(r['gcategory'], {'category': r['gcategory'], 'funcs': 0, 'active': 0,
+                                            'total_us': 0, 'ac_total_us': 0, 'zero': True,
+                                            'unknown': 0, 'top': None, '_top_us': 0})
+        c['funcs'] += 1
+        c['active'] += 1 if (r['count'] or r['total_us']) else 0
+        c['total_us'] += r['total_us'] or 0
+        c['ac_total_us'] += r['ac_total_us'] or 0
+        c['zero'] = c['zero'] and not any(r[k] for k in _ROW_KEYS)
+        c['unknown'] += 0 if r['known'] else 1
+        if (r['total_us'] or 0) > c['_top_us']:
+            c['top'], c['_top_us'] = r['name'], r['total_us']
+    order = {n: i for i, n in enumerate(pow_glossary.CATEGORY_ORDER)}
+    out = []
+    for c in fam.values():
+        c.pop('_top_us')
+        c['share'] = _pct(c['total_us'], tot)
+        c['ac_share'] = _pct(c['ac_total_us'], atot)
+        out.append(c)
+    out.sort(key=lambda c: (-c['total_us'], order.get(c['category'], 999), c['category']))
+    return out
 
 
 def _eval_hist(h, th):
@@ -431,12 +509,23 @@ def _eval_hist(h, th):
                 break
     if worst:
         h['flags'].append({'code': 'TAIL', 'level': worst[0], 'text': worst[1]})
+    time_total = sum(b[4] for b in bins)
+    slow = [b for b in bins if b[3] and b[4] / b[3] >= th['hist_slow_us']]
+    slow_calls, slow_time = sum(b[3] for b in slow), sum(b[4] for b in slow)
+    if time_total and slow_calls >= th['hist_slow_min_count'] and \
+            100.0 * slow_time / time_total >= th['hist_slow_share'] and \
+            h['kind'] == 'func' and classify_function(h['name']) != 'latency':
+        h['flags'].append({'code': 'HIST_SLOW', 'level': 'warn',
+                           'text': f'{100.0 * slow_time / time_total:.1f}% of the time '
+                                   f'({slow_calls} calls) is spent in bins slower than '
+                                   f"{th['hist_slow_us']} us"})
 
 
 def _eval_view(view, modern, th):
     _eval_table(view['groups'], 'group', modern, th)
     _eval_table(view['funcs'], 'func', modern, th)
     view['func_summary'] = _category_summary(view['funcs'], modern, th)
+    view['gloss_summary'] = _gloss_summary(view['funcs'])
     for h in view['hist']:
         _eval_hist(h, th)
 
@@ -483,9 +572,26 @@ def _banner(out, th):
     if crit or warn:
         items.append({'level': 'crit' if crit else 'warn',
                       'text': f'Global view: {crit} row(s) critical, {warn} row(s) warning'})
-    tails = sum(1 for h in g['hist'] if h['flags'])
+    tails = sum(1 for h in g['hist'] if any(f['code'] == 'TAIL' for f in h['flags']))
     if tails:
         items.append({'level': 'warn', 'text': f'{tails} histogram(s) with a rare long tail'})
+    slow = [h['name'] for h in g['hist'] if any(f['code'] == 'HIST_SLOW' for f in h['flags'])]
+    if slow:
+        items.append({'level': 'warn', 'names': slow[:10],
+                      'text': 'Histogram time spent in slow bins (HIST_SLOW): ' + ', '.join(slow[:10])
+                              + (f' (+{len(slow) - 10} more)' if len(slow) > 10 else '')})
+    dec = next((b['share'] for b in summary['by_category'] if b['category'] == 'DECRYPT'), 0)
+    if th['decrypt_share_warn'] <= dec and 'DECRYPT' not in summary['dominant']:
+        items.append({'level': 'warn', 'text': f'DECRYPT is {dec:.0f}% of function CPU time '
+                      f'({summary["basis"]} counters). Check the decryption policy scope, '
+                      f'handshake rate and crypto offload.'})
+    unk = [r['name'] for r in rows if any(f['code'] == 'UNKNOWN' for f in r['flags'])]
+    unk = list(dict.fromkeys(unk))
+    if unk:
+        items.append({'level': 'warn', 'names': unk[:15],
+                      'text': f'{len(unk)} counter(s) with no known meaning are non-zero: '
+                              + ', '.join(unk[:15]) + (f' (+{len(unk) - 15} more)' if len(unk) > 15 else '')
+                              + '. Please report them so the glossary can grow.'})
     cs = out['core_summary']
     for n, fl in sorted(cs['flags'].items()):
         items.append({'level': fl[0]['level'], 'text': f'core {n}: {fl[0]["text"]}'})

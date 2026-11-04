@@ -1,4 +1,4 @@
-"""Tests for the report template split and the Help tab.
+"""Tests for the report template split and the per-section help.
 
 Standard library only; no device is contacted.
 """
@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from panos_toolbox.tsf import analyzer, pow_perf, report_template
-from panos_toolbox.tsf.report_help import render_help
+from panos_toolbox.tsf.report_help import SECTION_HELP, SECTION_TITLES, render_section_help
+
+
+def render_help(thresholds=None):
+    """All section help texts joined, as one string."""
+    return ''.join(render_section_help(thresholds).values())
 
 FIXTURE = Path(__file__).parent / 'data' / 'pow_sample.txt'
 PERF_SRC = Path(pow_perf.__file__).read_text(encoding='utf-8')
@@ -16,12 +21,15 @@ PERF_SRC = Path(pow_perf.__file__).read_text(encoding='utf-8')
 
 def test_template_import_and_pieces():
     tpl = analyzer.TEMPLATE
-    assert '__DATA__' in tpl and '__TITLE__' in tpl and '__HELP__' in tpl
+    assert '__DATA__' in tpl and '__TITLE__' in tpl
     for name in ('TEMPLATE_HEAD', 'TEMPLATE_CSS', 'TEMPLATE_BODY', 'JS_CORE', 'JS_POW',
                  'JS_TABS'):
         piece = getattr(report_template, name)
         assert piece and piece in tpl, name
-    assert 'id="tab-help"' in tpl and 'id="p-help"' in tpl
+    # No global Help tab: every section has its own placeholders instead.
+    assert 'id="tab-help"' not in tpl and 'id="p-help"' not in tpl
+    for sid in SECTION_HELP:
+        assert f'__HB_{sid}__' in tpl and f'__HP_{sid}__' in tpl, sid
 
 
 def test_render_help_includes_live_thresholds_and_escapes():
@@ -62,14 +70,25 @@ def test_every_flag_code_in_pow_perf_is_documented():
     assert not missing, missing
 
 
-def test_main_pow_report_has_help_tab(tmp_path):
+def test_main_pow_report_has_section_help_and_no_help_tab(tmp_path):
     outdir = tmp_path / 'out'
     analyzer.main([str(FIXTURE), '-o', str(outdir)])
     reports = list(outdir.glob('*.html'))
     assert len(reports) == 1
     content = reports[0].read_text(encoding='utf-8')
-    assert 'id="tab-help"' in content
-    assert 'id="p-help"' in content
-    assert '__HELP__' not in content
+    assert 'id="tab-help"' not in content
+    assert 'id="p-help"' not in content
+    assert '__HB_' not in content and '__HP_' not in content
     assert '__DATA__' not in content
     assert '__TITLE__' not in content
+
+
+def test_every_section_has_its_own_collapsed_help(tmp_path):
+    outdir = tmp_path / 'out'
+    analyzer.main([str(FIXTURE), '-o', str(outdir)])
+    content = next(outdir.glob('*.html')).read_text(encoding='utf-8')
+    assert set(SECTION_TITLES) == set(SECTION_HELP)
+    for sid in SECTION_HELP:
+        assert f'aria-controls="help-{sid}"' in content
+        assert f'id="help-{sid}" hidden' in content
+    assert 'aria-expanded="false"' in content and 'aria-expanded="true"' not in content
