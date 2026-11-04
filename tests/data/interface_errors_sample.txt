@@ -1,0 +1,464 @@
+> show clock
+
+Tue Oct 27 08:20:20 CET 2026
+
+
+> show system info
+
+hostname: fw-anon-7894
+time: Tue Oct 27 08:20:22 2026
+uptime: 0 days, 0:18:51
+family: 400
+model: PA-410
+sw-version: 11.2.10-h15
+
+
+> show counter global
+
+Global counters:
+Elapsed time since last sampling: 39.372 seconds
+
+name                                   value     rate severity  category  aspect    description
+--------------------------------------------------------------------------------
+pkt_recv                             1098988      341 info      packet    pktproc   Packets received
+pkt_sent                             1101726      338 info      packet    pktproc   Packets transmitted
+flow_policy_nofwd                       2839        0 drop      flow      session   Session setup: no destination zone from forwarding
+flow_policy_deny                         571        0 drop      flow      session   Session setup: denied by policy
+flow_tcp_non_syn_drop                    246        0 drop      flow      session   Packets dropped: non-SYN TCP without session match
+flow_fwd_l3_mcast_drop                  1009        0 drop      flow      forward   Packets dropped: no route for IP multicast
+flow_fwd_l3_ttl_zero                      10        0 drop      flow      forward   Packets dropped: IP TTL reaches zero
+flow_fwd_l3_noroute                       10        0 drop      flow      forward   Packets dropped: no route
+flow_fwd_l3_noarp                        154        0 drop      flow      forward   Packets dropped: no ARP
+flow_fwd_zonechange                       77        0 drop      flow      forward   Packets dropped: forwarded to different zone
+flow_dos_pf_ipspoof                       59        0 drop      flow      dos       Packets dropped: Zone protection option 'discard-ip-spoof'
+--------------------------------------------------------------------------------
+
+
+> show counter interface all
+
+
+Hardware interface counters:
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/1
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Physical port counters read from MAC:
+--------------------------------------------------------------------------------
+rx-broadcast                  2
+rx-bytes                      1190091689
+rx-multicast                  35
+rx-unicast                    887985
+tx-broadcast                  4
+tx-bytes                      131826445
+tx-multicast                  0
+tx-unicast                    228454                    
+--------------------------------------------------------------------------------
+
+Hardware interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           1224395734
+bytes transmitted                        131796704
+packets received                         915835
+packets transmitted                      229366
+receive incoming errors                  0
+receive discarded                        0
+receive errors                           0
+packets dropped                          0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/2
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Physical port counters read from MAC:
+--------------------------------------------------------------------------------
+rx-broadcast                  494
+rx-bytes                      93189838
+rx-multicast                  1676
+rx-unicast                    190827
+tx-broadcast                  72
+tx-bytes                      1157037296
+tx-multicast                  0
+tx-unicast                    843505                    
+--------------------------------------------------------------------------------
+
+Hardware interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           93800797
+bytes transmitted                        1153670370
+packets received                         194719
+packets transmitted                      845054
+receive incoming errors                  0
+receive discarded                        0
+receive errors                           0
+packets dropped                          0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/3
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Physical port counters read from MAC:
+--------------------------------------------------------------------------------
+rx-broadcast                  0
+rx-bytes                      0
+rx-multicast                  0
+rx-unicast                    0
+tx-broadcast                  0
+tx-bytes                      0
+tx-multicast                  0
+tx-unicast                    0                    
+--------------------------------------------------------------------------------
+
+Hardware interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           0
+bytes transmitted                        0
+packets received                         0
+packets transmitted                      0
+receive incoming errors                  0
+receive discarded                        0
+receive errors                           0
+packets dropped                          0
+--------------------------------------------------------------------------------
+
+Logical interface counters:
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/1
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           1224395734
+bytes transmitted                        131796704
+packets received                         915835
+packets transmitted                      229366
+receive errors                           0
+packets dropped                          438
+packets dropped by flow state check      0
+forwarding errors                        0
+no route                                 3
+arp not found                            0
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         11
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         59
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/2
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           68888827
+bytes transmitted                        239606847
+packets received                         115099
+packets transmitted                      219666
+receive errors                           0
+packets dropped                          1276
+packets dropped by flow state check      923
+forwarding errors                        0
+no route                                 542
+arp not found                            152
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         0
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/2.3
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           24851778
+bytes transmitted                        914051287
+packets received                         79362
+packets transmitted                      625122
+receive errors                           0
+packets dropped                          749
+packets dropped by flow state check      394
+forwarding errors                        0
+no route                                 595
+arp not found                            0
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         0
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  1
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/2.9
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           0
+bytes transmitted                        1196
+packets received                         0
+packets transmitted                      26
+receive errors                           0
+packets dropped                          0
+packets dropped by flow state check      0
+forwarding errors                        0
+no route                                 0
+arp not found                            2
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         0
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/7
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           214278
+bytes transmitted                        0
+packets received                         1525
+packets transmitted                      0
+receive errors                           0
+packets dropped                          430
+packets dropped by flow state check      0
+forwarding errors                        0
+no route                                 5
+arp not found                            0
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         0
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: ethernet1/7.222
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           3079184
+bytes transmitted                        34717045
+packets received                         14510
+packets transmitted                      27364
+receive errors                           0
+packets dropped                          1732
+packets dropped by flow state check      0
+forwarding errors                        0
+no route                                 1704
+arp not found                            0
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         0
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  1
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+Interface: tunnel.2002
+Logical interface counters read from CPU:
+--------------------------------------------------------------------------------
+bytes received                           471373
+bytes transmitted                        1404826
+packets received                         3185
+packets transmitted                      4233
+receive errors                           0
+packets dropped                          0
+packets dropped by flow state check      0
+forwarding errors                        0
+no route                                 0
+arp not found                            0
+neighbor not found                       0
+neighbor info pending                    0
+mac not found                            0
+packets routed to different zone         66
+land attacks                             0
+ping-of-death attacks                    0
+teardrop attacks                         0
+ip spoof attacks                         0
+mac spoof attacks                        0
+ICMP fragment                            0
+layer2 encapsulated packets              0
+layer2 decapsulated packets              0
+tcp cps                                  0
+udp cps                                  0
+sctp cps                                 0
+other cps                                0
+--------------------------------------------------------------------------------
+
+
+
+> show interface ethernet1/1
+
+--------------------------------------------------------------------------------
+Name: ethernet1/1, ID: 16
+Link status:
+  Runtime link speed/duplex/state: 1000/full/up
+  Configured link speed/duplex/state: auto/auto/auto                
+MAC address:
+  Port MAC address 72:99:c7:d3:38:02
+Interface Type :
+  Port Type: RJ45
+Capability : auto, 10Mb/s-half, 10Mb/s-full, 100Mb/s-half, 100Mb/s-full, 1Gb/s-full
+Operation mode: layer3
+Untagged sub-interface support: no
+--------------------------------------------------------------------------------
+Name: ethernet1/1, ID: 16
+Operation mode: layer3
+Virtual router default
+Interface MTU 1500
+Interface IP address: 192.168.247.97/24
+Interface management profile: ping-mgmt-ext
+  ping: yes  telnet: no  ssh: yes  http: no  https: yes  
+  snmp: yes  response-pages: no  userid-service: no
+Service configured: IKE 
+Zone: wan, virtual system: vsys1
+Adjust TCP MSS: no
+Ignore IPv4 DF: no
+Policing: no
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+Detailed physical port counters read from MAC:
+--------------------------------------------------------------------------------                    
+rx packets 64 bytes                      102730                                
+rx packets 65 to 127 bytes               95640                                
+rx packets 128 to 255 bytes              27670                                
+rx packets 256 to 511 bytes              16915                                
+rx packets 512 to 1023 bytes             17668                                
+rx packets 1024+ bytes                   856693                                
+flow control transmitted                 0                                
+flow control received                    0                                
+receive fifo overrun                     0                                
+packets with bad crc                     0                                
+undersized packets                       0                                
+oversized packets                        0                                
+mac receive error                        0                                
+bad_octets_rcv                           0                                    
+collisions                               0                                    
+excessive_collisions                     0                                    
+fragments_pkts                           0                                    
+jabber_pkts                              0                                    
+late_collisions                          0                                    
+mac_transmit_err                         0                                    
+sent_deferred                            0                                    
+sent_multiple                            0                                    
+--------------------------------------------------------------------------------
+
+
+
+> show interface all
+
+total configured hardware interfaces: 10
+
+name                    id    speed/duplex/state            mac address       
+--------------------------------------------------------------------------------
+ethernet1/1             16    1000/full/up                  72:99:c7:d3:38:02 
+ethernet1/2             17    1000/full/up                  02:90:e4:9f:24:ef 
+ethernet1/3             18    ukn/ukn/down((autoneg))       5e:fd:df:21:b5:2c 
+ethernet1/4             19    ukn/ukn/down((autoneg))       d2:47:1e:ce:6c:88 
+ethernet1/5             20    ukn/ukn/down((autoneg))       46:e2:7a:ac:0f:5b 
+ethernet1/6             21    ukn/ukn/down((autoneg))       22:b9:4c:50:cc:40 
+ethernet1/7             22    1000/full/up                  9a:8e:2a:22:17:82 
+vlan                    1     [n/a]/[n/a]/up                d6:bb:5c:2f:ce:7b 
+loopback                3     [n/a]/[n/a]/up                62:d7:1f:16:53:31 
+tunnel                  4     [n/a]/[n/a]/up                a6:a0:76:bc:41:bd 
+
+aggregation groups: 0
+
+
+total configured logical interfaces: 29
+
+name                      id    vsys zone             forwarding               tag    address                                         
+------------------------- ----- ---- ---------------- ------------------------ ------ ------------------
+ethernet1/1               16    1    wan              vr:default               0      192.168.247.97/24  
+ethernet1/2               17    1    lan              vr:default               0      192.168.33.239/24   
+ethernet1/2.3             257   1    wlan-guest       vr:default               3      10.117.93.71/24    
+ethernet1/2.4             263   1    printer          vr:default               4      N/A               
+ethernet1/2.5             264   1    alarm            vr:default               5      10.113.13.202/24      
+ethernet1/2.6             265   1    videoconference  vr:default               6      10.253.92.162/24      
+ethernet1/2.7             266   1    iot              vr:default               7      10.103.67.2/24      
+ethernet1/2.8             267   1    fireprevention   vr:default               8      10.85.209.46/24      
+ethernet1/2.9             268   1    mgmt-net         vr:default               9      10.64.190.27/24      
+ethernet1/2.10            269   1    user-corp        vr:default               10     10.164.121.121/24     
+ethernet1/2.120           270   1    wlan-guest       vr:default               120    10.51.200.182/24    
+ethernet1/2.130           271   1    wlan-scanner     vr:default               130    10.53.234.61/24    
+ethernet1/2.140           272   1    wlan-guest       vr:default               140    10.135.68.88/24    
+ethernet1/2.198           273   1    machine-auth     vr:default               198    10.59.190.88/24    
+ethernet1/2.200           274   1    nac-profiling    vr:default               200    10.249.115.131/23    
+ethernet1/3               18    1    wan              vr:default               0      169.254.254.254/29
+ethernet1/4               19    1                     vr:default               0      N/A               
+ethernet1/5               20    1                     vr:default               0      N/A               
+ethernet1/6               21    1                     vr:default               0      N/A               
+ethernet1/7               22    1    mgmt-pa          vr:default               0      N/A               
+ethernet1/7.222           256   1    mgmt-pa          vr:default               222    172.18.134.208/28    
+vlan                      1     1                     N/A                      0      N/A               
+loopback                  3     1                     N/A                      0      N/A               
+tunnel                    4     1                     N/A                      0      N/A               
+
+
+> show transceiver all
+
+--------------------------------------------------------------------------------
+         Port   Temperature      Voltage      Current    Tx Power    Rx Power
+--------------------------------------------------------------------------------
+
+
+> show lacp aggregate-ethernet all

@@ -4,7 +4,9 @@ tsf.analyzer - Extracts Throughput (kbps) and related metrics from the
 dp-monitor.* files of a Palo Alto Networks Tech Support File (TSF) and builds a
 standalone HTML report (filterable/exportable table + interactive charts,
 including CPU load by group). The output of `debug dataplane pow performance`
-(tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py).
+(tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py), and the interface
+counters (`show counter interface all`, `show interface ...`) into an "Interface Errors" tab
+(see interface_errors.py).
 
 Standard library only.
 
@@ -12,12 +14,13 @@ Usage:
     panos-toolbox tsf analyze tsf1.tgz [tsf2.tgz ...] [-o OUTDIR]
     panos-toolbox tsf analyze /path/to/extracted_TSF_dir
     panos-toolbox tsf analyze dp-monitor.log    # single file
-    panos-toolbox tsf analyze cli_output.txt    # single file with POW output
+    panos-toolbox tsf analyze cli_output.txt    # single file with POW / interface output
     python -m panos_toolbox.tsf.analyzer ...    # equivalent
 
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
-data); with multiple inputs a summary index.html is also created. The POW anomaly
-thresholds can be tuned with the --pow-<name> options (see --help).
+data, <name>_interfaces.html when it has only interface data, <name>_tsf.html when it has
+both); with multiple inputs a summary index.html is also created. The POW and interface
+anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options (see --help).
 """
 import argparse
 import html
@@ -30,7 +33,15 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import pow_glossary
+from . import if_glossary, pow_glossary
+from .interface_errors import (
+    IF_THRESHOLDS,
+    evaluate_interfaces,
+    glossary_keys,
+    merge_parsed,
+    parse_interfaces,
+)
+from .interface_errors import has_data as ifc_has_data
 from .pow_perf import POW_THRESHOLDS, evaluate, has_data, parse_pow
 from .report_help import render_section_help
 from .report_template import TEMPLATE
@@ -203,14 +214,17 @@ def iter_text_lines(fobj):
 
 
 def collect(path, warnings):
-    """Returns (samples, offsets, n_files, pow_data) for a TSF / directory / file.
+    """Returns (samples, offsets, n_files, pow_data, ifc_data) for a TSF / directory / file.
 
     pow_data is the parse_pow() result of the first 'debug dataplane pow
     performance' output found (tmp/cli/*.txt, or a single input file), or None.
+    ifc_data is the merged parse_interfaces() result of the interface counter outputs
+    found in the same files, or None.
     """
     samples, seen, offsets = [], set(), set()
     n_files = 0
     pow_found = []
+    ifc_found = []
 
     def handle(name, fobj):
         nonlocal n_files
@@ -233,12 +247,21 @@ def collect(path, warnings):
     def handle_cli(name, fobj):
         base = os.path.basename(name)
         try:
-            parsed = parse_pow(iter_text_lines(fobj), src=base)
+            text_lines = list(iter_text_lines(fobj))
         except (OSError, EOFError, tarfile.TarError) as exc:  # truncated archive
-            warnings.append(f'{base}: POW read error ({exc}), skipped')
+            warnings.append(f'{base}: CLI output read error ({exc}), skipped')
             return
+        parsed = parse_pow(text_lines, src=base)
         if has_data(parsed):
             pow_found.append((base, parsed))
+        ifc = parse_interfaces(text_lines, src=base)
+        # Files with only context (system info, clock, global counters) are kept too: the
+        # interface counters may sit in another file of the same TSF.
+        if ifc_has_data(ifc) or ifc['system'] or ifc['global'] or ifc['collected_at']:
+            ifc_found.append(ifc)
+
+    def have_ifc():
+        return any(ifc_has_data(p) for p in ifc_found)
 
     if os.path.isdir(path):
         for root, _dirs, files in os.walk(path):
@@ -263,18 +286,19 @@ def collect(path, warnings):
     else:                                     # single file: POW output or log
         with open(path, 'rb') as fh:
             handle_cli(path, fh)
-        if not pow_found:
+        if not pow_found and not have_ifc():
             with open(path, 'rb') as fh:
                 handle(path, fh)
 
-    if n_files == 0 and not pow_found:
+    if n_files == 0 and not pow_found and not have_ifc():
         warnings.append('no dp-monitor.* file found in /var/log/pan')
     if len(pow_found) > 1:
         warnings.append(f'POW output found in {len(pow_found)} files, '
                         f'using {pow_found[0][0]}')
     samples.sort(key=lambda r: (r['t'], r['dp']))
     pow_data = pow_found[0][1] if pow_found else None
-    return samples, offsets, n_files, pow_data
+    ifc_data = merge_parsed(ifc_found) if have_ifc() else None
+    return samples, offsets, n_files, pow_data, ifc_data
 
 
 def add_aggregate(samples):
@@ -317,10 +341,10 @@ def utc_str(ms):
 
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
-                  thresholds=None):
+                  thresholds=None, ifc_view=None, if_thresholds=None):
     data = {
         'name': name,
-        'kind': 'TSF analysis' if pow_view else 'Throughput',
+        'kind': 'TSF analysis' if pow_view or ifc_view else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
@@ -328,6 +352,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'series': series,
         'samples': samples,
         'pow': pow_view,
+        'ifc': ifc_view,
     }
     groups = []
     for smp in samples:
@@ -351,12 +376,15 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
             names.update(r['name'] for r in v['groups'] + v['funcs'])
             names.update(h['name'] for h in v['hist'])
     names.update(g for g in groups if g in pow_glossary.GLOSSARY)
-    data['gl'] = {'names': pow_glossary.glossary_subset(names),
-                  'fields': pow_glossary.field_entries(),
-                  'conf': pow_glossary.CONF_TEXT}
+    gl_names = pow_glossary.glossary_subset(names)
+    gl_fields = pow_glossary.field_entries()
+    if ifc_view:
+        gl_names.update(if_glossary.glossary_subset(glossary_keys(ifc_view)))
+        gl_fields.update(if_glossary.field_entries())
+    data['gl'] = {'names': gl_names, 'fields': gl_fields, 'conf': pow_glossary.CONF_TEXT}
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     out = tpl
-    for key, val in render_section_help(thresholds).items():
+    for key, val in render_section_help(thresholds, if_thresholds).items():
         out = out.replace(key, val)
     return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
@@ -384,7 +412,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('inputs', nargs='+',
                     help='TSF (.tgz/.tar.gz), directory, dp-monitor.* file or a text file '
-                         'with `debug dataplane pow performance` output')
+                         'with `debug dataplane pow performance` or interface counter output')
     ap.add_argument('-o', '--outdir', default='output', help='output directory (default: output)')
     ap.add_argument('--open', action='store_true', help='open the report in the default browser')
     grp = ap.add_argument_group(
@@ -394,11 +422,22 @@ def main(argv=None):
     for key, default in POW_THRESHOLDS.items():
         grp.add_argument('--pow-' + key.replace('_', '-'), dest='pow_' + key, metavar='N',
                          type=float, default=None, help=f'{key} [{default:g}]')
+    igrp = ap.add_argument_group(
+        'Interface Errors thresholds',
+        'Tunables of the interface error flags (defaults in brackets; see '
+        'interface_errors.IF_THRESHOLDS and the flag reference in the report help).')
+    for key, default in IF_THRESHOLDS.items():
+        igrp.add_argument('--if-' + key.replace('_', '-'), dest='if_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
     overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
                  if getattr(args, 'pow_' + k) is not None}
     if any(v < 0 for v in overrides.values()):
         ap.error('POW thresholds must be >= 0')
+    if_overrides = {k: getattr(args, 'if_' + k) for k in IF_THRESHOLDS
+                    if getattr(args, 'if_' + k) is not None}
+    if any(v < 0 for v in if_overrides.values()):
+        ap.error('interface thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -408,24 +447,31 @@ def main(argv=None):
         warnings = []
         name = re.sub(r'(\.tar\.gz|\.tgz|\.tar)$', '', os.path.basename(path.rstrip('/')))
         try:
-            samples, offsets, n_files, pow_data = collect(path, warnings)
+            samples, offsets, n_files, pow_data, ifc_data = collect(path, warnings)
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
-        if not samples and pow_data is None:
+        if not samples and pow_data is None and ifc_data is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
             continue
         series = add_aggregate(samples) if samples else []
         pow_view = evaluate(pow_data, overrides) if pow_data else None
+        ifc_view = evaluate_interfaces(ifc_data, if_overrides) if ifc_data else None
         pow_warnings = pow_data['warnings'] if pow_data else []
-        suffix = '_throughput.html' if samples else '_pow.html'
+        ifc_warnings = ifc_view['warnings'] if ifc_view else []
+        if samples:
+            suffix = '_throughput.html'
+        elif pow_data is None:
+            suffix = '_interfaces.html'
+        else:
+            suffix = '_tsf.html' if ifc_view else '_pow.html'
         out = os.path.join(args.outdir, f'{name}{suffix}')
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
-                                   pow_view, overrides))
-        n_warn = len(warnings) + len(pow_warnings)
+                                   pow_view, overrides, ifc_view, if_overrides))
+        n_warn = len(warnings) + len(pow_warnings) + len(ifc_warnings)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
         if samples:
@@ -436,12 +482,16 @@ def main(argv=None):
             row.update(samples=len(base), start=utc_str(base[0]['t']),
                        end=utc_str(base[-1]['t']),
                        peak=f"{fmt_kbps(peak['kbps'])} ({utc_str(peak['t'])})")
-        else:
+        elif pow_data is not None:
             g = pow_data['global']
-            print(f'[OK] {path}: POW performance only ({len(g["funcs"])} functions, '
+            print(f'[OK] {path}: POW performance{" and interface errors" if ifc_view else " only"} '
+                  f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
                   f'{n_warn} warnings -> {out}')
-        for w in warnings + pow_warnings:
+        else:
+            print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
+                  f'{n_warn} warnings -> {out}')
+        for w in warnings + pow_warnings + ifc_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)
 

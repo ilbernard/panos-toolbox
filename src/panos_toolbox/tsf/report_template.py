@@ -111,6 +111,14 @@ summary{cursor:pointer}
 .bl{fill:var(--ink);font-size:11px;font-family:ui-monospace,Consolas,monospace}
 .vl{fill:var(--mute);font-size:11px}
 .dim{color:var(--mute)}
+.itbl th.g-phys{box-shadow:inset 0 3px 0 #b42318}
+.itbl th.g-cpu{box-shadow:inset 0 3px 0 #a15c00}
+.itbl th.g-logical{box-shadow:inset 0 3px 0 #1f6f8b}
+.itbl td.nzc{font-weight:600;color:#b42318}
+.itbl td.zc{color:#9aa5b1}
+.itbl td.tl,.itbl th.tl{text-align:left}
+.legsq{display:inline-block;width:14px;height:4px;margin:0 4px 2px 12px}
+.isys td,.isys th{cursor:default;position:static;text-align:left}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -128,6 +136,7 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
+  <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
@@ -202,6 +211,31 @@ TEMPLATE_BODY = r'''</style>
   <div class="sep"><div class="sechead"><h2>Workgroup total-us per core</h2>__HB_pmx__</div>__HP_pmx__<div class="scroll"><table id="pmx"></table></div></div>
 </section>
 
+<section class="panel" id="p-ifc" role="tabpanel" aria-labelledby="tab-ifc" hidden>
+  <div class="sechead"><h2>Interface errors</h2>__HB_ifc__</div>__HP_ifc__
+  <table class="stats isys" id="isys"></table>
+  <details id="iwarn" style="display:none;margin:8px 0 12px"><summary id="iwarnsum"></summary><ul id="iwarnlist"></ul></details>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_iflags__</div>__HP_iflags__
+  <ul class="banner" id="ibanner"></ul>
+  <p class="hint" id="idown"></p>
+  <div class="sep"><div class="sechead"><h2>Interfaces</h2>__HB_itable__</div>__HP_itable__
+  <div class="bar">
+    <label>Search <input type="search" id="iq" placeholder="name, zone, address, flag"></label>
+    <label>Type <select id="ikind"></select></label>
+    <label><input type="checkbox" id="iissues" checked> only interfaces with issues</label>
+    <button id="icsv" type="button">Export CSV</button>
+    <span class="hint" id="imeta"></span>
+  </div>
+  <p class="hint" id="igleg"></p>
+  <div class="scroll"><table class="itbl" id="itbl"></table></div></div>
+  <div class="sep"><div class="sechead"><h2>Cross-check with the global counters</h2>__HB_ixchk__</div>__HP_ixchk__
+  <p class="hint" id="ixmsg"></p>
+  <table class="stats" id="ixchk"></table>
+  <h4>Other drop-related global counters (no interface counter)</h4>
+  <table class="stats" id="ictx"></table></div>
+  <div id="iextra"></div>
+</section>
+
 </main>
 
 '''
@@ -231,7 +265,7 @@ function glName(name, tag){ const s = document.createElement(tag || 'span'); s.t
     const key = el.getAttribute('data-gl') || el.getAttribute('data-gf'), field = el.hasAttribute('data-gf');
     const e = field ? GL.fields[key] : GL.names[key]; tip.replaceChildren(); if(!e) return false;
     const h = div('gt-h', key), b = document.createElement('span'); b.className = 'cb c-' + e.f; b.textContent = e.f; h.appendChild(b); tip.appendChild(h);
-    tip.appendChild(div('gt-c', field ? 'Column' : (e.c + ' - ' + (e.k === 'group' ? 'group' : 'function'))));
+    tip.appendChild(div('gt-c', field ? 'Column' : (e.c + ' - ' + (e.k === 'group' ? 'group' : (e.k === 'counter' ? 'counter' : 'function')))));
     tip.appendChild(div('gt-m', e.m));
     tip.appendChild(div('gt-f', 'Confidence ' + e.f + ': ' + (GL.conf[e.f] || '')));
     if(!field && noMeaning(e)) tip.appendChild(div('gt-bad', 'No known meaning. If this counter is active, please report it.'));
@@ -309,7 +343,7 @@ const fmt = (v,div) => (v/div).toLocaleString('en-US',{maximumFractionDigits: di
 
 // header
 $('#title').textContent = D.kind + ' - ' + D.name;
-$('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : '');
+$('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : (D.ifc && D.ifc.system.collected_at ? 'Collected at ' + D.ifc.system.collected_at : ''));
 $('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (D.series[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization it is the maximum value).' : '');
 $('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
@@ -419,10 +453,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','pow'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','pow','ifc'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -743,9 +777,153 @@ if(hasPow){
 
 '''
 
+# Interface Errors tab (show counter interface all, show interface ...).
+JS_IFC = r'''// Interface Errors tab (interface counters, link state, cross-check with the global counters)
+const IF = D.ifc || null;
+const hasIfc = !!IF;
+const ifState = {q:'', kind:'', issues:true, sort:{k:'order', dir:1}};
+const ifLevel = r => r.flags.some(f=>f.level==='crit') ? 'crit' : (r.flags.some(f=>f.level==='warn') ? 'warn' : '');
+const ifNum = v => v===null||v===undefined ? '' : v.toLocaleString('en-US');
+function ifCols(){
+  const c = [
+    {k:'order', l:'Interface', fk:'if:interface', left:true, get:r=>r.order, f:r=>r.name, name:true},
+    {k:'kind', l:'Type', fk:'if:type', left:true, get:r=>r.kind, f:r=>r.kind},
+    {k:'link', l:'Link', fk:'if:link', left:true, get:r=>r.link_txt, f:r=>r.link_txt},
+    {k:'zone', l:'Zone', fk:'if:zone', left:true, get:r=>r.zone, f:r=>r.zone},
+    {k:'ip', l:'Address', fk:'if:ip', left:true, get:r=>r.ip, f:r=>r.ip},
+    {k:'rx_pkts', l:'rx packets', fk:'if:rx_pkts', get:r=>r.rx_pkts, f:r=>ifNum(r.rx_pkts)},
+    {k:'tx_pkts', l:'tx packets', fk:'if:tx_pkts', get:r=>r.tx_pkts, f:r=>ifNum(r.tx_pkts)},
+    {k:'rx_bytes', l:'rx bytes', fk:'if:rx_bytes', get:r=>r.rx_bytes, f:r=>ifNum(r.rx_bytes)},
+    {k:'tx_bytes', l:'tx bytes', fk:'if:tx_bytes', get:r=>r.tx_bytes, f:r=>ifNum(r.tx_bytes)}
+  ];
+  IF.groups.forEach(g=>g.cols.forEach(x=>c.push({k:g.id+':'+x.k, l:x.k, gl:x.gl, grp:g.id, counter:true, get:r=>(r[g.id]||{})[x.k]||0, f:r=>ifNum((r[g.id]||{})[x.k]||0)})));
+  c.push({k:'drop_pct', l:'Drop %', fk:'if:drop_pct', get:r=>r.drop_pct, f:r=>r.drop_pct===null?'':r.drop_pct.toFixed(2)});
+  c.push({k:'flags', l:'Flags', fk:'if:flags', left:true, get:r=>r.flags.length, f:null});
+  return c;
+}
+function ifFiltered(){
+  const q = ifState.q;
+  return IF.rows.filter(r=>(!ifState.issues || r.issue)
+    && (!ifState.kind || r.kind===ifState.kind)
+    && (!q || (r.name+' '+r.zone+' '+r.ip+' '+r.kind+' '+r.flags.map(f=>f.code).join(' ')).toLowerCase().includes(q)));
+}
+function ifTable(){
+  const C = ifCols(), t = $('#itbl'), st = ifState.sort;
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  C.forEach(c=>{
+    const th = document.createElement('th'); th.textContent = c.l + (st.k===c.k ? (st.dir>0?' ▲':' ▼') : ''); th.tabIndex = 0;
+    if(c.left) th.classList.add('tl');
+    if(c.grp) th.classList.add('g-'+c.grp);
+    if(c.counter) glTag(th, c.gl, false); else glTag(th, c.fk, true);
+    const go = ()=>{ ifState.sort = st.k===c.k ? {k:c.k, dir:-st.dir} : {k:c.k, dir:(c.left?1:-1)}; renderIfc(); };
+    th.onclick = go; th.onkeydown = e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
+    hr.appendChild(th);
+  });
+  const sc = C.find(x=>x.k===st.k) || C[0];
+  const rows = ifFiltered().sort((a,b)=>{
+    const x = sc.get(a), y = sc.get(b);
+    if(x===y) return a.order-b.order;
+    if(x===null||x===undefined) return 1;
+    if(y===null||y===undefined) return -1;
+    return (x<y?-1:1)*st.dir;
+  });
+  const tb = t.createTBody();
+  rows.forEach(r=>{
+    const tr = tb.insertRow(), lv = ifLevel(r);
+    if(lv) tr.className = 'anom-'+lv;
+    C.forEach(c=>{
+      const td = tr.insertCell();
+      if(c.left) td.classList.add('tl');
+      if(c.f===null){
+        r.flags.forEach(f=>{ const s = document.createElement('span'); s.className = 'badge b-'+f.level; s.textContent = f.code; s.title = f.text; td.appendChild(s); });
+      } else if(c.counter){
+        const v = c.get(r); td.textContent = v ? ifNum(v) : '·'; td.classList.add(v ? 'nzc' : 'zc');
+      } else td.textContent = c.f(r);
+    });
+  });
+  $('#imeta').textContent = rows.length+' of '+IF.rows.length+' interfaces shown'+(ifState.issues?' (only those with issues)':'');
+}
+function ifSimpleTable(t, head, rows, fill){
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); });
+}
+function renderIfcStatic(){
+  const S = IF.system;
+  ifSimpleTable($('#isys'), ['Hostname','Model','PAN-OS','Uptime','Captured'], [S], (tr,s)=>{
+    [s.hostname||'unknown', s.model||'unknown', s.sw_version||'unknown', s.uptime ? s.uptime+' ('+s.uptime_text+')' : 'unknown', s.collected_at||'unknown'].forEach(x=>{ tr.insertCell().textContent = x; });
+  });
+  const ul = $('#ibanner'); ul.replaceChildren();
+  if(!IF.banner.length){ const li = document.createElement('li'); li.textContent = 'No interface flags with the current thresholds.'; ul.appendChild(li); }
+  IF.banner.forEach(b=>{ const li = document.createElement('li'); li.className = 'lvl-'+b.level; li.textContent = b.text; ul.appendChild(li); });
+  $('#idown').textContent = IF.down_ports.length ? 'Down ports with no traffic: '+IF.down_ports.join(', ')+'.' : '';
+  if(IF.warnings.length){
+    $('#iwarn').style.display = ''; $('#iwarnsum').textContent = IF.warnings.length+' warnings while parsing the interface output';
+    IF.warnings.forEach(w=>{ const li = document.createElement('li'); li.textContent = w; $('#iwarnlist').appendChild(li); });
+  }
+  const leg = $('#igleg'); leg.replaceChildren();
+  IF.groups.filter(g=>g.cols.length).forEach(g=>{
+    const sq = document.createElement('span'); sq.className = 'legsq'; sq.style.background = g.id==='phys'?'#b42318':g.id==='cpu'?'#a15c00':'#1f6f8b';
+    leg.append(sq, document.createTextNode(g.label+' counters'));
+  });
+  if(!leg.childNodes.length) leg.textContent = 'No non-zero error counters.';
+  const ks = Array.from(new Set(IF.rows.map(r=>r.kind))), sel = $('#ikind');
+  [''].concat(ks).forEach(v=>{ const o = document.createElement('option'); o.value = v; o.textContent = v||'All'; sel.appendChild(o); });
+  // cross-check
+  $('#ixmsg').textContent = IF.crosscheck.length ? '' : 'No cross-check available (the output has no show counter global, or all counters are zero).';
+  ifSimpleTable($('#ixchk'), ['Counter','Sum over interfaces','Global counter(s)','Global value','Difference','Status'], IF.crosscheck, (tr,x)=>{
+    tr.insertCell().appendChild(glName(x.counter));
+    tr.insertCell().textContent = ifNum(x.interface_sum);
+    const c = tr.insertCell(); c.style.textAlign = 'left'; x.globals.forEach((g,i)=>{ if(i) c.appendChild(document.createTextNode(' + ')); c.appendChild(glName(g.name)); });
+    tr.insertCell().textContent = x.globals.map(g=>g.value===null?'n/a':ifNum(g.value)).join(' + ')+(x.globals.length>1?' = '+ifNum(x.global_sum):'');
+    tr.insertCell().textContent = (x.diff>0?'+':'')+ifNum(x.diff);
+    const s = tr.insertCell(); s.textContent = x.status; s.title = x.note; s.style.textAlign = 'left';
+    if(x.status==='differs') tr.className = 'anom-warn';
+  });
+  ifSimpleTable($('#ictx'), ['Global counter','Value','Description'], IF.context, (tr,c)=>{
+    tr.insertCell().appendChild(glName(c.name)); tr.insertCell().textContent = ifNum(c.value);
+    const d = tr.insertCell(); d.textContent = c.description; d.style.textAlign = 'left';
+  });
+  const ex = $('#iextra'); ex.replaceChildren();
+  if(IF.transceivers && IF.transceivers.rows.length){
+    const d = document.createElement('details'); d.open = true; const sm = document.createElement('summary'); sm.textContent = 'Transceivers ('+IF.transceivers.rows.length+')'; d.appendChild(sm);
+    const t = document.createElement('table'); t.className = 'stats'; d.appendChild(t); ex.appendChild(d);
+    ifSimpleTable(t, IF.transceivers.header, IF.transceivers.rows, (tr,r)=>{ r.forEach(x=>{ tr.insertCell().textContent = x; }); });
+  }
+  if(IF.lacp.length){
+    const d = document.createElement('details'); const sm = document.createElement('summary'); sm.textContent = 'LACP (show lacp aggregate-ethernet all, raw)'; d.appendChild(sm);
+    const pre = document.createElement('pre'); pre.textContent = IF.lacp.join('\n'); d.appendChild(pre); ex.appendChild(d);
+  }
+}
+function ifCsv(){
+  const C = ifCols().filter(c=>c.f!==null), q = v=>'"'+String(v).replace(/"/g,'""')+'"';
+  const head = C.map(c=>c.grp ? c.grp+': '+c.l : c.l).concat(['flags']);
+  const lines = [head.map(q).join(',')];
+  ifFiltered().sort((a,b)=>a.order-b.order).forEach(r=>{
+    const cells = C.map(c=>{ const v = c.left ? c.f(r) : c.get(r); return typeof v==='number' ? v : q(v===null||v===undefined?'':v); });
+    cells.push(q(r.flags.map(f=>f.code+':'+f.level).join(';')));
+    lines.push(cells.join(','));
+  });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'}));
+  a.download = D.name+'_interfaces.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+function renderIfc(){ ifTable(); }
+if(hasIfc){
+  $('#iq').oninput = e=>{ ifState.q = e.target.value.trim().toLowerCase(); renderIfc(); };
+  $('#ikind').onchange = e=>{ ifState.kind = e.target.value; renderIfc(); };
+  $('#iissues').onchange = e=>{ ifState.issues = e.target.checked; renderIfc(); };
+  $('#icsv').onclick = ifCsv;
+  renderIfcStatic(); renderIfc();
+}
+
+'''
+
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[]);
-['chart','cpu','pow'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[], hasIfc?['ifc']:[]);
+['chart','cpu','pow','ifc'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
@@ -767,4 +945,5 @@ TEMPLATE = (TEMPLATE_HEAD +
             TEMPLATE_BODY +
             JS_CORE +
             JS_POW +
+            JS_IFC +
             JS_TABS)
