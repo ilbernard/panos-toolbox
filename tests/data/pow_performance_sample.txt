@@ -1,0 +1,1185 @@
+group                                 max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+flow_lookup                                0      0.0            0            0          0        0.0                0                0
+flow_fastpath                           5335     20.1      3598271     72602790     367491       22.5      16889021507     381387800989
+flow_slowpath                            489     27.8       185076      5150275      14644       26.7       1310641322      35046766136
+flow_forwarding                         5787      1.6     33767102     54414656     291353        1.2     278235853852     338189583144
+flow_mgmt                                 49     29.7           21          624       1400       15.6           132100          2063647
+flow_ctrl                                205     33.7       307827     10374032       5414       27.3       3000403205      81955475229
+nac_result                                 0      0.0            0            0          0        0.0                0                0
+flow_np                                   60      0.6     17725360     11811312      10255        0.5     142953953168      83074495090
+dfa_result                                 0      0.0            0            0          0        0.0                0                0
+module_internal                         8922      7.0       158756      1114482      39635        3.7        466430394       1752275211
+aho_result                                 0      0.0            0            0          0        0.0                0                0
+zip_result                                 0      0.0            0            0          0        0.0                0                0
+pktlog_forwarding                         36      1.0       380109       404254       5976        1.0       2642907510       2833367949
+send_out                                   0      0.0            4            0         49        0.1         37215532          4146847
+flow_host                                 33      3.3       100679       338507        822        4.1        555167704       2287485688
+send_host                                  6      0.0       249307        16924         52        0.0       1250231680        100371756
+
+func                                  max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+dfa_match                                196      5.2      1229051      6413298       6577        4.1       7385094773      30774533910
+appid_match                             3491    129.4        50203      6500046      24579      121.5        250513299      30456995932
+policy_lookup                             79      5.7      1153613      6577238       8040        5.4       7139476921      38951367513
+user_group_policy                         24      0.4       567173       239200       2532        0.4       3819166580       1560697156
+get_gid                                  951      0.3       559758       170484      11851        0.3       3274047261       1221561700
+regex_lookup                             828      5.2      1469805      7778190       2963        3.8       7717306784      29916913155
+regex_postfpga                             0      0.0            0            0          0        0.0                0                0
+reg_expr_match                             0      0.0            0            0          0        0.0                0                0
+sml_vm                                  2039      1.1     15402982     18199055       3202        1.1      98079551496     112417961846
+detector_run_p1                          726      2.6       981814      2585839       3656        2.6       5448554798      14545778633
+detector_run_p2                         3003      4.8      1016088      4900267      23715        5.2       5683680729      30010463814
+ssl_proxy_proc                          1426    171.2          719       123142       3435       46.0         12903040        593907197
+ssl_encode                                21     12.7          120         1526        319        4.3         26657347        116082550
+rsa_operation_pub_enc                      0      0.0            0            0          0        0.0                0                0
+rsa_operation_pub_dec                      0      0.0            0            0          0        0.0                0                0
+rsa_operation_priv_enc                     0      0.0            0            0          0        0.0                0                0
+rsa_operation_priv_dec                     0      0.0            0            0       2362     1822.7              219           399180
+rsa_key_gen                                0      0.0            0            0          0        0.0                0                0
+eckey_dup                                  0      0.0            0            0          0        0.0                0                0
+ecdhe_key_gen                              0      0.0            0            0          0        0.0                0                0
+ecdhe_key_gen_mul                          0      0.0            0            0          0        0.0                0                0
+ecdhe_key_compute_mul                      0      0.0            0            0          0        0.0                0                0
+ecdhe_key_compute                          0      0.0            0            0          0        0.0                0                0
+ecdhe_generate_xchg_key                    0      0.0            0            0      13209       68.2            82560          5635576
+ecdhe_gen_key_exchange_msg                 0      0.0            0            0          0        0.0                0                0
+ecdhe_get_key_exchange_msg                92     58.8          103         6061        257       58.8           451948         26618622
+ecdhe_parse_server_key_exchange_msg        0      0.0            0            0          0        0.0                0                0
+ecdhe_gen_server_key_exchange_msg         12      7.9          104          830         83        8.1           455467          3693151
+dhe_gen_para                               0      0.0            0            0          0        0.0                0                0
+dhe_gen_key                                0      0.0            0            0          0        0.0                0                0
+dhe_key_compute                            0      0.0            0            0          0        0.0                0                0
+bn_mod_exp                                 0      0.0            0            0          0        0.0                0                0
+cipher_enc                                 6      1.1          640          721        130        0.8         39511490         34914581
+zip_deflate                              101     12.4       231389      2876728       3877       14.5        482996387       7008331652
+brotli_deflate                             0      0.0            0            0          0        0.0                0                0
+pktlog_log                                 0      0.0            0            0        109       50.5              734            37093
+pktlog_send                                0      0.0            0            0          0        0.0                0                0
+tunnel_encap                             101      2.3      1881034      4415433       5274        2.1      10468101740      22787847818
+tunnel_decap                              38      2.7       437268      1219357      10254        2.6       3147481673       8405101746
+tunnel_esp                               100      1.5      1881034      2924161       4755        1.4      10468101735      15666949877
+tunnel_esp_decap                          33      1.9      1134082      2266805       5007        1.7       5381018762       9597103688
+tunnel_ah_decap                            0      0.0            0            0          0        0.0                0                0
+tunnel_ah                                 28      0.6       931297       566623        579        0.7       3454196720       2446406223
+tunnel_fwd                                30      1.0      1881034      1940142       2373        0.9      10468101741      10212804553
+tunnel_prepare                            82      0.1      1881034       306959        402        0.1      10468252276       1598502989
+tunnel_post                               15      0.1      1881034       238067       5260        0.1      10468101739       1233315071
+appid_result                               0      0.0            0            0          0        0.0                0                0
+ctd_token                               2048     13.3      1237352     16574918       2652       13.8       7421660664     103086037466
+dos_update                                 0      0.0       166142         1671         79        0.0       1104229250         11742885
+urlcache_update                          213     29.8          502        14982       8560       33.1          2359534         78307630
+urlcache_lookup                           58     15.9        61904       986738       1837       16.0        239270363       3829379796
+urlcache_insert                            0      0.0            0            0          0        0.0                0                0
+urlcache_delete                            0      0.0            0            0          0        0.0                0                0
+urlcache_lru                               0      0.0            0            0          0        0.0                0                0
+session_install                           25      2.0       166762       333700       2233        1.9       1108028913       2108502862
+session_age                               24      0.0       347099        32914        350        0.0       1914026994        183951199
+session_delete                            47      6.3       166141      1051557       2298        6.4       1104084177       7172542267
+session_purge                              0      0.0            0            0          0        0.0                0                0
+session_ager                             627    249.7         4625      1155166      30483      174.6         44539657       7778578941
+session_ager_scan                          2      0.1         4625          826         82        0.1         44539657          8074488
+session_local_pool_refill                 80      7.5         5223        39626        591        7.6         34732467        264838150
+session_local_pool_flush                   5      1.0         5221         5286        246        1.1         34730541         40230000
+session_delete_bind_q                      0      0.0            0            0          0        0.0                0                0
+session_delete_predict_session             3      0.0       166142         2890        123        0.0       1104229249         20298546
+session_delete_resource_free              32      2.2       166068       369902       1522        2.5       1103462608       2793421314
+session_delete_l4_resource_free            6      0.1       166089        27036        147        0.1       1103831911        149331254
+sess_del_predict_resource_free             4      0.0       166089         2128         88        0.0       1103831910         14105715
+sess_del_resource_free_inner               0      0.0            0            0         14        5.1             1843             9552
+session_delete_predict_lock                7      2.9           74          219         43        2.8           764799          2190034
+session_delete_l7_ctd_fini               327      1.8       227878       415789        591        1.8       1368572272       2551803753
+session_delete_l7_file_fini                0      0.0            0            0          0        0.0                0                0
+session_delete_l7_url_free                 7      0.1       227878        41323       1513        0.1       1368572271        210222173
+session_delete_tcp_free                    7      0.0        86477         5545        199        0.0        413794131         31026654
+session_delete_mutex                       5      0.0       166142         3598        128        0.0       1104229250         24281736
+session_delete_age_n_sessions              0      0.0            0            0          0        0.0                0                0
+inline_switch                              0      0.0            0            0          0        0.0                0                0
+age_arp                                    8      1.5          231          351         33        1.3          2226935          3084781
+age_pbf_ret_mac                            1      0.4          231           97         16        0.3          2226935           867752
+stack_trace                                0      0.0            0            0          0        0.0                0                0
+ctd_pw_check                               0      0.0            0            0          0        0.0                0                0
+ctd_pw_md4                                 0      0.0            0            0          0        0.0                0                0
+ctd_pw_extract                             0      0.0            0            0          0        0.0                0                0
+prl_rewrite                                0      0.0            0            0          0        0.0                0                0
+pkt_rewrite                                0      0.0            0            0          0        0.0                0                0
+vpn_send_to_client                         0      0.0            0            0          0        0.0                0                0
+vpn_cookie_response                        0      0.0            0            0          0        0.0                0                0
+raven_match                                0      0.0            0            0          0        0.0                0                0
+raven_match_header                         0      0.0            0            0          0        0.0                0                0
+raven_match_body                           0      0.0            0            0          0        0.0                0                0
+raven_sig_get_action                       0      0.0            0            0          0        0.0                0                0
+age_mfib                                   1      0.3          231           87         11        0.3          2226935           830709
+pbp_buf_latency                         6678      2.6     86452361    232564681     360124        2.7     801317884774    2239455283395
+mi_gtp_c_install                           0      0.0            0            0          0        0.0                0                0
+mi_gtp_general                             0      0.0            0            0          0        0.0                0                0
+mi_gtp_reinject                            0      0.0            0            0          0        0.0                0                0
+mi_gtp_process_frm_ctd                     0      0.0            0            0          0        0.0                0                0
+mi_pfcp_process_frm_ctd                    0      0.0            0            0          0        0.0                0                0
+mi_gtp_inter_dp                            0      0.0            0            0          0        0.0                0                0
+mi_ueip_cluster                            0      0.0            0            0          0        0.0                0                0
+mi_host_response                        8922    767.9          765       587479      39634      320.6          1714227        549655864
+mi_response_url_timeout                    0      0.0            0            0          0        0.0                0                0
+mi_scan_invoked_swbuf                      0      0.0            0            0          0        0.0                0                0
+mi_scan_invoked_fpga                       0      0.0            0            0          0        0.0                0                0
+mi_proxy                                  44      3.1       157794       503558       1361        2.3        455917905       1070696910
+mi_proxy_tunnel                            0      0.0            0            0        278       31.3              219             6856
+mi_ha_session_message                      0      0.0            0            0         76        0.4          7024250          3216680
+mi_inter_dp                                0      0.0            0            0          0        0.0                0                0
+mi_mfib_update                             0      0.0            0            0          0        0.0                0                0
+mi_cloud_dns_response                     23      8.5          197         1678        590        8.3          1651718         13715679
+mi_ha_session_teardown                     0      0.0            0            0         23        4.1           122074           512551
+mi_cluster                                 0      0.0            0            0          0        0.0                0                0
+mi_sesscache                               0      0.0            0            0          0        0.0                0                0
+app_diag                                   0      0.0            0            0          0        0.0                0                0
+mi_aho_sw_offload                          0      0.0            0            0          0        0.0                0                0
+mi_post_dfa_sw_offload                     0      0.0            0            0          0        0.0                0                0
+mi_fec_reinject                            0      0.0            0            0          0        0.0                0                0
+mi_flow                                    0      0.0            0            0          0        0.0                0                0
+mi_response_url_ssl                        0      0.0            0            0          0        0.0                0                0
+mi_response_url_ctd                       43     15.4          112         1727        865       24.8           223575          5560725
+mi_response_mlav                           0      0.0            0            0       1199     1199.0                1             1199
+mi_response_mlav_timeout                   0      0.0            0            0          0        0.0                0                0
+mi_response_wfrt                        8921    899.0          651       585297      39634      370.4          1466143        543138963
+mi_response_wfrt_timeout                   0      0.0            0            0          0        0.0                0                0
+mi_response_swg_timeout                    0      0.0            0            0          4        1.6                3                5
+mi_response_doh_timeout                    0      0.0            0            0        348      230.6                3              692
+mi_response_kcd                            0      0.0            0            0          0        0.0                0                0
+mi_sslvpn_start_tunnel                     0      0.0            0            0        278       46.8              122             5713
+mi_sslvpn_stop_tunnel                      0      0.0            0            0         53       19.0               49              931
+mi_proxy_timer_advance                    21      1.4        28171        40290        137        1.1        271599487        316362016
+mi_proxy_timer_expire                     43      6.2          719         4497       1361        6.3          3295525         21022452
+mi_proxy_host_rcv_pkt                     41      2.0        44022        88082        599        2.1         57558307        125458130
+mi_proxy_host_rcv_data                     5      1.1          214          242         29        1.0           504122           553682
+mi_proxy_host_xmt_data                    36      4.1        84668       347490        423        4.0        122924743        496111671
+mi_proxy_host_open                         0      0.0            0            0        138       70.6                5              353
+mi_proxy_host_close                        0      0.0            0            0          3        1.5                4                6
+mi_proxy_hsm_response                      0      0.0            0            0          0        0.0                0                0
+mi_proxy_ssl_sess_cache                    0      0.0            0            0          0        0.0                0                0
+mi_proxy_revert_session_setup              0      0.0            0            0          0        0.0                0                0
+mi_proxy_revert_session_notify             0      0.0            0            0          0        0.0                0                0
+mi_proxy_revert_packet                     0      0.0            0            0          0        0.0                0                0
+mi_proxy_offload_site_setup                0      0.0            0            0          0        0.0                0                0
+mi_proxy_offload_session_notify            0      0.0            0            0          0        0.0                0                0
+mi_proxy_offload_packet                    0      0.0            0            0          0        0.0                0                0
+mi_proxy_queue_update                      0      0.0            0            0          0        0.0                0                0
+mi_proxy_sslvpn_ck_cache                   0      0.0            0            0          0        0.0                0                0
+mi_proxy_circuit_internal                  0      0.0            0            0          0        0.0                0                0
+mi_http2_frame_ingress                     0      0.0            0            0        507       44.5            16539           736985
+mi_http2_5gc_reinject                      0      0.0            0            0          0        0.0                0                0
+mi_mfib_update_notify                      0      0.0            0            0          0        0.0                0                0
+mi_mfib_update_flush                       0      0.0            0            0          0        0.0                0                0
+rsa_verify_sw                              0      0.0            0            0        113       62.5              419            26216
+rsa_sign_sw                             1297    926.6          104        96367       1718      927.3           455880        422738119
+poll_delay_qat                             0      0.0            0            0          0        0.0                0                0
+qat_packet_latency                         0      0.0            0            0          0        0.0                0                0
+qat_batch_latency                          0      0.0            0            0          0        0.0                0                0
+ecdsa_verify_sw                            0      0.0            0            0          0        0.0                0                0
+ecdsa_sign_sw                              0      0.0            0            0          0        0.0                0                0
+ecdhe_key_gen_sw                           0      0.0            0            0          0        0.0                0                0
+ecdhe_key_compute_sw                       0      0.0            0            0          0        0.0                0                0
+rsa_verify_hw                              0      0.0            0            0          0        0.0                0                0
+rsa_sign_hw                                0      0.0            0            0          0        0.0                0                0
+ecdsa_verify_hw                            0      0.0            0            0          0        0.0                0                0
+ecdsa_sign_hw                              0      0.0            0            0          0        0.0                0                0
+ecdhe_key_gen_hw                           0      0.0            0            0          0        0.0                0                0
+ecdhe_key_compute_hw                       0      0.0            0            0          0        0.0                0                0
+rsa_verify_hw_latency                      0      0.0            0            0          0        0.0                0                0
+rsa_sign_hw_latency                        0      0.0            0            0          0        0.0                0                0
+ecdsa_verify_hw_latency                    0      0.0            0            0          0        0.0                0                0
+ecdsa_sign_hw_latency                      0      0.0            0            0          0        0.0                0                0
+ecdhe_key_gen_hw_latency                   0      0.0            0            0          0        0.0                0                0
+ecdhe_key_compute_hw_latency               0      0.0            0            0          0        0.0                0                0
+receive_pkt                                0      0.0            0            0          0        0.0                0                0
+offload_add                                0      0.0            0            0          0        0.0                0                0
+offload_del                                0      0.0            0            0          0        0.0                0                0
+offload_get                                0      0.0            0            0          0        0.0                0                0
+offload_close                              0      0.0            0            0          0        0.0                0                0
+tim_check                                 45      1.8       901623      1640164      11022        1.8       8691553694      15779552080
+sctp_cookie_echo_update                    0      0.0            0            0          0        0.0                0                0
+sctp_ss_update                             0      0.0            0            0          0        0.0                0                0
+http2_proc_recv                            0      0.0            0            0       2530       13.8             5847            81010
+http2_proc_send                            0      0.0            0            0        592        6.2            19174           119699
+hs_match                                   0      0.0            0            0          0        0.0                0                0
+hs_ctxt_free_match                         0      0.0            0            0          0        0.0                0                0
+devid_sampling                             0      0.0            0            0          0        0.0                0                0
+userid_cache_lookup                      137      0.4      1015619       501863      10996        0.4       5833490864       2789101866
+mlav_cache_lookup                          0      0.0            0            0        343      343.0                1              343
+mlav_xgb_model_classify                  642    442.9          192        85044       1646      364.0           253713         92370640
+mlav_lr_model_classify                     0      0.0            0            0          0        0.0                0                0
+sdwan_path_selection                       0      0.0            0            0          0        0.0                0                0
+sdwan_geneve_encap_only                    0      0.0            0            0          0        0.0                0                0
+sdwan_geneve_decap_only                    0      0.0            0            0          0        0.0                0                0
+sdwan_fec_res_get                          0      0.0            0            0          0        0.0                0                0
+sdwan_fec_res_unget                        0      0.0            0            0          0        0.0                0                0
+flow_fec_encode                            0      0.0            0            0          0        0.0                0                0
+flow_fec_decode                            0      0.0            0            0          0        0.0                0                0
+gtp_gc                                     0      0.0            0            0          0        0.0                0                0
+cad_threatsig_match                        0      0.0            0            0          0        0.0                0                0
+cad_appsig_match                           0      0.0            0            0          0        0.0                0                0
+module_internal_bind_ack                   0      0.0            0            0          0        0.0                0                0
+module_internal_bind_nack                  0      0.0            0            0          0        0.0                0                0
+module_internal_ev_update                  0      0.0            0            0          0        0.0                0                0
+module_internal_owner_predict              0      0.0            0            0          0        0.0                0                0
+module_internal_notify_session_bind        0      0.0            0            0          0        0.0                0                0
+module_internal_owner_new_pp               0      0.0            0            0          0        0.0                0                0
+module_internal_owner_unknown_ack          0      0.0            0            0          0        0.0                0                0
+module_internal_predict_ack                0      0.0            0            0          0        0.0                0                0
+module_internal_flow_stats                 0      0.0            0            0          0        0.0                0                0
+module_internal_gtpu_bind_ack              0      0.0            0            0          0        0.0                0                0
+module_internal_gtpu_bind_nack             0      0.0            0            0          0        0.0                0                0
+module_internal_gtp_bind_nack              0      0.0            0            0          0        0.0                0                0
+module_ueip_insert                         0      0.0            0            0          0        0.0                0                0
+module_ueip_delete                         0      0.0            0            0          0        0.0                0                0
+module_ueip_refresh                        0      0.0            0            0          0        0.0                0                0
+module_ueip_modify                         0      0.0            0            0          0        0.0                0                0
+module_ueip_thash_ager_lock                0      0.0            0            0          0        0.0                0                0
+module_ueip_ager_lock                      0      0.0            0            0          0        0.0                0                0
+module_ueip_bulk_proc                      0      0.0            0            0          0        0.0                0                0
+detector_alloc_athreat                    16      0.1      1195100       180791       1394        0.1       8162013356       1195802966
+netinsp_proc_packet                        0      0.0            0            0          0        0.0                0                0
+netdec_proc_eval                           0      0.0            0            0          0        0.0                0                0
+memseg_alloc                               0      0.0            0            0          0        0.0                4                0
+memseg_free                                0      0.0            0            0          0        0.0                0                0
+pkt_rx_tx_latency                   60511858    540.9     17153049   9278584301 5472847635      498.1     138682758868   69082262201986
+ldl_mlc2_http                              0      0.0            0            0          0        0.0                0                0
+ldl_mlc2_http_model_load                   0      0.0            0            0          0        0.0                0                0
+ldl_mlc2_http_char_load                    0      0.0            0            0          0        0.0                0                0
+ldl_mlc2_http_word_load                    0      0.0            0            0          0        0.0                0                0
+ldl_mlc2_http_ort_load                     0      0.0            0            0          0        0.0                0                0
+
+flow_fastpath (group)
+col    avg-ticks   avg-us        count     total-us
+  8          424        0          709           91
+  9          801        0         7394         1796
+ 10         1752        0        50104        26610
+ 11         3012        0       589992       538675
+ 12         5931        1       622939      1119781
+ 13        11831        3       560522      2009720
+ 14        23201        7       533228      3749005
+ 15        46757       14       423142      5995572
+ 16        91499       27       349577      9692801
+ 17       192633       58       217065     12670998
+ 18       356866      108       166411     17996067
+ 19       661659      200        65896     13212443
+ 20      1429307      433        10342      4479401
+ 21      2652832      803          800       643116
+ 22      6271133     1900           71       134925
+ 23     12129492     3675           89       327131
+ 24     17606391     5335            1         5335
+
+flow_slowpath (group)
+col    avg-ticks   avg-us        count     total-us
+  9          816        0            4            0
+ 10         1716        0            5            2
+ 11         3850        1          826          963
+ 12         5877        1         2036         3626
+ 13        11203        3          894         3035
+ 14        26334        7         2395        19112
+ 15        53095       16        28974       466178
+ 16        96602       29       133518      3908590
+ 17       149740       45        16358       742266
+ 18       300714       91           65         5923
+ 19       548823      166            1          166
+ 20      1615449      489            1          489
+
+flow_forwarding (group)
+col    avg-ticks   avg-us        count     total-us
+  7          228        0           11            0
+  8          469        0       251191        35751
+  9          819        0     10808880      2684616
+ 10         1432        0     10838317      4706436
+ 11         2819        0      5023773      4292670
+ 12         5871        1      2801846      4985420
+ 13        11510        3      2709619      9451433
+ 14        21757        6       996443      6569793
+ 15        41415       12       144907      1818600
+ 16        95071       28        49838      1435816
+ 17       196253       59        40862      2430115
+ 18       380892      115        64001      7387181
+ 19       657022      199        33618      6693329
+ 20      1418103      429         3700      1590008
+ 21      2488586      754          284       214171
+ 22      6540007     1981           18        35673
+ 23     10748284     3257           24        78170
+ 24     19099674     5787            1         5787
+
+flow_mgmt (group)
+col    avg-ticks   avg-us        count     total-us
+ 12         5148        1            1            1
+ 13        12045        3            1            3
+ 14        25324        7            5           38
+ 16       112475       34            3          102
+ 17       144132       43           11          480
+
+flow_ctrl (group)
+col    avg-ticks   avg-us        count     total-us
+  8          432        0          138           18
+  9          744        0          265           59
+ 10         1619        0          825          404
+ 11         2956        0         1059          948
+ 12         6089        1          582         1073
+ 13        13404        4         1852         7522
+ 14        23475        7         7057        50201
+ 15        52729       15        44463       710459
+ 16        97478       29       156157      4612747
+ 17       167384       50        91839      4658356
+ 18       304553       92         3580       330396
+ 19       579060      175           11         1930
+
+flow_np (group)
+col    avg-ticks   avg-us        count     total-us
+  8          478        0           10            1
+  9          869        0      4018201      1058786
+ 10         1462        0      8101975      3591475
+ 11         2824        0      3758297      3216944
+ 12         5406        1      1460225      2392221
+ 13        10780        3       305937       999456
+ 14        21229        6        75670       486794
+ 15        39842       12         4848        58532
+ 16        79801       24          282         6819
+ 17       147711       44            9          402
+
+module_internal (group)
+col    avg-ticks   avg-us        count     total-us
+  9          883        0         3070          822
+ 10         1471        0         7899         3521
+ 11         3270        0         9610         9523
+ 12         6205        1        57202       107567
+ 13        11549        3        50631       177205
+ 14        22165        6        25035       168156
+ 15        41431       12         4474        56171
+ 16        84988       25          285         7340
+ 17       172753       52          189         9894
+ 18       370512      112           31         3480
+ 19       772285      234           62        14509
+ 20      1562837      473           84        39781
+ 21      2978003      902           51        46024
+ 22      5609871     1699           58        98598
+ 23     14603919     4425           47       207996
+ 24     19323438     5855           28       163957
+
+pktlog_forwarding (group)
+col    avg-ticks   avg-us        count     total-us
+  7          217        0           10            0
+  8          427        0         4331          560
+  9          835        0        64179        16240
+ 10         1502        0       131922        60078
+ 11         2885        0       106953        93530
+ 12         5441        1        38933        64203
+ 13        12121        3        19619        72062
+ 14        21251        6        13271        85464
+ 15        40680       12          796         9812
+ 16        79307       24           96         2307
+
+send_out (group)
+col    avg-ticks   avg-us        count     total-us
+  9          957        0            2            0
+ 10         1320        0            2            0
+
+flow_host (group)
+col    avg-ticks   avg-us        count     total-us
+  8          462        0            2            0
+  9          896        0          418          113
+ 10         1642        0         6358         3163
+ 11         2989        0        13313        12060
+ 12         6099        1        16627        30731
+ 13        12456        3        41869       158046
+ 14        19872        6        21856       131615
+ 15        38126       11          230         2657
+ 16        85767       25            6          155
+
+send_host (group)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0           63            0
+  5           33        0        28178          281
+  6           84        0        90887         2325
+  7          165        0        65538         3289
+  8          365        0        37821         4189
+  9          684        0        21974         4556
+ 10         1317        0         4304         1718
+ 11         2622        0          476          378
+ 12         5390        1           29           47
+ 13        11445        3           33          114
+ 14        18229        5            5           27
+
+dfa_match (func)
+col    avg-ticks   avg-us        count     total-us
+  5           33        0           29            0
+  6           86        0         1360           35
+  7          178        0         1306           70
+  8          372        0         1949          219
+  9          830        0        13908         3499
+ 10         1639        0        91349        45389
+ 11         2990        0       236183       214062
+ 12         5819        1       184237       324922
+ 13        12683        3       249608       959373
+ 14        23223        7       317216      2232385
+ 15        42292       12        91435      1171839
+ 16        91776       27        28286       786671
+ 17       171673       52        11041       574382
+ 18       288091       87         1150       100396
+ 19       649308      196            1          196
+
+appid_match (func)
+col    avg-ticks   avg-us        count     total-us
+ 13        13497        4            5           20
+ 14        28866        8          192         1679
+ 15        46896       14          858        12193
+ 16        98551       29          829        24757
+ 17       193926       58         4665       274144
+ 18       402894      122        35665      4354353
+ 19       621408      188         6864      1292541
+ 20      1361655      412         1063       438621
+ 21      2655725      804           34        27362
+ 22      7069511     2142            8        17138
+ 23      9451897     2864           20        57284
+
+policy_lookup (func)
+col    avg-ticks   avg-us        count     total-us
+  9         1017        0          311           95
+ 10         1816        0        26291        14474
+ 11         3045        0       171213       157997
+ 12         6042        1       321819       589308
+ 13        10285        3       139311       434198
+ 14        26973        8       198426      1621934
+ 15        41310       12       291241      3645843
+ 16        74419       22         4985       112420
+ 17       166837       50           21         1061
+
+user_group_policy (func)
+col    avg-ticks   avg-us        count     total-us
+  7          231        0          323           22
+  8          430        0        57558         7512
+  9          780        0       190469        45029
+ 10         1471        0       219210        97752
+ 11         2667        0        92602        74856
+ 12         4898        1         5404         8022
+ 13        11937        3         1523         5509
+ 14        18947        5           82          470
+ 15        42240       12            3           38
+ 16        79761       24            1           24
+
+get_gid (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         1885            0
+  5           33        0       144996         1449
+  6           80        0        79441         1926
+  7          159        0       125648         6077
+  8          357        0        53351         5781
+  9          729        0        33993         7514
+ 10         1482        0        24933        11201
+ 11         3054        0        48454        44855
+ 12         5528        1        40150        67264
+ 13        10383        3         6428        20226
+ 14        20392        6          451         2787
+ 15        40223       12           27          329
+ 16        67947       20            2           41
+ 18       458403      138            1          138
+ 21      3140082      951            1          951
+
+regex_lookup (func)
+col    avg-ticks   avg-us        count     total-us
+  6           99        0           31            0
+  7          191        0          502           29
+  8          405        0         4056          498
+  9          813        0        45267        11153
+ 10         1590        0       149814        72190
+ 11         3035        0       289192       266051
+ 12         5892        1       412101       735838
+ 13        11320        3       237715       815486
+ 14        23093        6       147916      1035146
+ 15        46554       14       102053      1439706
+ 16        87729       26        53140      1412724
+ 17       181779       55        20887      1150565
+ 18       346439      104         6497       682071
+ 19       660695      200          550       110116
+ 20      1522843      461           78        35994
+ 21      2363081      716           15        10741
+
+sml_vm (func)
+col    avg-ticks   avg-us        count     total-us
+  5           33        0          192            1
+  6           91        0        38922         1084
+  7          192        0      1071289        62333
+  8          386        0      2788992       326234
+  9          737        0      3090298       690893
+ 10         1452        0      2293740      1009833
+ 11         3004        0      2388951      2175332
+ 12         5794        1      1944880      3414941
+ 13        11060        3      1023923      3431846
+ 14        23519        7       529078      3770885
+ 15        40713       12       208832      2576442
+ 16        76206       23        23781       549174
+ 17       149687       45           64         2903
+ 18       332816      100            6          605
+ 19       694617      210            1          210
+ 21      3994916     1210           12        14527
+ 22      5067911     1535          112       172003
+
+detector_run_p1 (func)
+col    avg-ticks   avg-us        count     total-us
+  8          483        0         2265          331
+  9          847        0       110059        28271
+ 10         1469        0       186930        83219
+ 11         2978        0       144907       130799
+ 12         6149        1       188558       351396
+ 13        11448        3       244339       847678
+ 14        21145        6        83333       533985
+ 15        43693       13        10597       140308
+ 16        96086       29         7221       210257
+ 17       180688       54         3295       180416
+ 18       299229       90          162        14689
+ 19       680862      206           27         5570
+ 20      1558118      472          122        57603
+ 21      2291965      694            2         1389
+
+detector_run_p2 (func)
+col    avg-ticks   avg-us        count     total-us
+  7          225        0            6            0
+  8          435        0        72132         9514
+  9          706        0       204981        43887
+ 10         1523        0       144698        66794
+ 11         2778        0       135024       113673
+ 12         5594        1        56736        96187
+ 13        12756        3        97784       378007
+ 14        24019        7       174535      1270372
+ 15        42577       12       103494      1335306
+ 16        86625       26        15080       395855
+ 17       194724       59         6833       403201
+ 18       354802      107         3383       363729
+ 19       620035      187         1172       220208
+ 20      1505387      456           83        37863
+ 21      3484174     1055          142       149926
+ 22      5573018     1688            6        10132
+ 23      9419652     2854            2         5708
+
+ssl_proxy_proc (func)
+col    avg-ticks   avg-us        count     total-us
+  6           92        0           97            2
+  7          165        0           62            3
+  8          361        0           40            4
+  9          709        0           30            6
+ 10         1427        0           19            8
+ 11         3762        1            2            2
+ 12         6653        2           44           88
+ 13        11757        3           95          338
+ 14        22678        6           27          185
+ 15        49835       15           74         1117
+ 16        79296       24           22          528
+ 18       439591      133           97        12921
+ 19       591816      179            6         1076
+ 21      3361152     1018          101       102872
+ 22      4447498     1347            3         4043
+
+ssl_encode (func)
+col    avg-ticks   avg-us        count     total-us
+ 12         6695        2           20           40
+ 13         8283        2            1            2
+ 14        31284        9            3           28
+ 15        49978       15           94         1423
+ 16        70273       21            2           42
+
+ecdhe_get_key_exchange_msg (func)
+col    avg-ticks   avg-us        count     total-us
+ 17       192180       58          101         5881
+ 18       301834       91            2          182
+
+ecdhe_gen_server_key_exchange_msg (func)
+col    avg-ticks   avg-us        count     total-us
+ 14        25780        7           97          757
+ 15        36757       11            7           77
+
+cipher_enc (func)
+col    avg-ticks   avg-us        count     total-us
+  9          905        0          100           27
+ 10         1524        0          144           66
+ 11         2914        0          176          155
+ 12         5593        1          160          271
+ 13        11517        3           55          191
+ 14        20242        6            5           30
+
+zip_deflate (func)
+col    avg-ticks   avg-us        count     total-us
+  6           99        0            1            0
+  7          203        0         2214          136
+  8          339        0         2475          254
+  9          738        0         2160          483
+ 10         1593        0         2407         1162
+ 11         2964        0         3644         3273
+ 12         6226        1         4528         8542
+ 13        13038        3        38214       150986
+ 14        23892        7        23242       168278
+ 15        49497       14       133242      1998532
+ 16        82486       24        16657       416361
+ 17       162532       49         2597       127909
+ 18       290799       88           10          881
+
+tunnel_encap (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1806        0        37329        20433
+ 11         3192        0       399656       386700
+ 12         6313        1       745314      1425872
+ 13        11085        3       613088      2059616
+ 14        19788        5        84129       504494
+ 15        38161       11         1484        17161
+ 16        79686       24           32          772
+ 17       218757       66            1           66
+ 18       297239       90            4          360
+
+tunnel_decap (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1995        0          574          347
+ 11         3237        0        88325        86650
+ 12         5834        1       168003       297033
+ 13        11734        3       118135       420083
+ 14        21089        6        59036       377279
+ 15        38757       11         3154        37043
+ 16        75233       22           42          957
+
+tunnel_esp (func)
+col    avg-ticks   avg-us        count     total-us
+  9          917        0        27265         7584
+ 10         1630        0        98841        48840
+ 11         3123        0       668771       633099
+ 12         5610        1       826665      1405565
+ 13        10262        3       251916       783461
+ 14        19370        5         7455        43760
+ 15        39408       11          110         1313
+ 16        77922       23           10          236
+ 17       217734       65            1           65
+ 18       301521       91            3          274
+
+tunnel_esp_decap (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1638        0       161851        80342
+ 11         3049        0       242427       223992
+ 12         5762        1       392324       685031
+ 13        11361        3       295459      1017231
+ 14        19889        6        40848       246199
+ 15        38651       11         1149        13457
+ 16        77877       23           25          589
+
+tunnel_ah (func)
+col    avg-ticks   avg-us        count     total-us
+  8          420        0        51634         6572
+  9          805        0       126431        30862
+ 10         1536        0       277977       129449
+ 11         2690        0       459057       374285
+ 12         4876        1        15577        23019
+ 13        11384        3          562         1938
+ 14        19592        5           50          296
+ 15        52404       15            8          127
+ 16        85239       25            4          103
+
+tunnel_fwd (func)
+col    avg-ticks   avg-us        count     total-us
+  9          930        0       310788        87645
+ 10         1493        0       607323       274908
+ 11         2833        0       589738       506383
+ 12         5637        1       175447       299721
+ 13        11639        3       166726       588088
+ 14        19349        5        30777       180460
+ 15        38491       11          222         2589
+ 16        79612       24           16          386
+
+tunnel_prepare (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0            9            0
+  5           33        0        35470          354
+  6           78        0        77896         1847
+  7          177        0       597169        32051
+  8          370        0       507864        57078
+  9          713        0       412320        89119
+ 10         1409        0       204484        87343
+ 11         2628        0        42762        34060
+ 12         4939        1         2844         4257
+ 13        10623        3          194          624
+ 14        20682        6           20          125
+ 15        43450       13            3           39
+ 16        95040       28            1           28
+ 18       272712       82            1           82
+
+tunnel_post (func)
+col    avg-ticks   avg-us        count     total-us
+  5           33        0            9            0
+  6           94        0       411841        11759
+  7          169        0       535641        27479
+  8          361        0       603740        66151
+  9          677        0       253879        52104
+ 10         1312        0        43146        17157
+ 11         3176        0        12197        11742
+ 12         5414        1        13021        21363
+ 13        11745        3         6122        21790
+ 14        19513        5         1434         8479
+ 15        39340       11            7           83
+
+ctd_token (func)
+col    avg-ticks   avg-us        count     total-us
+  6           98        0         5151          154
+  7          165        0        59484         2988
+  8          382        0        97754        11340
+  9          741        0       100749        22648
+ 10         1464        0        96677        42893
+ 11         2911        0        59951        52901
+ 12         6298        1        84004       160335
+ 13        12247        3       140052       519786
+ 14        24132        7       205204      1500658
+ 15        47882       14        92236      1338340
+ 16        97412       29       160387      4734508
+ 17       170784       51       117717      6092255
+ 18       335439      101        17014      1729460
+ 19       693178      210          843       177077
+ 20      1158456      351            8         2808
+ 21      3993585     1210           11        13312
+ 22      5069601     1536          113       173596
+
+dos_update (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         7613            2
+  5           33        0       150800         1508
+  6           67        0         7251          148
+  7          186        0          223           12
+  8          343        0          187           19
+  9          713        0           55           11
+ 10         1260        0           10            3
+ 11         2409        0            3            2
+
+urlcache_update (func)
+col    avg-ticks   avg-us        count     total-us
+ 12         6547        1            5            9
+ 13        12591        3           21           80
+ 14        20733        6           11           69
+ 15        57448       17           20          348
+ 16        90752       27          384        10560
+ 17       168574       51           49         2503
+ 18       335580      101           10         1016
+ 19       655132      198            2          397
+
+urlcache_lookup (func)
+col    avg-ticks   avg-us        count     total-us
+  9          969        0          126           37
+ 10         1510        0         2029          928
+ 11         2743        0         1348         1120
+ 12         4948        1          106          158
+ 13        11376        3            4           13
+ 14        28700        8          800         6957
+ 15        51952       15        46489       731887
+ 16        73613       22        10991       245178
+ 17       148656       45           11          495
+
+session_install (func)
+col    avg-ticks   avg-us        count     total-us
+  9          825        0            6            1
+ 10         1884        0          472          269
+ 11         3359        1        22587        22995
+ 12         6185        1       107653       201772
+ 13         9861        2        35727       106766
+ 14        19177        5          307         1784
+ 15        37772       11            8           91
+ 16        79794       24            2           48
+
+session_age (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0            2            0
+  5           33        0        64031          640
+  6           74        0       148679         3351
+  7          143        0        10727          466
+  8          381        0        43985         5079
+  9          747        0        57093        12932
+ 10         1392        0        20617         8699
+ 11         2499        0         1828         1384
+ 12         5396        1           66          107
+ 13        10593        3           64          205
+ 14        23716        7            3           21
+ 15        51337       15            3           46
+ 16        80553       24            1           24
+
+session_delete (func)
+col    avg-ticks   avg-us        count     total-us
+ 12         7536        2         1022         2333
+ 13        12956        3        68679       269652
+ 14        22435        6        76681       521330
+ 15        41953       12        19078       242543
+ 16        75972       23          679        15632
+ 17       153318       46            2           92
+
+session_ager (func)
+col    avg-ticks   avg-us        count     total-us
+ 18       463147      140          404        56700
+ 19       769905      233         3407       794875
+ 20      1230831      372          814       303607
+
+session_ager_scan (func)
+col    avg-ticks   avg-us        count     total-us
+  6           99        0            1            0
+  7          173        0          504           26
+  8          411        0         2041          254
+  9          715        0         1692          366
+ 10         1343        0          302          122
+ 11         3048        0           73           67
+ 12         5024        1           12           18
+
+session_local_pool_refill (func)
+col    avg-ticks   avg-us        count     total-us
+ 14        24793        7         5136        38588
+ 15        37153       11           86          968
+ 18       265551       80            1           80
+
+session_local_pool_flush (func)
+col    avg-ticks   avg-us        count     total-us
+  8          466        0            7            0
+  9          866        0           72           18
+ 10         1599        0         1193          578
+ 11         3085        0         2475         2314
+ 12         5249        1         1443         2295
+ 13        10624        3           29           93
+ 14        17028        5            2           10
+
+session_delete_predict_session (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         3915            1
+  5           33        0       131643         1316
+  6           72        0        19814          433
+  7          153        0         5073          236
+  8          374        0         3907          442
+  9          740        0         1384          310
+ 10         1267        0          352          135
+ 11         2589        0           48           37
+ 12         4851        1            1            1
+ 13         9702        2            5           14
+
+session_delete_resource_free (func)
+col    avg-ticks   avg-us        count     total-us
+  9          951        0           35           10
+ 10         1750        0        22779        12080
+ 11         2783        0        37669        31773
+ 12         6764        2        44335        90874
+ 13        10654        3        50342       162531
+ 14        21062        6        10397        66360
+ 15        39041       11          490         5797
+ 16        80795       24           21          514
+
+session_delete_l4_resource_free (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         1372            0
+  5           33        0        45956          459
+  6           73        0        25852          574
+  7          168        0         6767          345
+  8          449        0        14029         1909
+  9          688        0        45174         9424
+ 10         1431        0        20763         9006
+ 11         2685        0         5743         4673
+ 12         4861        1          413          608
+ 13        11700        3           18           63
+ 14        18579        5            2           11
+
+sess_del_predict_resource_free (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         4728            1
+  5           33        0       135282         1352
+  6           68        0        22251          463
+  7          199        0         2052          124
+  8          302        0         1497          137
+  9          771        0          194           45
+ 10         1170        0           77           27
+ 11         2715        0            7            5
+ 13        13200        4            1            4
+
+session_delete_predict_lock (func)
+col    avg-ticks   avg-us        count     total-us
+ 12         6948        2           18           37
+ 13        10077        3           52          158
+ 14        23685        7            4           28
+
+session_delete_l7_ctd_fini (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         1033            0
+  5           32        0        44129          441
+  6           71        0        18582          404
+  7          172        0         2300          120
+  8          356        0         2460          265
+  9          687        0         1506          313
+ 10         1488        0          662          298
+ 11         3343        1         7450         7548
+ 12         6296        1        84430       161108
+ 13        10944        3        55344       183554
+ 14        19891        6         9788        59000
+ 15        39421       11          178         2126
+ 16        75437       22           15          342
+ 20      1079265      327            1          327
+
+session_delete_l7_url_free (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         3007            0
+  5           33        0       104581         1045
+  6           71        0        18769          407
+  7          213        0        12095          780
+  8          310        0        27687         2603
+  9          601        0        36116         6585
+ 10         1375        0         4869         2029
+ 11         3221        0         9239         9018
+ 12         5281        1        11201        17925
+ 13         9777        2          299          885
+ 14        19162        5           15           87
+
+session_delete_tcp_free (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0            2            0
+  5           33        0        15201          152
+  6           81        0        28292          698
+  7          185        0        16905          951
+  8          348        0        18023         1905
+  9          635        0         6849         1319
+ 10         1323        0         1111          445
+ 11         2914        0           69           60
+ 12         5367        1           20           32
+ 13         9974        3            4           12
+ 14        26136        7            1            7
+
+session_delete_mutex (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         3089            0
+  5           32        0       100322         1002
+  6           71        0        44775          970
+  7          163        0         6939          344
+  8          315        0         9637          921
+  9          735        0          938          209
+ 10         1199        0          425          154
+ 11         2831        0           10            8
+ 12         6193        1            3            5
+ 13        12595        3            3           11
+ 14        17985        5            1            5
+
+age_arp (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1862        0            7            3
+ 11         2787        0          147          124
+ 12         5434        1           33           54
+ 13        11239        3           35          119
+ 14        19063        5            9           51
+
+age_pbf_ret_mac (func)
+col    avg-ticks   avg-us        count     total-us
+  8          495        0            2            0
+  9          842        0           45           11
+ 10         1403        0          159           67
+ 11         2561        0           24           18
+ 12         6171        1            1            1
+
+age_mfib (func)
+col    avg-ticks   avg-us        count     total-us
+  9          981        0           56           16
+ 10         1279        0          164           63
+ 11         2475        0            9            6
+ 12         4356        1            2            2
+
+pbp_buf_latency (func)
+col    avg-ticks   avg-us        count     total-us
+  8          495        0            9            1
+  9          770        0     46612548     10882659
+ 10         1357        0     24607398     10123635
+ 11         2968        0      3818292      3435077
+ 12         5841        1      2773461      4909249
+ 13        11300        3      1589637      5443442
+ 14        23105        7       998266      6989566
+ 15        47485       14       746080     10735847
+ 16       106280       32      5076791    163506030
+ 17       156268       47       179746      8511789
+ 18       365907      110        33855      3753907
+ 19       673620      204        14025      2862912
+ 20      1425742      432         2206       953095
+ 21      2677613      811          298       241798
+ 22      5504607     1668           61       101752
+ 23     11426198     3462           18        62325
+ 24     19281797     5843            9        52587
+
+mi_host_response (func)
+col    avg-ticks   avg-us        count     total-us
+ 12         6821        2           48           99
+ 13        12185        3           15           55
+ 14        22904        6           36          249
+ 15        47696       14           17          245
+ 16        97789       29          103         3052
+ 17       172021       52          185         9643
+ 18       368986      111           31         3466
+ 19       770939      233           62        14484
+ 20      1561396      473           84        39744
+ 21      2976650      902           51        46003
+ 22      5608286     1699           58        98570
+ 23     14602320     4424           47       207974
+ 24     19321896     5855           28       163944
+
+mi_proxy (func)
+col    avg-ticks   avg-us        count     total-us
+  8          481        0           10            1
+  9          843        0         4485         1146
+ 10         1447        0         7081         3105
+ 11         3384        1        13694        14043
+ 12         5966        1        57569       104087
+ 13        11642        3        46555       164249
+ 14        22114        6        24122       161653
+ 15        41219       12         4113        51374
+ 16        77494       23          164         3851
+ 17       143566       43            2           87
+
+mi_cloud_dns_response (func)
+col    avg-ticks   avg-us        count     total-us
+ 11         3696        1            1            1
+ 12         5296        1            6            9
+ 13        12584        3           12           45
+ 14        24350        7          119          878
+ 15        40385       12           55          673
+ 16        73837       22            4           89
+
+mi_response_url_ctd (func)
+col    avg-ticks   avg-us        count     total-us
+ 11         3699        1           19           21
+ 12         5089        1           35           53
+ 15        60134       18            4           72
+ 16        95146       28           51         1470
+ 17       137984       41            3          125
+
+mi_response_wfrt (func)
+col    avg-ticks   avg-us        count     total-us
+ 13        14399        4           14           61
+ 14        22673        6           30          206
+ 15        47647       14           16          231
+ 16       100377       30           51         1551
+ 17       171351       51          179         9294
+ 18       367257      111           31         3450
+ 19       769170      233           62        14451
+ 20      1559620      472           84        39699
+ 21      2974982      901           51        45977
+ 22      5606710     1699           58        98543
+ 23     14600627     4424           47       207950
+ 24     19320375     5854           28       163931
+
+mi_proxy_timer_advance (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1929        0          150           87
+ 11         3268        0        15295        15148
+ 12         5327        1        10652        17196
+ 13        10755        3         1726         5625
+ 14        20523        6          335         2083
+ 15        38280       11           13          150
+ 16        70422       21            1           21
+
+mi_proxy_timer_expire (func)
+col    avg-ticks   avg-us        count     total-us
+  8          412        0            8            1
+  9          801        0            7            1
+ 10         1767        0           32           17
+ 11         2461        0           38           28
+ 12         7119        2            4            8
+ 13        12235        3          348         1290
+ 14        23456        7          150         1066
+ 15        47642       14          108         1559
+ 16        73621       22           23          513
+ 17       144408       43            1           43
+
+mi_proxy_host_rcv_pkt (func)
+col    avg-ticks   avg-us        count     total-us
+  8          474        0          303           43
+  9          797        0         5361         1295
+ 10         1437        0         6292         2740
+ 11         3174        0         7645         7354
+ 12         5835        1        12500        22102
+ 13        11485        3         8253        28723
+ 14        21621        6         3355        21981
+ 15        39816       12          306         3692
+ 16        75845       22            6          137
+ 17       138204       41            1           41
+
+mi_proxy_host_rcv_data (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1782        0           11            5
+ 11         3107        0          135          127
+ 12         5597        1           59          100
+ 13         8782        2            8           21
+ 14        17226        5            1            5
+
+mi_proxy_host_xmt_data (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         2013        0            3            1
+ 11         3553        1         2639         2841
+ 12         6236        1        24932        47116
+ 13        11754        3        33948       120925
+ 14        22166        6        19653       132012
+ 15        40901       12         3376        41843
+ 16        78334       23          117         2777
+
+rsa_sign_sw (func)
+col    avg-ticks   avg-us        count     total-us
+ 21      3046068      923          103        95075
+ 22      4282806     1297            1         1297
+
+tim_check (func)
+col    avg-ticks   avg-us        count     total-us
+ 10         1966        0         2217         1321
+ 11         3021        0       574678       526249
+ 12         4876        1        84406       124730
+ 13        12208        3       199162       736838
+ 14        19495        5        40126       237057
+ 15        41183       12          959        11968
+ 16        81628       24           74         1830
+ 17       144342       43            4          174
+
+userid_cache_lookup (func)
+col    avg-ticks   avg-us        count     total-us
+  6           96        0           12            0
+  7          210        0        52809         3376
+  8          372        0       306744        34594
+  9          718        0       219337        47757
+ 10         1503        0       147409        67147
+ 11         2977        0       184295       166263
+ 12         5350        1        96651       156720
+ 13         9961        3         8168        24657
+ 14        19526        5          184         1088
+ 15        51447       15            7          109
+ 16        83968       25            2           50
+ 18       455202      137            1          137
+
+mlav_xgb_model_classify (func)
+col    avg-ticks   avg-us        count     total-us
+ 16        96816       29            6          176
+ 19      1016257      307            3          923
+ 20      1510550      457          182        83309
+ 21      2119260      642            1          642
+
+detector_alloc_athreat (func)
+col    avg-ticks   avg-us        count     total-us
+  0            1        0         1087            0
+  5           33        0        80933          809
+  6           83        0       142226         3615
+  7          184        0       291077        16242
+  8          355        0       355935        38313
+  9          721        0       197424        43174
+ 10         1453        0        91626        40357
+ 11         2599        0        29893        23549
+ 12         5610        1         2359         4010
+ 13        11865        3         2068         7435
+ 14        21232        6          429         2760
+ 15        40977       12           46          571
+
+pkt_rx_tx_latency (func)
+col    avg-ticks   avg-us        count     total-us
+ 13        14258        4           27          116
+ 14        27637        8         1104         9245
+ 15        53526       16        19245       312159
+ 16       103217       31       126669      3961984
+ 17       200995       60       481973     29356103
+ 18       395870      119      1218895    146220725
+ 19       797526      241      2874448    694687540
+ 20      1599373      484      8563488   4150404665
+ 21      2464902      746      3760087   2808584305
+ 22      5580686     1691        57353     96991464
+ 23     11896409     3605        31354    113031281
+ 24     24590182     7451        14043    104643300
+ 25     40347003    12226         3978     48636895
+ 26     83817674    25399          327      8305640
+ 27    177180488    53691           32      1718128
+ 28    351139736   106406           12      1276882
+ 29    921773255   279327            1       279327
+ 31  36408338463 11032924           97   1070193666
+
+
+

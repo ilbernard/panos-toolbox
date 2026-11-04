@@ -16,7 +16,8 @@ Usage:
     python -m panos_toolbox.tsf.analyzer ...    # equivalent
 
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
-data); with multiple inputs a summary index.html is also created.
+data); with multiple inputs a summary index.html is also created. The POW anomaly
+thresholds can be tuned with the --pow-<name> options (see --help).
 """
 import argparse
 import html
@@ -29,8 +30,9 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from .pow_perf import evaluate, has_data, parse_pow
-from .report_help import render_help
+from . import pow_glossary
+from .pow_perf import POW_THRESHOLDS, evaluate, has_data, parse_pow
+from .report_help import render_section_help
 from .report_template import TEMPLATE
 
 # --------------------------------------------------------------------------
@@ -314,7 +316,8 @@ def utc_str(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None):
+def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
+                  thresholds=None):
     data = {
         'name': name,
         'kind': 'TSF analysis' if pow_view else 'Throughput',
@@ -339,9 +342,23 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         rows.append(r)
     data['groups'] = groups
     data['samples'] = rows
+    # Glossary entries (tooltips): every counter of the POW view, plus the CPU groups the
+    # glossary knows. The glossary is partly inferred; each entry carries a confidence code.
+    names = set()
+    if pow_view:
+        views = [pow_view['global']] + list(pow_view['cores'].values())
+        for v in views:
+            names.update(r['name'] for r in v['groups'] + v['funcs'])
+            names.update(h['name'] for h in v['hist'])
+    names.update(g for g in groups if g in pow_glossary.GLOSSARY)
+    data['gl'] = {'names': pow_glossary.glossary_subset(names),
+                  'fields': pow_glossary.field_entries(),
+                  'conf': pow_glossary.CONF_TEXT}
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
-    return (tpl.replace('__HELP__', render_help())
-               .replace('__DATA__', blob)
+    out = tpl
+    for key, val in render_section_help(thresholds).items():
+        out = out.replace(key, val)
+    return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
                .replace('__TITLE__', html.escape(name)))
 
@@ -365,10 +382,23 @@ def render_index(rows):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='panos-toolbox tsf analyze', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('inputs', nargs='+', help='TSF (.tgz/.tar.gz), directory or dp-monitor.* file')
+    ap.add_argument('inputs', nargs='+',
+                    help='TSF (.tgz/.tar.gz), directory, dp-monitor.* file or a text file '
+                         'with `debug dataplane pow performance` output')
     ap.add_argument('-o', '--outdir', default='output', help='output directory (default: output)')
     ap.add_argument('--open', action='store_true', help='open the report in the default browser')
+    grp = ap.add_argument_group(
+        'POW performance thresholds',
+        'Tunables of the POW anomaly flags (defaults in brackets; see pow_perf.POW_THRESHOLDS '
+        'and the flag reference in the report help). Percent values are 0-100.')
+    for key, default in POW_THRESHOLDS.items():
+        grp.add_argument('--pow-' + key.replace('_', '-'), dest='pow_' + key, metavar='N',
+                         type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
+    overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
+                 if getattr(args, 'pow_' + k) is not None}
+    if any(v < 0 for v in overrides.values()):
+        ap.error('POW thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -388,13 +418,13 @@ def main(argv=None):
                 print('  -', w, file=sys.stderr)
             continue
         series = add_aggregate(samples) if samples else []
-        pow_view = evaluate(pow_data) if pow_data else None
+        pow_view = evaluate(pow_data, overrides) if pow_data else None
         pow_warnings = pow_data['warnings'] if pow_data else []
         suffix = '_throughput.html' if samples else '_pow.html'
         out = os.path.join(args.outdir, f'{name}{suffix}')
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
-                                   pow_view))
+                                   pow_view, overrides))
         n_warn = len(warnings) + len(pow_warnings)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}

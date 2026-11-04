@@ -1,6 +1,7 @@
 """Page template of the TSF report (HTML, CSS and JavaScript).
 
-Placeholders: __KIND__, __TITLE__ and __DATA__ (JSON blob), __HELP__ (Help tab).
+Placeholders: __KIND__, __TITLE__ and __DATA__ (JSON blob), and __HB_<id>__ / __HP_<id>__
+(help button and collapsible help text of each section, see report_help.py).
 The pieces are concatenated in TEMPLATE; edit one piece to change one part of the page.
 """
 
@@ -80,8 +81,8 @@ summary{cursor:pointer}
   .pgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 24px;align-items:start}
   .pgrid>div+div{margin-top:0}
 }
-.help h2{font-size:16px;margin:20px 0 8px}
-.help h2:first-child{margin-top:0}
+.help{background:#f7f9fb;border-left:3px solid var(--acc);padding:6px 14px;margin:0 0 12px;font-size:13px}
+.help[hidden],#gltip[hidden]{display:none}
 .help h3{font-size:14px;margin:14px 0 6px}
 .help p,.help ul,.help ol{margin:6px 0}
 .help code{background:#eef1f4;border-radius:2px;padding:0 4px;font-size:12.5px}
@@ -89,6 +90,27 @@ summary{cursor:pointer}
 .help th,.help td{white-space:normal;text-align:left;vertical-align:top;cursor:default;position:static}
 .help details{margin:8px 0}
 .help summary{font-weight:600}
+.sechead{display:flex;align-items:center;gap:10px;margin:0 0 6px}
+.sechead h2,.sechead h3{margin:0;font-size:15px}
+.sechead h3{font-size:14px}
+.helpbtn{font-size:12px;padding:1px 8px;border-radius:10px;color:var(--mute)}
+.helpbtn[aria-expanded=true]{color:var(--ink);border-color:var(--acc)}
+.gl{cursor:help;border-bottom:1px dotted var(--mute)}
+.gl:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.gl.unk{border-bottom:2px dotted #b42318;color:#b42318}
+.gl.unk::after{content:" ?";font-weight:700}
+#gltip{position:fixed;z-index:50;max-width:380px;background:#1c2530;color:#f1f4f7;padding:8px 11px;border-radius:4px;font-size:12px;line-height:1.4;box-shadow:0 3px 12px rgba(0,0,0,.35);pointer-events:none}
+#gltip .gt-h{font-weight:600;font-size:13px}
+#gltip .gt-c{opacity:.8;margin:1px 0 4px}
+#gltip .gt-f{opacity:.85;margin-top:5px;font-size:11px}
+#gltip .gt-bad{margin-top:5px;font-weight:600;color:#ff8b7e}
+.cb{display:inline-block;min-width:16px;text-align:center;border-radius:3px;padding:0 4px;margin-left:6px;font-size:11px;font-weight:700;color:#fff}
+.cb.c-D{background:#1a7f4b}.cb.c-G{background:#0e7490}.cb.c-I{background:#a15c00}.cb.c-U{background:#b42318}
+.chartgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:12px 24px;margin-bottom:12px}
+.axt{fill:var(--mute);font-size:11px}
+.bl{fill:var(--ink);font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.vl{fill:var(--mute);font-size:11px}
+.dim{color:var(--mute)}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -96,6 +118,7 @@ TEMPLATE_BODY = r'''</style>
 </head>
 <body>
 <main>
+<div id="gltip" role="tooltip" hidden></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
 <div class="utc" id="utc"></div>
@@ -105,10 +128,10 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
-  <button type="button" role="tab" id="tab-help" aria-controls="p-help" aria-selected="false" tabindex="-1">Help</button>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
+  <div class="sechead"><h2>Dataplane throughput</h2>__HB_chart__</div>__HP_chart__
   <div class="bar">
     <label>Metric <select id="metric"></select></label>
     <div class="leg" id="leg"></div>
@@ -118,6 +141,7 @@ TEMPLATE_BODY = r'''</style>
   <p class="hint">Drag on the chart to zoom into a range; the range also applies to the other charts and to the table.</p>
   <table class="stats" id="stats"></table>
   <div class="sep">
+  <div class="sechead"><h3>Samples table</h3>__HB_table__</div>__HP_table__
   <div class="bar">
     <label>DP <select id="fdp"></select></label>
     <label>From (UTC) <input type="datetime-local" id="t0"></label>
@@ -133,6 +157,7 @@ TEMPLATE_BODY = r'''</style>
 </section>
 
 <section class="panel" id="p-cpu" role="tabpanel" aria-labelledby="tab-cpu" hidden>
+  <div class="sechead"><h2>CPU load by group</h2>__HB_cpu__</div>__HP_cpu__
   <div class="bar">
     <label>DP <select id="gdp"></select></label>
     <button id="greset" type="button">Reset zoom</button>
@@ -145,8 +170,10 @@ TEMPLATE_BODY = r'''</style>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
+  <div class="sechead"><h2>POW performance</h2>__HB_pow__</div>__HP_pow__
   <p class="hint" id="pinfo"></p>
   <details id="pwarn" style="display:none;margin:0 0 12px"><summary id="pwarnsum"></summary><ul id="pwarnlist"></ul></details>
+  <div class="sechead"><h3>Findings</h3>__HB_pflags__</div>__HP_pflags__
   <ul class="banner" id="pbanner"></ul>
   <div class="bar">
     <label>View <select id="pview"></select></label>
@@ -156,30 +183,97 @@ TEMPLATE_BODY = r'''</style>
     <button id="pcsv" type="button">Export CSV</button>
     <span class="hint" id="pmeta"></span>
   </div>
+  <div class="sep"><div class="sechead"><h2>Top functions</h2>__HB_ptop__</div>__HP_ptop__
+  <div class="bar"><label>Top <select id="ptopn"><option>10</option><option selected>15</option><option>25</option><option>40</option></select></label></div>
+  <div class="chartgrid"><div><h4>By total-us (window)</h4><div id="ptopw"></div></div>
+  <div id="ptopa-wrap"><h4>By ac-total-us (accumulated)</h4><div id="ptopa"></div></div></div></div>
   <div class="pgrid">
-  <div><h2>Workgroups</h2>
+  <div><div class="sechead"><h2>Workgroups</h2>__HB_pgroups__</div>__HP_pgroups__
   <div class="scroll"><table id="pgt"></table></div></div>
-  <div><h2>Functions</h2>
+  <div><div class="sechead"><h2>Functions</h2>__HB_pfuncs__</div>__HP_pfuncs__
   <div class="scroll"><table id="pft"></table></div></div>
   </div>
-  <div class="sep"><h2>Function CPU share by category</h2><table class="stats" id="pcat"></table></div>
-  <div class="sep"><h2>Histograms (processing time per call)</h2><div id="phist"></div></div>
-  <div class="sep"><h2>Workgroup total-us per core</h2><p class="hint">Darker cell = more CPU time. Use the View selector to see one core's functions.</p><div class="scroll"><table id="pmx"></table></div></div>
-</section>
-
-<section class="panel help" id="p-help" role="tabpanel" aria-labelledby="tab-help" hidden>
-__HELP__
+  <div class="sep"><div class="sechead"><h2>Function CPU share by category</h2>__HB_pcat__</div>__HP_pcat__
+  <table class="stats" id="pcat"></table>
+  <h4>Glossary families</h4><p class="hint" id="pgcat-hint"></p>
+  <div class="scroll"><table id="pgcat"></table></div></div>
+  <div class="sep"><div class="sechead"><h2>Histograms (processing time per call)</h2>__HB_phist__</div>__HP_phist__<div id="phist"></div></div>
+  <div class="sep"><div class="sechead"><h2>Latency counters</h2>__HB_plat__</div>__HP_plat__<div class="scroll"><table id="plt"></table></div></div>
+  <div class="sep"><div class="sechead"><h2>Workgroup total-us per core</h2>__HB_pmx__</div>__HP_pmx__<div class="scroll"><table id="pmx"></table></div></div>
 </section>
 
 </main>
 
 '''
 
+# Shared glossary tooltip (counter, group and function names, column headers) and the
+# collapsible per-section help buttons.
+JS_GL = r'''// ===== shared: glossary tooltips and per-section help =====
+const GL = D.gl || {names:{}, fields:{}, conf:{}};
+const noMeaning = e => !!e && (e.f==='U' || e.c==='Unclassified');
+function glTitle(key, field){
+  const e = field ? GL.fields[key] : GL.names[key]; if(!e) return '';
+  if(field) return key + ': ' + e.m;
+  return key + ' [' + e.f + '] ' + e.c + ': ' + e.m + (noMeaning(e) ? ' (no known meaning)' : '');
+}
+function glTag(el, key, field){
+  const e = field ? GL.fields[key] : GL.names[key]; if(!e) return el;
+  el.classList.add('gl'); el.setAttribute(field ? 'data-gf' : 'data-gl', key);
+  el.setAttribute('aria-describedby', 'gltip'); if(!el.hasAttribute('tabindex')) el.tabIndex = 0;
+  if(!field && noMeaning(e)) el.classList.add('unk');
+  el.setAttribute('title', glTitle(key, field)); return el;
+}
+function glName(name, tag){ const s = document.createElement(tag || 'span'); s.textContent = name; return glTag(s, name, false); }
+(function(){
+  const tip = document.getElementById('gltip'); let cur = null, savedTitle = null, savedChild = null;
+  const div = (c, t) => { const d = document.createElement('div'); d.className = c; d.textContent = t; return d; };
+  function build(el){
+    const key = el.getAttribute('data-gl') || el.getAttribute('data-gf'), field = el.hasAttribute('data-gf');
+    const e = field ? GL.fields[key] : GL.names[key]; tip.replaceChildren(); if(!e) return false;
+    const h = div('gt-h', key), b = document.createElement('span'); b.className = 'cb c-' + e.f; b.textContent = e.f; h.appendChild(b); tip.appendChild(h);
+    tip.appendChild(div('gt-c', field ? 'Column' : (e.c + ' - ' + (e.k === 'group' ? 'group' : 'function'))));
+    tip.appendChild(div('gt-m', e.m));
+    tip.appendChild(div('gt-f', 'Confidence ' + e.f + ': ' + (GL.conf[e.f] || '')));
+    if(!field && noMeaning(e)) tip.appendChild(div('gt-bad', 'No known meaning. If this counter is active, please report it.'));
+    return true;
+  }
+  function place(el){
+    const r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = Math.min(Math.max(8, r.left), window.innerWidth - tw - 8), y = r.bottom + 8;
+    if(y + th > window.innerHeight - 4) y = Math.max(4, r.top - th - 8);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  function hide(){
+    if(!cur) return; tip.hidden = true;
+    if(savedTitle !== null) cur.setAttribute('title', savedTitle);
+    if(savedChild) cur.appendChild(savedChild);
+    cur = savedTitle = savedChild = null;
+  }
+  function show(el){
+    if(cur === el) return; hide();
+    if(!build(el)) return;
+    cur = el; savedTitle = el.getAttribute('title'); if(savedTitle !== null) el.removeAttribute('title');
+    const t = el.querySelector(':scope > title'); if(t){ savedChild = t; el.removeChild(t); }
+    tip.hidden = false; place(el);
+  }
+  const find = t => (t && t.closest) ? t.closest('[data-gl],[data-gf]') : null;
+  document.addEventListener('mouseover', e => { const el = find(e.target); if(el) show(el); else if(cur) hide(); });
+  document.addEventListener('focusin', e => { const el = find(e.target); if(el) show(el); else hide(); });
+  document.addEventListener('focusout', hide);
+  document.addEventListener('keydown', e => { if(e.key === 'Escape') hide(); });
+  window.addEventListener('scroll', hide, true);
+  document.querySelectorAll('.helpbtn').forEach(b => {
+    b.onclick = () => { const p = document.getElementById(b.getAttribute('aria-controls')); const open = p.hidden; p.hidden = !open; b.setAttribute('aria-expanded', String(open)); };
+  });
+})();
+'''
+
 # Script start, data, dataplane throughput chart and table, CPU by group, CSV export.
-JS_CORE = r'''<script>
+_JS_CORE = r'''<script>
 const D = __DATA__;
 const $ = s => document.querySelector(s);
 const NS = 'http://www.w3.org/2000/svg';
+__GL_JS__
 const METRICS = {
   kbps:{label:'Throughput'},
   pps:{label:'Packet rate', unit:'pkt/s'},
@@ -328,7 +422,7 @@ let activeTab='chart';
 function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','pow','help'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','pow'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -349,7 +443,7 @@ function legendItem(host,name,color,hiddenSet,onchange){
   const l=document.createElement('label'), c=document.createElement('input'); c.type='checkbox'; c.checked=!hiddenSet.has(name);
   c.onchange=()=>{c.checked?hiddenSet.delete(name):hiddenSet.add(name); onchange();};
   const sw=document.createElement('span'); sw.className='sw'; sw.style.background=color;
-  l.append(c,sw,document.createTextNode(name)); host.appendChild(l); return c;
+  l.append(c,sw,GL.names[name]?glName(name):document.createTextNode(name)); host.appendChild(l); return c;
 }
 D.series.forEach(s=>legendItem($('#leg'),s,colors[s],state.hidden,drawMain));
 $('#reset').onclick=()=>setRange(null,null);
@@ -413,27 +507,45 @@ $('#csv').onclick=()=>{
 
 '''
 
+JS_CORE = _JS_CORE.replace('__GL_JS__', JS_GL)
+
 # POW performance tab (workgroups, functions, categories, histograms, core matrix).
 JS_POW = r'''// POW performance tab (debug dataplane pow performance)
 const P = D.pow || null;
 const hasPow = !!P;
-const powState = {view:'global', q:'', anom:false, idle:true, sort:{g:{k:'total',dir:-1}, f:{k:'share',dir:-1}}};
+const powState = {view:'global', q:'', anom:false, idle:true, sort:{g:{k:'total',dir:-1}, f:{k:'share',dir:-1}, l:{k:'total',dir:-1}}};
+// Text with tooltips on the counter names and pow column names it mentions.
+function richText(text,names){
+  const keys=names.concat(Object.keys(GL.fields).filter(k=>/-us$|^ac-|^count$|^avg-ticks$/.test(k))).filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>b.length-a.length);
+  if(!keys.length) return document.createTextNode(text);
+  const esc=x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const rx=new RegExp('(?<![\\w-])('+keys.map(esc).join('|')+')(?![\\w-])','g');
+  const f=document.createDocumentFragment(); let last=0, m;
+  while((m=rx.exec(text))){
+    if(m.index>last) f.appendChild(document.createTextNode(text.slice(last,m.index)));
+    const k=m[1];
+    f.appendChild(names.indexOf(k)>=0&&GL.names[k]?glName(k):(GL.fields[k]?glTag(Object.assign(document.createElement('span'),{textContent:k}),k,true):document.createTextNode(k)));
+    last=m.index+k.length;
+  }
+  if(last<text.length) f.appendChild(document.createTextNode(text.slice(last)));
+  return f;
+}
 const rowLevel = r => r.flags.some(f=>f.level==='crit') ? 'crit' : (r.flags.some(f=>f.level==='warn') ? 'warn' : '');
 const avgTxt = v => v===null||v===undefined ? '' : v.toLocaleString('en-US',{maximumFractionDigits:1});
 const POW_COLS = [
-  {k:'name', l:'Name', get:r=>r.name, f:r=>r.name},
-  {k:'category', l:'Category', get:r=>r.category, f:r=>r.category},
-  {k:'max', l:'max-us', get:r=>r.max_us, f:r=>num(r.max_us)},
-  {k:'avg', l:'avg-us', get:r=>r.avg_us, f:r=>avgTxt(r.avg_us)},
-  {k:'count', l:'count', get:r=>r.count, f:r=>num(r.count)},
-  {k:'total', l:'total-us', get:r=>r.total_us, f:r=>num(r.total_us)},
-  {k:'share', l:'share %', get:r=>r.share, f:r=>r.share.toFixed(2)},
-  {k:'acmax', l:'ac-max-us', ac:true, get:r=>r.ac_max_us, f:r=>num(r.ac_max_us)},
-  {k:'acavg', l:'ac-avg-us', ac:true, get:r=>r.ac_avg_us, f:r=>avgTxt(r.ac_avg_us)},
-  {k:'account', l:'ac-count', ac:true, get:r=>r.ac_count, f:r=>num(r.ac_count)},
-  {k:'actotal', l:'ac-total-us', ac:true, get:r=>r.ac_total_us, f:r=>num(r.ac_total_us)},
-  {k:'ratio', l:'count / ac-count', ac:true, get:r=>r.ratio, f:r=>r.ratio===null?'':r.ratio.toFixed(2)},
-  {k:'flags', l:'Flags', get:r=>r.flags.length, f:null}
+  {k:'name', l:'Name', fk:'name', get:r=>r.name, f:r=>r.name},
+  {k:'category', l:'Category', fk:'category', get:r=>r.category, f:r=>r.category},
+  {k:'max', l:'max-us', fk:'max-us', get:r=>r.max_us, f:r=>num(r.max_us)},
+  {k:'avg', l:'avg-us', fk:'avg-us', get:r=>r.avg_us, f:r=>avgTxt(r.avg_us)},
+  {k:'count', l:'count', fk:'count', get:r=>r.count, f:r=>num(r.count)},
+  {k:'total', l:'total-us', fk:'total-us', get:r=>r.total_us, f:r=>num(r.total_us)},
+  {k:'share', l:'share %', fk:'share', get:r=>r.share, f:r=>r.share.toFixed(2)},
+  {k:'acmax', l:'ac-max-us', fk:'ac-max-us', ac:true, get:r=>r.ac_max_us, f:r=>num(r.ac_max_us)},
+  {k:'acavg', l:'ac-avg-us', fk:'ac-avg-us', ac:true, get:r=>r.ac_avg_us, f:r=>avgTxt(r.ac_avg_us)},
+  {k:'account', l:'ac-count', fk:'ac-count', ac:true, get:r=>r.ac_count, f:r=>num(r.ac_count)},
+  {k:'actotal', l:'ac-total-us', fk:'ac-total-us', ac:true, get:r=>r.ac_total_us, f:r=>num(r.ac_total_us)},
+  {k:'ratio', l:'count / ac-count', fk:'ratio', ac:true, get:r=>r.ratio, f:r=>r.ratio===null?'':r.ratio.toFixed(2)},
+  {k:'flags', l:'Flags', fk:'flags', get:r=>r.flags.length, f:null}
 ];
 const powCols = () => POW_COLS.filter(c=>!(c.ac && P.format==='legacy'));
 const powView = () => powState.view==='global' ? P.global : P.cores[powState.view];
@@ -452,7 +564,7 @@ function powTable(t,key,rows){
   t.replaceChildren();
   const hr=t.createTHead().insertRow();
   C.forEach(c=>{
-    const th=document.createElement('th'); th.textContent=c.l+(st.k===c.k?(st.dir>0?' ▲':' ▼'):''); th.tabIndex=0;
+    const th=document.createElement('th'); th.textContent=c.l+(st.k===c.k?(st.dir>0?' ▲':' ▼'):''); th.tabIndex=0; glTag(th,c.fk,true);
     const go=()=>{ powState.sort[key]=st.k===c.k?{k:c.k,dir:-st.dir}:{k:c.k,dir:(c.k==='name'||c.k==='category')?1:-1}; renderPow(); };
     th.onclick=go; th.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}}; hr.appendChild(th);
   });
@@ -470,8 +582,7 @@ function powTable(t,key,rows){
     if(lv) tr.className='anom-'+lv;
     C.forEach(col=>{
       const td=tr.insertCell();
-      if(col.f) td.textContent=col.f(r); else flagCell(td,r);
-      if(col.k==='name' && r.description) td.title=r.description;
+      if(col.k==='name') td.appendChild(glName(r.name)); else if(col.f) td.textContent=col.f(r); else flagCell(td,r);
     });
   });
 }
@@ -479,7 +590,7 @@ function renderPowInfo(){
   $('#pinfo').textContent='Collected at '+(P.collected_at||'unknown (no show clock output)')+' | format: '+P.format+(P.format==='legacy'?' (pre-9.1: max-us, avg-us, count only)':' (total-us and ac-* columns present)')+' | cores with data: '+(Object.keys(P.cores).join(', ')||'none');
   const ul=$('#pbanner'); ul.replaceChildren();
   if(!P.banner.length){ const li=document.createElement('li'); li.textContent='No anomaly flags with the current thresholds.'; ul.appendChild(li); }
-  P.banner.forEach(b=>{ const li=document.createElement('li'); li.className='lvl-'+b.level; li.textContent=b.text; ul.appendChild(li); });
+  P.banner.forEach(b=>{ const li=document.createElement('li'); li.className='lvl-'+b.level; li.appendChild(richText(b.text,b.names||[])); ul.appendChild(li); });
   if(P.warnings.length){
     $('#pwarn').style.display=''; $('#pwarnsum').textContent=P.warnings.length+' warnings while parsing the POW output';
     P.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#pwarnlist').appendChild(li); });
@@ -488,7 +599,7 @@ function renderPowInfo(){
 function renderPowCats(V){
   const t=$('#pcat'); t.replaceChildren();
   const s=V.func_summary, hr=t.createTHead().insertRow();
-  ['Category','total-us','share %',''].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; hr.appendChild(th); });
+  [['Category','category'],['total-us','total-us'],['share %','share'],['','']].forEach(([x,fk])=>{ const th=document.createElement('th'); th.textContent=x; if(fk){ th.tabIndex=0; glTag(th,fk,true); } hr.appendChild(th); });
   const tb=t.createTBody();
   if(!s.by_category.length){ const c=tb.insertRow().insertCell(); c.colSpan=4; c.textContent='No function CPU time in this view.'; return; }
   s.by_category.forEach(b=>{
@@ -502,14 +613,20 @@ function renderPowHist(list){
   const LV={crit:2,warn:1,info:0}, rank=h=>h.flags.reduce((m,f)=>Math.max(m,LV[f.level]),-1);
   list.map((h,i)=>({h,i})).sort((a,b)=>rank(b.h)-rank(a.h)||a.i-b.i).forEach(({h})=>{
     const d=document.createElement('details'), s=document.createElement('summary');
-    s.textContent=h.name+' ('+h.kind+') | calls '+num(h.count)+' | p50 '+avgTxt(h.p50_us)+' us | p99 '+avgTxt(h.p99_us)+' us | max bin '+avgTxt(h.max_bin_us)+' us ';
+    s.appendChild(glName(h.name)); s.appendChild(document.createTextNode(' ('+h.kind+') | calls '+num(h.count)+' | p50 '+avgTxt(h.p50_us)+' us | p99 '+avgTxt(h.p99_us)+' us | max bin '+avgTxt(h.max_bin_us)+' us '));
     h.flags.forEach(f=>{ const b=document.createElement('span'); b.className='badge b-'+f.level; b.textContent=f.code; b.title=f.text; s.appendChild(b); });
     d.appendChild(s);
     const t=document.createElement('table'), hr=t.createTHead().insertRow();
-    ['col','avg-ticks','avg-us','count','total-us'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; hr.appendChild(th); });
+    ['col','avg-ticks','avg-us','count','total-us'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; th.tabIndex=0; glTag(th,x,true); hr.appendChild(th); });
     const tb=t.createTBody();
     h.bins.forEach(b=>{ const r=tb.insertRow(); b.forEach((v,i)=>{ r.insertCell().textContent=i===2?avgTxt(v):num(v); }); });
-    const wrap=document.createElement('div'); wrap.className='scroll'; wrap.appendChild(t); d.appendChild(wrap);
+    const wrap=document.createElement('div'); wrap.className='scroll'; wrap.appendChild(t);
+    const cb=document.createElement('div'), sel=document.createElement('select');
+    [['count','calls per bin'],['total','time per bin (total-us)']].forEach(([v,l])=>{ const o=document.createElement('option'); o.value=v; o.textContent=l; sel.appendChild(o); });
+    const cw=document.createElement('div'); cw.className='cw';
+    const draw=()=>histChart(cw,h,sel.value); sel.onchange=draw;
+    cb.append(document.createTextNode('Chart: '),sel,cw); d.append(cb,wrap);
+    d.addEventListener('toggle',()=>{ if(d.open) draw(); });
     box.appendChild(d);
   });
 }
@@ -529,14 +646,81 @@ function renderPowMatrix(){
   const r=tb.insertRow(); r.insertCell().textContent='Total';
   tot.forEach(v=>{ r.insertCell().textContent=num(v); });
 }
+const fUs=v=>v>=1e8?num(Math.round(v/1e6))+' s':v>=1e6?(v/1e6).toFixed(2)+' s':v>=1e3?(v/1e3).toFixed(1)+' ms':(Math.round(v*10)/10)+' us';
+const shortN=v=>v>=1e9?(v/1e9).toFixed(1)+'G':v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':String(Math.round(v*10)/10);
+const svg=(n,a,p)=>{ const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); if(p) p.appendChild(e); return e; };
+const noMeaningRow=n=>{ const e=GL.names[n]; return !!e && noMeaning(e); };
+function hbar(host,items,title){
+  host.replaceChildren();
+  if(!items.length){ const p=document.createElement('p'); p.className='hint'; p.textContent='No counters with CPU time.'; host.appendChild(p); return; }
+  const W=Math.max(360,host.clientWidth||560), rh=21, L=235, R=140, H=items.length*rh+6, mx=Math.max.apply(null,items.map(i=>i.v))||1;
+  const el=svg('svg',{viewBox:'0 0 '+W+' '+H,role:'img','aria-label':title},host); el.style.height=H+'px';
+  items.forEach((it,i)=>{
+    const y=3+i*rh, w=Math.max(1,(W-L-R)*it.v/mx), unk=noMeaningRow(it.n), g=svg('g',{},el), lab=svg('g',{},g);
+    svg('rect',{x:0,y:y,width:L-4,height:rh,fill:'transparent'},lab);
+    const tx=svg('text',{x:L-8,y:y+14,'text-anchor':'end',class:'bl'},lab); tx.textContent=(it.n.length>34?it.n.slice(0,33)+'..':it.n)+(unk?' ?':'');
+    if(GL.names[it.n]){ lab.setAttribute('data-gl',it.n); lab.setAttribute('class','gl'); lab.setAttribute('tabindex','0'); lab.setAttribute('aria-describedby','gltip'); svg('title',{},lab).textContent=glTitle(it.n,false); }
+    svg('rect',{x:L,y:y+3,width:w,height:rh-7,rx:2,fill:unk?'#b42318':'#1f6f8b',opacity:.85},g);
+    const vt=svg('text',{x:L+w+6,y:y+14,class:'vl'},g); vt.textContent=fUs(it.v)+'  '+it.share.toFixed(1)+'%';
+  });
+}
+function histChart(host,h,metric){
+  host.replaceChildren();
+  if(!h.bins.length) return;
+  const W=Math.max(420,host.clientWidth||700), H=250, L=64, R=12, T=14, B=50, ci=metric==='count'?3:4;
+  const bins=h.bins.slice().sort((a,b)=>a[0]-b[0]), c0=bins[0][0], c1=bins[bins.length-1][0], n=c1-c0+1, by={};
+  bins.forEach(b=>{ by[b[0]]=b; });
+  const mx=Math.max.apply(null,bins.map(b=>b[ci]).concat([1])), bw=(W-L-R)/n;
+  const el=svg('svg',{viewBox:'0 0 '+W+' '+H,role:'img','aria-label':'Histogram of '+h.name},host);
+  for(let i=0;i<=4;i++){
+    const y=T+(H-T-B)*(1-i/4); svg('line',{x1:L,x2:W-R,y1:y,y2:y,stroke:'#e3e7ec'},el);
+    svg('text',{x:L-6,y:y+4,'text-anchor':'end',class:'axt'},el).textContent=metric==='count'?shortN(mx*i/4):fUs(mx*i/4);
+  }
+  for(let c=c0;c<=c1;c++){
+    const b=by[c], x=L+(c-c0)*bw;
+    if(b){ const hh=(H-T-B)*b[ci]/mx, r=svg('rect',{x:x+1,y:H-B-hh,width:Math.max(1,bw-2),height:hh,fill:'#1f6f8b',opacity:.85},el);
+      svg('title',{},r).textContent='col '+c+': avg '+fUs(b[3]?b[4]/b[3]:b[2])+', '+num(b[3])+' calls, '+fUs(b[4])+' total'; }
+    if(n<=40||(c-c0)%2===0){ svg('text',{x:x+bw/2,y:H-B+14,'text-anchor':'middle',class:'axt'},el).textContent=c;
+      if(b) svg('text',{x:x+bw/2,y:H-B+27,'text-anchor':'middle',class:'axt'},el).textContent=shortN(b[3]?b[4]/b[3]:b[2]); }
+  }
+  svg('text',{x:L,y:H-6,class:'axt'},el).textContent='bin (col), and mean us per call in the bin';
+}
+function renderPowTop(V){
+  const n=+$('#ptopn').value, cpu=V.funcs.filter(r=>r.category!=='latency'), ac=P.format!=='legacy';
+  const top=(k,sk)=>cpu.filter(r=>r[k]>0).sort((a,b)=>b[k]-a[k]).slice(0,n).map(r=>({n:r.name,v:r[k],share:r[sk]}));
+  hbar($('#ptopw'),top('total_us','share'),'Top functions by total-us');
+  $('#ptopa-wrap').style.display=ac?'':'none';
+  if(ac) hbar($('#ptopa'),top('ac_total_us','ac_share'),'Top functions by ac-total-us');
+}
+function renderPowGcat(V){
+  const t=$('#pgcat'); t.replaceChildren();
+  const all=V.gloss_summary, rows=all.filter(c=>!powState.idle||!c.zero), hid=all.filter(c=>powState.idle&&c.zero), legacy=P.format==='legacy';
+  $('#pgcat-hint').textContent=hid.length?hid.length+' inactive famil'+(hid.length>1?'ies':'y')+' collapsed ('+hid.map(c=>c.category).join('; ')+'). Untick "hide rows without calls" to list them.':'';
+  const cols=[['Family','gcategory'],['functions','funcs'],['active','active'],['total-us','total-us'],['share %','share']].concat(legacy?[]:[['ac-total-us','ac-total-us'],['ac-share','ac-share']],[['Top counter','name']]);
+  const hr=t.createTHead().insertRow();
+  cols.forEach(([x,fk])=>{ const th=document.createElement('th'); th.textContent=x; th.tabIndex=0; glTag(th,fk,true); hr.appendChild(th); });
+  const tb=t.createTBody();
+  rows.forEach(c=>{
+    const r=tb.insertRow(); r.insertCell().textContent=c.category+(c.unknown?' *':''); r.insertCell().textContent=c.funcs; r.insertCell().textContent=c.active;
+    r.insertCell().textContent=num(c.total_us); r.insertCell().textContent=c.share.toFixed(2);
+    if(!legacy){ r.insertCell().textContent=num(c.ac_total_us); r.insertCell().textContent=c.ac_share.toFixed(2); }
+    const td=r.insertCell(); if(c.top) td.appendChild(glName(c.top));
+  });
+}
 function renderPowView(){
   const V=powView();
   renderPowCats(V); renderPowHist(V.hist);
 }
+function renderPowLat(V){
+  const rows=powFilter(V.funcs.filter(r=>r.category==='latency'));
+  if(!rows.length){ const t=$('#plt'); t.replaceChildren(); t.textContent='No latency counters with data in this view.'; return; }
+  powTable($('#plt'),'l',rows);
+}
 function renderPow(){
-  const V=powView(), g=powFilter(V.groups), f=powFilter(V.funcs);
+  const V=powView(), g=powFilter(V.groups), f=powFilter(V.funcs.filter(r=>r.category!=='latency'));
   powTable($('#pgt'),'g',g); powTable($('#pft'),'f',f);
-  $('#pmeta').textContent='Workgroups '+g.length+' of '+V.groups.length+' | functions '+f.length+' of '+V.funcs.length+' | CPU share basis: '+(V.func_summary.basis||'n/a');
+  renderPowTop(V); renderPowGcat(V); renderPowLat(V);
+  $('#pmeta').textContent='Workgroups '+g.length+' of '+V.groups.length+' | functions '+f.length+' of '+V.funcs.filter(r=>r.category!=='latency').length+' (latency counters listed apart) | CPU share basis: '+(V.func_summary.basis||'n/a');
 }
 function powCsv(){
   const q=v=>'"'+String(v).replace(/"/g,'""')+'"', nz=v=>v===null||v===undefined?'':(typeof v==='string'?q(v):v);
@@ -553,14 +737,15 @@ if(hasPow){
   $('#panom').onchange=e=>{ powState.anom=e.target.checked; renderPow(); };
   $('#pidle').onchange=e=>{ powState.idle=e.target.checked; renderPow(); };
   $('#pcsv').onclick=powCsv;
+  $('#ptopn').onchange=()=>renderPow();
   renderPowInfo(); renderPowMatrix(); renderPowView(); renderPow();
 }
 
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[], ['help']);
-['chart','cpu','pow','help'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[]);
+['chart','cpu','pow'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
