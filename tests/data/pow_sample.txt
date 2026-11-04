@@ -1,0 +1,94 @@
+> show clock
+
+Tue Oct 27 08:20:20 CET 2026
+
+> debug dataplane pow performance all
+
+group                                 max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+flow_lookup                                0      0.0            0            0          0        0.0                0                0
+flow_fastpath                          22730     70.8        71068      5034719      27754       73.6           103978          7657133
+flow_slowpath                           5519     60.9         3890       237042      18531       52.8             9383           495538
+flow_forwarding                          282      4.7       257734      1232241      15744        4.4          1037208          4648934
+flow_ctrl                                259      2.1       537273      1128476      51479        2.1          1453286          3127346
+flow_np                                 1183      3.8       315299      1228956      15521        3.5          1100437          3901980
+flow_host                                 37     10.4         1100        11440       4908        4.9            27903           139498
+
+func                                  max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+dfa_match                                420      9.0        32206       291500        420        8.8            49969           440698
+appid_match                             2383    295.4          287        84795      21960      355.2              543           192902
+policy_lookup                           5430     12.7        15369       195495       5430       12.7            24076           306845
+sml_vm                                 14552      4.0       355485      1445402      14552        3.9           553627          2190455
+ssl_proxy_proc                         22653    141.5         3187       451173      27692      148.7             4385           652267
+ecdhe_generate_xchg_key                    0      0.0            0            0      58256     3856.5             3840         14809164
+ctd_token                              14554     42.8        33082      1418376      14554       41.5            51429          2139147
+urlcache_update                        38635    455.7          221       100718      38635      384.9              368           141646
+pbp_buf_latency                        14850      2.9    147118901    435930632      64504        2.9        403939586       1202776095
+mi_proxy_host_open                         0      0.0            0            0      11311    11311.0                1            11311
+
+dfa_match (func)
+col    avg-ticks   avg-us        count     total-us
+  7          230        0            1            0
+  8          412        0           73           23
+  9          829        0         1657         1056
+ 10         1503        1         5263         6085
+ 11         2900        2         4786        10676
+ 12         5931        4         3758        17147
+ 13        13972       10        11252       120936
+ 14        21692       16         4470        74589
+ 15        42988       33          609        20138
+ 16        94988       73          183        13371
+ 17       196627      151          114        17242
+ 18       327635      252           39         9829
+ 19       546636      420            1          420
+
+> debug dataplane pow performance all core 0-15
+
+Core 0:
+group                                 max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+flow_lookup                                0      0.0            0            0          0        0.0                0                0
+flow_fastpath                              0      0.0            0            0          0        0.0                0                0
+flow_slowpath                              0      0.0            0            0          0        0.0                0                0
+flow_forwarding                            0      0.0            0            0          0        0.0                0                0
+flow_ctrl                                  0      0.0            0            0          0        0.0                0                0
+flow_np                                    0      0.0            0            0          0        0.0                0                0
+flow_host                                  0      0.0            0            0          0        0.0                0                0
+
+func                                  max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+dfa_match                                  0      0.0            0            0          0        0.0                0                0
+appid_match                                0      0.0            0            0          0        0.0                0                0
+policy_lookup                              0      0.0            0            0          0        0.0                0                0
+sml_vm                                     0      0.0            0            0          0        0.0                0                0
+ssl_proxy_proc                             0      0.0            0            0          0        0.0                0                0
+ecdhe_generate_xchg_key                    0      0.0            0            0      58256     3856.5             3840         14809164
+ctd_token                                  0      0.0            0            0          0        0.0                0                0
+urlcache_update                        38635    455.7          221       100718      38635      384.9              368           141646
+pbp_buf_latency                            0      0.0            0            0          0        0.0                0                0
+mi_proxy_host_open                         0      0.0            0            0          0        0.0                0                0
+
+Core 1:
+group                                 max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+flow_lookup                                0      0.0            0            0          0        0.0                0                0
+flow_fastpath                          22730     72.7        22779      1657444      27754       76.2            33221          2531695
+flow_slowpath                            344     66.0         1413        93396      18531       66.3             3174           210617
+flow_forwarding                          268      4.9       100351       491952       2215        4.8           163250           793487
+flow_ctrl                                  0      0.0            0            0          0        0.0                0                0
+flow_np                                  292      4.1       123262       507081      15406        4.2           188368           795440
+flow_host                                 21     10.3          363         3750       4908        6.2             9267            57587
+
+func                                  max-us   avg-us        count     total-us  ac-max-us  ac-avg-us         ac-count      ac-total-us
+dfa_match                                420      9.5         9947        95019        420        9.5            15263           145133
+appid_match                             2383    240.4           96        23079       3222      293.6              177            51975
+policy_lookup                            244     12.9         5260        68354       2190       13.6             8196           111651
+sml_vm                                 14552      4.1       108581       449718      14552        4.1           165384           679040
+ssl_proxy_proc                         22653     76.9         2120       163050      27692      107.5             2438           262100
+ecdhe_generate_xchg_key                    0      0.0            0            0          0        0.0                0                0
+ctd_token                              14554     43.6        10116       441449      14554       42.6            15536           661926
+urlcache_update                            0      0.0            0            0          0        0.0                0                0
+pbp_buf_latency                        14850      2.9    147141054    435992043      64504        2.9        403961739       1202837506
+mi_proxy_host_open                         0      0.0            0            0          0        0.0                0                0
+
+> debug dataplane pow performance all core 16-31
+
+Server error : 
+
+> debug dataplane pow status
