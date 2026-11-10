@@ -35,6 +35,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from . import archive, if_glossary, pow_glossary
+from .findings import analysis_status
 from .model import Collected, Inventory
 from .interface_errors import (
     IF_THRESHOLDS,
@@ -70,6 +71,13 @@ GRP_TITLE_RE = re.compile(r'^:?\s*CPU load sampling by group:')
 GRP_LINE_RE = re.compile(r'^:?\s*([A-Za-z]\w*)\s*:\s*(\d+)\s*%\s*$')
 
 
+CMP_KEYS = ('kbps', 'pps', 'cps', 'sess', 'util', 'grp')
+
+
+def iso_utc(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
 def dp_label(raw):
     """'*.dp0' -> 'dp0'; 's1.dp1' stays 's1.dp1'."""
     return raw[2:] if raw.startswith('*.') else raw
@@ -93,14 +101,27 @@ def parse_header(line):
     return int(local.timestamp() * 1000), f'{sign}{oh}{om}', section
 
 
-def parse_lines(lines, src, samples, seen, warnings, offsets):
+def parse_lines(lines, src, samples, seen, warnings, offsets, conflicts=None):
     """Walks the lines of a dp-monitor.* file and collects the samples.
 
     Each '--- <name>' section is processed on its own: the session metrics
     (after 'target-dp:') yield one sample per DP; the 'CPU load sampling by
     group' block is bound to the DP of that same section.
     Returns the number of Throughput samples found (duplicates included).
+
+    Duplicates (same DP and timestamp, e.g. overlapping rotated files) keep the
+    FIRST sample. `seen` is either a set of (dp, t) keys (old behaviour: duplicates
+    dropped silently) or a dict (dp, t) -> kept sample, which also detects conflicts:
+    a duplicate whose kbps/pps/cps/sess/util/grp differ from the kept one is dropped
+    too, but reported. Each conflict is appended to `conflicts` (if given) as a tuple
+    (dp, t, kept_src, dropped_src), and, to avoid flooding, one aggregated warning is
+    added to `warnings` per (kept_src, dropped_src) pair at the end of the call: for a
+    single sample '<dropped>: sample <dp> @ <UTC time> conflicts with <kept> (kept the
+    first)', for N > 1 '<dropped>: N samples conflict with <kept> (kept the first);
+    first: <dp> @ <UTC time>'. A conflict inside one file reads 'conflicts with another
+    sample of the same file'. Identical duplicates are never reported.
     """
+    pairs = {}           # (kept_src, dropped_src) -> [count, first dp, first t]
     ts = None            # timestamp (ms UTC) of the last valid header
     dp = None            # current DP (last target-dp seen in the section)
     rec = None
@@ -140,8 +161,18 @@ def parse_lines(lines, src, samples, seen, warnings, offsets):
             n_found += 1
             key = (r['dp'], r['t'])
             if key not in seen:        # duplicate = overlapping rotated files
-                seen.add(key)
+                if isinstance(seen, dict):
+                    seen[key] = r
+                else:
+                    seen.add(key)
                 samples.append(r)
+            elif isinstance(seen, dict):
+                kept = seen[key]
+                if any((kept.get(k) or None) != (r.get(k) or None) for k in CMP_KEYS):
+                    if conflicts is not None:
+                        conflicts.append((r['dp'], r['t'], kept['src'], src))
+                    pair = pairs.setdefault((kept['src'], src), [0, r['dp'], r['t']])
+                    pair[0] += 1
         sec_recs.clear(); sec_dps.clear(); sec_groups.clear()
         cur_group = None
 
@@ -207,6 +238,15 @@ def parse_lines(lines, src, samples, seen, warnings, offsets):
                 warnings.append(f'{src}:{lineno}: Throughput line in unexpected '
                                 f'format: {line.strip()[:60]!r}')
     end_section()
+    for (kept_src, dropped_src), (count, pdp, pt) in pairs.items():
+        other = ('another sample of the same file' if kept_src == dropped_src
+                 else kept_src)
+        if count == 1:
+            warnings.append(f'{dropped_src}: sample {pdp} @ {iso_utc(pt)} conflicts '
+                            f'with {other} (kept the first)')
+        else:
+            warnings.append(f'{dropped_src}: {count} samples conflict with {other} '
+                            f'(kept the first); first: {pdp} @ {iso_utc(pt)}')
     return n_found
 
 
@@ -225,7 +265,8 @@ def _select_family(logical):
 
 
 def collect(path, warnings):
-    """Returns a Collected (samples, offsets, n_files, pow_data, ifc_data, inventory).
+    """Returns a Collected (samples, offsets, n_files, pow_data, ifc_data, inventory,
+    conflicts, status).
 
     pow_data is the parse_pow() result of the first 'debug dataplane pow
     performance' output found (tmp/cli/*.txt, or a single input file), or None.
@@ -234,7 +275,8 @@ def collect(path, warnings):
     archive.py (in memory, unsafe members skipped); dp-monitor files are parsed in
     rotation order, oldest to current.
     """
-    samples, seen, offsets = [], set(), set()
+    samples, seen, offsets = [], {}, set()
+    conflicts = []
     n_files = 0
     pow_found = []
     ifc_found = []
@@ -246,7 +288,7 @@ def collect(path, warnings):
         n_files += 1
         try:
             found = parse_lines(iter_text_lines(fobj), base, samples, seen,
-                                warnings, offsets)
+                                warnings, offsets, conflicts)
         except Exception as exc:  # corrupted/truncated file
             warnings.append(f'{base}: read error ({exc}), '
                             f'partial data kept')
@@ -309,7 +351,8 @@ def collect(path, warnings):
     samples.sort(key=lambda r: (r['t'], r['dp']))
     pow_data = pow_found[0][1] if pow_found else None
     ifc_data = merge_parsed(ifc_found) if have_ifc() else None
-    return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory)
+    return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory, conflicts,
+                     analysis_status(inventory, len(conflicts)))
 
 
 def add_aggregate(samples):
@@ -484,6 +527,11 @@ def main(argv=None):
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
                                    pow_view, overrides, ifc_view, if_overrides))
+        partial = ''
+        if col.status == 'partial':
+            n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())
+            partial = (f' [analysis partial: {len(col.conflicts)} conflicts, '
+                       f'{n_trunc} truncated members]')
         n_warn = len(warnings) + len(pow_warnings) + len(ifc_warnings)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
@@ -491,7 +539,7 @@ def main(argv=None):
             base = [s for s in samples if s['dp'] == series[0]]
             peak = max(base, key=lambda s: s['kbps'])
             print(f'[OK] {path}: {len(base)} samples, {len(series) - (series[0] == "ALL")} DP, '
-                  f'{n_warn} warnings -> {out}')
+                  f'{n_warn} warnings{partial} -> {out}')
             row.update(samples=len(base), start=utc_str(base[0]['t']),
                        end=utc_str(base[-1]['t']),
                        peak=f"{fmt_kbps(peak['kbps'])} ({utc_str(peak['t'])})")
@@ -500,10 +548,10 @@ def main(argv=None):
             print(f'[OK] {path}: POW performance{" and interface errors" if ifc_view else " only"} '
                   f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
-                  f'{n_warn} warnings -> {out}')
+                  f'{n_warn} warnings{partial} -> {out}')
         else:
             print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
-                  f'{n_warn} warnings -> {out}')
+                  f'{n_warn} warnings{partial} -> {out}')
         for w in warnings + pow_warnings + ifc_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)

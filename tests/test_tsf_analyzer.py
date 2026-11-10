@@ -153,15 +153,29 @@ def test_parse_lines_duplicate_same_values_dropped_but_counted():
     assert warnings == []
 
 
-def test_parse_lines_duplicate_different_values_first_wins_silently():
+def test_parse_lines_duplicate_different_values_first_wins_with_warning():
+    # Changed in step 2: the first sample still wins, but a conflict record and a
+    # warning citing both files are now produced (with a dict `seen` + `conflicts`).
+    first = [hdr(), 'target-dp: *.dp0\n', 'Throughput: 10 kbps\n']
+    second = [hdr(), 'target-dp: *.dp0\n', 'Throughput: 99999 kbps\n']
+    samples, seen, warnings, offsets, conflicts = [], {}, [], set(), []
+    analyzer.parse_lines(first, 'a', samples, seen, warnings, offsets, conflicts)
+    n2 = analyzer.parse_lines(second, 'b', samples, seen, warnings, offsets, conflicts)
+    assert n2 == 1
+    assert [(s['src'], s['kbps']) for s in samples] == [('a', 10)]
+    assert conflicts == [('dp0', samples[0]['t'], 'a', 'b')]
+    assert warnings == [
+        'b: sample dp0 @ 2026-10-27T07:20:20Z conflicts with a (kept the first)']
+
+
+def test_parse_lines_duplicate_different_values_set_seen_stays_silent():
+    # A set `seen` keeps the old behaviour: no conflict detection.
     first = [hdr(), 'target-dp: *.dp0\n', 'Throughput: 10 kbps\n']
     second = [hdr(), 'target-dp: *.dp0\n', 'Throughput: 99999 kbps\n']
     samples, seen, warnings, offsets = [], set(), [], set()
     analyzer.parse_lines(first, 'a', samples, seen, warnings, offsets)
-    n2 = analyzer.parse_lines(second, 'b', samples, seen, warnings, offsets)
-    assert n2 == 1
+    analyzer.parse_lines(second, 'b', samples, seen, warnings, offsets)
     assert [(s['src'], s['kbps']) for s in samples] == [('a', 10)]
-    # Odd: the conflicting value is lost and no warning is emitted.
     assert warnings == []
 
 
@@ -312,7 +326,10 @@ def test_collect_tgz_dot_slash_prefix_and_rotation_order(tmp_path):
     samples, n_files = col.samples, col.n_files
     assert n_files == 2
     assert [(s['src'], s['kbps']) for s in samples] == [('dp-monitor.log.1', 111)]
-    assert warnings == []
+    # Changed in step 2: the dropped conflicting sample (222 vs 111) is now reported.
+    assert warnings == [
+        ('dp-monitor.log: sample dp0 @ 2026-10-27T07:20:20Z conflicts with '
+        'dp-monitor.log.1 (kept the first)')]
 
 
 def test_collect_tgz_without_dp_monitor_warns(tmp_path):

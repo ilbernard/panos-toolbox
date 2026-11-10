@@ -45,3 +45,6 @@ class Collected:
     pow_data: dict[str, Any] | None
     ifc_data: dict[str, Any] | None
     inventory: Inventory = field(default_factory=Inventory)
+    # Conflicting duplicate samples (dp, t, kept_src, dropped_src), first one kept.
+    conflicts: list = field(default_factory=list)
+    status: str = 'complete'                             # findings.analysis_status()
