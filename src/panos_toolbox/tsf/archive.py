@@ -226,6 +226,8 @@ class _Reader:
         fam.read.append(name)
         if truncated or error:
             fam.truncated.append(name)
+        if error:
+            fam.errors[name] = error
         self.inv.bytes_read += len(data)
         return Member(name, logical, family, data, truncated, error)
 

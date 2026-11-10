@@ -25,6 +25,7 @@ SECTION_TITLES = {
     'phist': 'Histograms', 'pmx': 'Workgroup total-us per core', 'plat': 'Latency counters',
     'ifc': 'Interface errors', 'iflags': 'Interface findings and flag reference',
     'itable': 'Interfaces table', 'ixchk': 'Cross-check with the global counters',
+    'coverage': 'Source coverage',
 }
 
 SECTION_HELP = {
@@ -348,6 +349,23 @@ row sums each core.</p>
 <li>The flow state check has no dedicated global counter: <code>flow_tcp_non_syn_drop</code> is one cause among others.</li>
 <li>The second table lists the other non-zero drop-related global counters (policy deny, TTL, multicast, broadcast...). They have no interface counter.</li>
 </ul>
+""",
+    'coverage': """
+<p>Shows what this analysis actually looked at, so that a missing or partial source is never mistaken for a clean one. The badge in the page header summarises it: <b>Analysis: complete</b> or <b>Analysis: partial</b>.</p>
+<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW and interface data). The TSF is read in memory; nothing is extracted to disk.</p>
+<h3>States</h3>
+<ul>
+<li><b>absent</b>: no member of the family exists in the input. The matching tabs are simply missing; this is not an error in the report.</li>
+<li><b>unread</b>: members were found but none could be read (for example a total size limit was reached first).</li>
+<li><b>0 samples</b>: dp-monitor files were read but no Throughput sample could be extracted (unexpected format, or empty files). It differs from absent: the files exist.</li>
+<li><b>truncated</b>: a member is larger than the per-member read limit, so only its <i>tail</i> (the most recent part) was kept and analysed; older data of that file is missing. Compressed members are cut the same way.</li>
+<li><b>read error</b>: a member is corrupted or cut short. What could be decoded before the failure is kept.</li>
+<li><b>conflict</b>: two dp-monitor samples have the same DP and time but different values, typically overlapping rotated files that disagree. The <i>first</i> one (oldest file in rotation order) is kept and the other is dropped; both files are cited in the warnings and listed in the conflicts table. Identical duplicates are not conflicts and are not reported.</li>
+<li><b>skipped</b>: a member was not read. At archive level this is an <i>unsafe path</i> (absolute or containing <code>..</code>), a <i>link</i> (symbolic or hard) or a <i>special file</i> (device, fifo). Such members are never followed or extracted.</li>
+</ul>
+<h3>Complete and partial</h3>
+<p><b>Complete</b>: every member found was read in full and no samples conflicted. <b>Partial</b>: at least one member was truncated or hit a read error, a limit note was recorded (member count or total size) or samples conflicted. Partial does not mean wrong: it means the numbers may not cover the whole capture, so check the table below before drawing conclusions. Skipped unsafe members and absent families do not make the analysis partial by themselves.</p>
+<p>The <b>Time range</b> column is computed from the samples of each dp-monitor file (UTC). With a single file instead of an archive or directory there is no inventory, so only a minimal view is shown. The conflicts table lists at most the first 200 conflicts.</p>
 """,
 }
 

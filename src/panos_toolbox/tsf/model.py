@@ -13,6 +13,7 @@ class FamilyInventory:
     read: list[str] = field(default_factory=list)        # members whose content was read
     truncated: list[str] = field(default_factory=list)   # read, but only partially
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (name, reason)
+    errors: dict[str, str] = field(default_factory=dict)  # member -> read error message
 
 
 @dataclass

@@ -35,6 +35,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from . import archive, if_glossary, pow_glossary
+from .coverage import build_coverage
 from .findings import analysis_status
 from .model import Collected, Inventory
 from .interface_errors import (
@@ -402,7 +403,7 @@ def utc_str(ms):
 
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
-                  thresholds=None, ifc_view=None, if_thresholds=None):
+                  thresholds=None, ifc_view=None, if_thresholds=None, coverage=None):
     data = {
         'name': name,
         'kind': 'TSF analysis' if pow_view or ifc_view else 'Throughput',
@@ -414,6 +415,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'samples': samples,
         'pow': pow_view,
         'ifc': ifc_view,
+        'coverage': coverage,
     }
     groups = []
     for smp in samples:
@@ -533,7 +535,8 @@ def main(argv=None):
         out = os.path.join(args.outdir, f'{name}{suffix}')
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
-                                   pow_view, overrides, ifc_view, if_overrides))
+                                   pow_view, overrides, ifc_view, if_overrides,
+                                   build_coverage(col)))
         partial = ''
         if col.status == 'partial':
             n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())

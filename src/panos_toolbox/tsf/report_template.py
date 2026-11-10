@@ -64,7 +64,10 @@ details{margin-top:8px}
 .banner li.lvl-crit{border-color:#b42318;background:#fdecea}
 .banner li.lvl-warn{border-color:var(--warn-bd);background:var(--warn-bg)}
 .badge{display:inline-block;color:#fff;border-radius:3px;padding:0 6px;margin:0 3px 2px 0;font-size:11px;line-height:17px;white-space:nowrap}
-.b-crit{background:#b42318}.b-warn{background:#b7791f}.b-info{background:#5d6b7a}
+.b-crit{background:#b42318}.b-warn{background:#b7791f}.b-info{background:#5d6b7a}.b-ok{background:#2f855a}
+.astatus{font-size:12px;line-height:20px;padding:0 10px;border-radius:10px;margin:0 0 12px;cursor:help}
+.cov-sub{margin:6px 0 0 18px;padding:0;font-size:12px}.cov-sub li{margin:1px 0}
+table.covt td.l,table.covt th.l{text-align:left}
 tr.anom-crit td{background:#fdecea}
 tr.anom-warn td{background:var(--warn-bg)}
 tr.anom-crit td:first-child{box-shadow:inset 4px 0 0 #b42318}
@@ -129,6 +132,7 @@ TEMPLATE_BODY = r'''</style>
 <div id="gltip" role="tooltip" hidden></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
+<div><span class="badge astatus" id="astatus" style="display:none" tabindex="0"></span></div>
 <div class="utc" id="utc"></div>
 <details id="warn" style="display:none;margin:0 0 16px"><summary id="warnsum"></summary><ul id="warnlist"></ul></details>
 
@@ -137,6 +141,7 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
+  <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
@@ -234,6 +239,15 @@ TEMPLATE_BODY = r'''</style>
   <h4>Other drop-related global counters (no interface counter)</h4>
   <table class="stats" id="ictx"></table></div>
   <div id="iextra"></div>
+</section>
+
+<section class="panel" id="p-cov" role="tabpanel" aria-labelledby="tab-cov" hidden>
+  <div class="sechead"><h2>Source coverage</h2>__HB_coverage__</div>__HP_coverage__
+  <p class="hint" id="covmsg"></p>
+  <div class="scroll"><table class="stats covt" id="covfam"></table></div>
+  <div class="sep"><h3>Skipped members</h3><p class="hint" id="covskipmsg"></p><table class="stats covt" id="covskip"></table></div>
+  <div class="sep"><h3>Limit notes</h3><ul id="covnotes"></ul></div>
+  <div class="sep"><h3>Conflicting samples</h3><p class="hint" id="covconfmsg"></p><div class="scroll"><table class="stats covt" id="covconf"></table></div></div>
 </section>
 
 </main>
@@ -456,7 +470,7 @@ let activeTab='chart';
 function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','pow','ifc'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -922,8 +936,8 @@ if(hasIfc){
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[], hasIfc?['ifc']:[]);
-['chart','cpu','pow','ifc'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+['chart','cpu','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
@@ -940,10 +954,85 @@ showTab(TABS[0]);
 </html>
 '''
 
+# Source coverage tab and analysis-status badge (what the analysis actually looked at).
+JS_COV = r'''// Source coverage tab and analysis status badge
+const CV = D.coverage || null;
+const hasCov = !!CV;
+const COV_STATE = {
+  absent:['absent','info','No member of this family was found in the input.'],
+  unread:['unread','warn','Members were found but none could be read.'],
+  zero_samples:['0 samples','warn','Files were read but no Throughput sample could be extracted.'],
+  truncated:['truncated','warn','At least one member exceeded the read limit: only its last part was analysed.'],
+  error:['read error','crit','At least one member could not be read to the end.'],
+  conflict:['conflict','warn','Samples with the same DP and time but different values were found; the first was kept.'],
+  ok:['ok','ok','Everything found was read.']
+};
+function covBadge(host, st){
+  const d = COV_STATE[st] || [st,'info','']; const b = document.createElement('span');
+  b.className = 'badge b-'+d[1]; b.textContent = d[0]; b.title = d[2]; host.appendChild(b);
+}
+function covMemberState(m){
+  const k = m.state.split(':')[0], b = document.createElement('span');
+  b.className = 'badge b-'+(k==='read'?'ok':k==='error'?'crit':'warn'); b.textContent = m.state; if(m.detail) b.title = m.detail;
+  return b;
+}
+function covTable(t, head, rows, fill){
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); Array.from(tr.cells).forEach(c=>{ c.className = 'l'; }); });
+}
+function covRange(f, l){ return f===null||f===undefined ? '' : iso(f)+' - '+iso(l)+' UTC'; }
+function renderCov(){
+  const ab = $('#astatus');
+  ab.style.display = ''; ab.className = 'badge astatus b-'+(CV.status==='complete'?'ok':'warn');
+  ab.textContent = 'Analysis: '+CV.status;
+  ab.title = CV.status==='complete' ? 'Every member found was read in full and no samples conflicted.' :
+    'Partial: '+(CV.summary.length ? CV.summary.join('; ') : 'see the Source coverage tab')+'. Results may miss data; see the Source coverage tab.';
+  ab.onclick = ()=>{ if(TABS.includes('cov')) showTab('cov'); };
+  $('#covmsg').textContent = CV.archive ? '' : 'Single-file input: source coverage is only meaningful for archives and directories.';
+  covTable($('#covfam'), ['Family','State','Found','Read','Truncated','Skipped','Samples','Time range (UTC)','Conflicts','Members'], CV.families, (tr,f)=>{
+    tr.insertCell().textContent = f.family;
+    const sc = tr.insertCell(); f.states.forEach(s=>covBadge(sc, s));
+    [f.found, f.read, f.truncated+f.errors, f.skipped].forEach(v=>{ tr.insertCell().textContent = v; });
+    tr.insertCell().textContent = f.samples===null ? 'n/a' : f.samples;
+    tr.insertCell().textContent = covRange(f.first, f.last);
+    tr.insertCell().textContent = f.family==='dp-monitor' ? f.conflicts : 'n/a';
+    const mc = tr.insertCell();
+    if(f.members.length){
+      const d = document.createElement('details'); const sm = document.createElement('summary'); sm.textContent = f.members.length+' member(s)'; d.appendChild(sm);
+      const ul = document.createElement('ul'); ul.className = 'cov-sub';
+      f.members.forEach(m=>{
+        const li = document.createElement('li'); li.appendChild(covMemberState(m));
+        let txt = ' '+m.name; if(m.samples!==null) txt += ' - '+m.samples+' samples'+(m.samples ? ', '+covRange(m.first, m.last) : '');
+        li.appendChild(document.createTextNode(txt)); ul.appendChild(li);
+      });
+      d.appendChild(ul); mc.appendChild(d);
+    }
+    if(f.states.some(s=>s!=='ok')) tr.className = 'anom-warn';
+  });
+  $('#covskipmsg').textContent = CV.skipped.length ? CV.skipped.length+' member(s) were rejected before reading.' : 'No member was rejected.';
+  covTable($('#covskip'), ['Member','Reason'], CV.skipped, (tr,s)=>{ tr.insertCell().textContent = s.name; tr.insertCell().textContent = s.reason; });
+  const ul = $('#covnotes');
+  if(!CV.notes.length){ const li = document.createElement('li'); li.textContent = 'No limit was reached.'; ul.appendChild(li); }
+  CV.notes.forEach(n=>{ const li = document.createElement('li'); li.textContent = n; ul.appendChild(li); });
+  const C = CV.conflicts;
+  $('#covconfmsg').textContent = C.total ? (C.total+' conflicting sample(s)'+(C.shown<C.total ? ', first '+C.shown+' shown' : '')+'. The first sample was kept.') : 'No conflicting samples.';
+  covTable($('#covconf'), ['DP','Time (UTC)','Kept (source)','Dropped (source)'], C.items, (tr,c)=>{
+    tr.insertCell().textContent = c.dp; tr.insertCell().textContent = iso(c.t);
+    tr.insertCell().textContent = c.kept; tr.insertCell().textContent = c.dropped;
+  });
+}
+if(hasCov) renderCov();
+
+'''
+
 TEMPLATE = (TEMPLATE_HEAD +
             TEMPLATE_CSS +
             TEMPLATE_BODY +
             JS_CORE +
             JS_POW +
             JS_IFC +
+            JS_COV +
             JS_TABS)
