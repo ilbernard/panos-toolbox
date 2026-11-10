@@ -150,3 +150,16 @@ def test_from_flags_interface_sample():
             (fl['code'], levels[fl['level']]) for fl in row['flags']]
         n += len(out)
     assert n > 0
+
+
+def test_zero_versus_missing_value_is_a_conflict():
+    from panos_toolbox.tsf import analyzer
+    hdr = '2026-10-27 09:00:00 +0100 --- dp-monitor'
+    a = [hdr, 'target-dp: *.dp0', 'Throughput: 100 kbps',
+         'New connection establish rate: 0 cps']
+    b = [hdr, 'target-dp: *.dp0', 'Throughput: 100 kbps']
+    samples, seen, warnings, offsets, conflicts = [], {}, [], set(), []
+    analyzer.parse_lines(a, 'a.log', samples, seen, warnings, offsets, conflicts)
+    analyzer.parse_lines(b, 'b.log', samples, seen, warnings, offsets, conflicts)
+    assert len(samples) == 1
+    assert [(c[2], c[3]) for c in conflicts] == [('a.log', 'b.log')]

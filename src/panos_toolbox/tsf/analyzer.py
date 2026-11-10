@@ -74,6 +74,13 @@ GRP_LINE_RE = re.compile(r'^:?\s*([A-Za-z]\w*)\s*:\s*(\d+)\s*%\s*$')
 CMP_KEYS = ('kbps', 'pps', 'cps', 'sess', 'util', 'grp')
 
 
+def _cmp_val(sample, key):
+    """Value used to compare duplicates: a missing or empty 'grp' is the same thing,
+    while for the numeric fields 0 and a missing value are different."""
+    v = sample.get(key)
+    return (v or None) if key == 'grp' else v
+
+
 def iso_utc(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -168,7 +175,7 @@ def parse_lines(lines, src, samples, seen, warnings, offsets, conflicts=None):
                 samples.append(r)
             elif isinstance(seen, dict):
                 kept = seen[key]
-                if any((kept.get(k) or None) != (r.get(k) or None) for k in CMP_KEYS):
+                if any(_cmp_val(kept, k) != _cmp_val(r, k) for k in CMP_KEYS):
                     if conflicts is not None:
                         conflicts.append((r['dp'], r['t'], kept['src'], src))
                     pair = pairs.setdefault((kept['src'], src), [0, r['dp'], r['t']])
