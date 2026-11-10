@@ -6,6 +6,7 @@ behaviour should be: where something looks odd, a comment says so.
 """
 from __future__ import annotations
 
+import gzip
 import io
 import tarfile
 from pathlib import Path
@@ -23,7 +24,6 @@ W_MISMATCH = ('x: 2 "CPU load by group" blocks and 1 DPs in the same section, '
               'cannot bind them: CPU groups skipped')
 W_BADHDR = ('x:1: header with unparseable timestamp, following data ignored until '
             'the next valid header')
-W_GZ = 'dp-monitor.log.1.gz: compressed file (.gz) not supported, skipped'
 
 
 def hdr(ts='2026-10-27 08:20:20', off='+0100'):
@@ -228,7 +228,9 @@ def sample_text():
 
 
 def check_sample_result(result, n_files=1):
-    samples, offsets, nf, pow_data, ifc_data = result
+    # Changed in step 1: collect() returns a Collected, not a 5-tuple.
+    samples, offsets, nf, pow_data, ifc_data = (
+        result.samples, result.offsets, result.n_files, result.pow_data, result.ifc_data)
     assert nf == n_files
     assert offsets == {'+0100'}
     assert pow_data is None and ifc_data is None
@@ -245,13 +247,15 @@ def test_collect_directory(tmp_path):
     result = analyzer.collect(str(tmp_path / 'tsf'), warnings)
     check_sample_result(result)
     assert warnings == []
-    assert result[0][0]['src'] == 'dp-monitor.log'
+    assert result.samples[0]['src'] == 'dp-monitor.log'
 
 
 def test_collect_directory_without_dp_monitor_warns(tmp_path):
     warnings = []
-    samples, offsets, n_files, pow_data, ifc_data = analyzer.collect(
-        str(tmp_path), warnings)
+    # Changed in step 1: collect() returns a Collected, not a 5-tuple.
+    col = analyzer.collect(str(tmp_path), warnings)
+    samples, offsets, n_files, pow_data, ifc_data = (
+        col.samples, col.offsets, col.n_files, col.pow_data, col.ifc_data)
     assert (samples, offsets, n_files, pow_data, ifc_data) == ([], set(), 0, None, None)
     assert warnings == ['no dp-monitor.* file found in /var/log/pan']
 
@@ -261,7 +265,8 @@ def test_collect_directory_requires_var_log_pan_path(tmp_path):
     (tmp_path / 'dp-monitor.log').write_bytes(sample_text())
     warnings = []
     result = analyzer.collect(str(tmp_path), warnings)
-    assert result[0] == [] and result[2] == 0
+    # Changed in step 1: Collected attributes instead of tuple indexing.
+    assert result.samples == [] and result.n_files == 0
     assert warnings == ['no dp-monitor.* file found in /var/log/pan']
 
 
@@ -272,9 +277,10 @@ def test_collect_directory_rotations_merged_and_deduplicated(tmp_path):
     (d / 'dp-monitor.log.1').write_bytes(sample_text())
     warnings = []
     result = analyzer.collect(str(tmp_path), warnings)
-    # Files are visited in sorted order: 'dp-monitor.log' before '.log.1'.
+    # Changed in step 1: files are parsed in rotation order (oldest first), so the
+    # rotation '.log.1' now wins on duplicates instead of 'dp-monitor.log'.
     check_sample_result(result, n_files=2)
-    assert {s['src'] for s in result[0]} == {'dp-monitor.log'}
+    assert {s['src'] for s in result.samples} == {'dp-monitor.log.1'}
     assert warnings == []
 
 
@@ -290,8 +296,9 @@ def test_collect_tgz(tmp_path):
 
 
 def test_collect_tgz_dot_slash_prefix_and_rotation_order(tmp_path):
-    # Members are processed in archive order (no sorting): the first member
-    # wins on duplicate (dp, t) keys.
+    # Changed in step 1: members are processed in rotation order (oldest first), not
+    # archive order; the oldest ('.1') wins on duplicate (dp, t) keys. (Here both orders
+    # coincide; test_tsf_archive.py covers the out-of-order archive.)
     a = hdr() + 'target-dp: *.dp0\nThroughput: 111 kbps\n'
     b = hdr() + 'target-dp: *.dp0\nThroughput: 222 kbps\n'
     tgz = tmp_path / 'tsf.tgz'
@@ -300,7 +307,9 @@ def test_collect_tgz_dot_slash_prefix_and_rotation_order(tmp_path):
         './var/log/pan/dp-monitor.log': b.encode(),
     })
     warnings = []
-    samples, _off, n_files, _p, _i = analyzer.collect(str(tgz), warnings)
+    # Changed in step 1: Collected attributes; the rotation (.1) is now parsed first.
+    col = analyzer.collect(str(tgz), warnings)
+    samples, n_files = col.samples, col.n_files
     assert n_files == 2
     assert [(s['src'], s['kbps']) for s in samples] == [('dp-monitor.log.1', 111)]
     assert warnings == []
@@ -311,7 +320,8 @@ def test_collect_tgz_without_dp_monitor_warns(tmp_path):
     make_tgz(tgz, {'tsf/var/log/pan/other.log': b'x'})
     warnings = []
     result = analyzer.collect(str(tgz), warnings)
-    assert result[0] == [] and result[2] == 0
+    # Changed in step 1: Collected attributes instead of tuple indexing.
+    assert result.samples == [] and result.n_files == 0
     assert warnings == ['no dp-monitor.* file found in /var/log/pan']
 
 
@@ -326,33 +336,41 @@ def test_collect_single_file_without_samples_warns(tmp_path):
     f = tmp_path / 'notes.txt'
     f.write_text('nothing useful here\n', encoding='utf-8')
     warnings = []
-    samples, _off, n_files, pow_data, ifc_data = analyzer.collect(str(f), warnings)
+    # Changed in step 1: collect() returns a Collected, not a 5-tuple.
+    col = analyzer.collect(str(f), warnings)
+    samples, n_files, pow_data, ifc_data = col.samples, col.n_files, col.pow_data, col.ifc_data
     assert samples == [] and pow_data is None and ifc_data is None
     assert n_files == 1
     assert warnings == ['notes.txt: no Throughput samples found']
 
 
-# Step 0 baseline: .gz behaviour changes in step 1
-def test_collect_tgz_gz_member_skipped_with_warning(tmp_path):
+# Changed in step 1: .gz dp-monitor members are now read (they used to be skipped).
+def test_collect_tgz_gz_member_is_read(tmp_path):
     tgz = tmp_path / 'tsf.tgz'
+    older = hdr('2026-10-27 08:19:20') + 'target-dp: *.dp0\nThroughput: 5 kbps\n'
     make_tgz(tgz, {
         'tsf/var/log/pan/dp-monitor.log': sample_text(),
-        'tsf/var/log/pan/dp-monitor.log.1.gz': b'\x1f\x8b not really gzip',
+        'tsf/var/log/pan/dp-monitor.log.1.gz': gzip.compress(older.encode()),
     })
     warnings = []
     result = analyzer.collect(str(tgz), warnings)
-    check_sample_result(result, n_files=1)     # the .gz member is not counted
-    assert warnings == [W_GZ]
+    assert result.n_files == 2                 # the .gz member is now counted
+    assert (T0 - 60000, 'dp0') in [(s['t'], s['dp']) for s in result.samples]
+    assert len(result.samples) == 5
+    assert warnings == []
 
 
-# Step 0 baseline: .gz behaviour changes in step 1
+# Changed in step 1: a corrupt .gz member is read as far as possible and reported
+# (it used to be skipped with W_GZ).
 def test_collect_tgz_only_gz_member_adds_no_data_warning(tmp_path):
     tgz = tmp_path / 'tsf.tgz'
     make_tgz(tgz, {'var/log/pan/dp-monitor.log.1.gz': b'\x1f\x8b'})
     warnings = []
     result = analyzer.collect(str(tgz), warnings)
-    assert result[0] == [] and result[2] == 0
-    assert warnings == [W_GZ, 'no dp-monitor.* file found in /var/log/pan']
+    assert result.samples == [] and result.n_files == 1
+    assert len(warnings) == 2
+    assert warnings[0].startswith('dp-monitor.log.1.gz: read error (')
+    assert warnings[1] == 'dp-monitor.log.1.gz: no Throughput samples found'
 
 
 # --------------------------------------------------------------------------
