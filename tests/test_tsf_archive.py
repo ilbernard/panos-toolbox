@@ -231,7 +231,13 @@ def test_collect_rotation_order_independent_of_archive_order(tmp_path):
     col = analyzer.collect(str(p), warnings)
     # Oldest first wins on the duplicate (dp, t): the .1.gz content.
     assert [(s['src'], s['kbps']) for s in col.samples] == [('dp-monitor.log.1.gz', 111)]
-    assert col.n_files == 3 and warnings == []
+    # Changed in step 2: the two dropped conflicting samples are now reported.
+    assert col.n_files == 3
+    assert warnings == [
+        ('dp-monitor.log.old: sample dp0 @ 2026-10-27T07:20:20Z conflicts with '
+         'dp-monitor.log.1.gz (kept the first)'),
+        ('dp-monitor.log: sample dp0 @ 2026-10-27T07:20:20Z conflicts with '
+         'dp-monitor.log.1.gz (kept the first)')]
     assert col.inventory.family('dp-monitor').read == [
         'var/log/pan/dp-monitor.log', 'var/log/pan/dp-monitor.log.old',
         'var/log/pan/dp-monitor.log.1.gz']
