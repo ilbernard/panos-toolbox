@@ -111,6 +111,11 @@ def sort_rotations(names: list[str]) -> list[str]:
 # Reading helpers
 # --------------------------------------------------------------------------
 def _drop_partial_line(data: bytes) -> bytes:
+    """Drops everything up to and including the first newline.
+
+    Callers pass one byte more than they keep, so a cut that falls exactly on a line
+    boundary drops only that extra newline and no complete line is lost.
+    """
     i = data.find(b'\n')
     return b'' if i < 0 else data[i + 1:]
 
@@ -120,7 +125,7 @@ def _read_plain(fobj, size: int):
     cap = MAX_MEMBER_BYTES
     if size <= cap:
         return fobj.read(), False
-    fobj.seek(size - cap)
+    fobj.seek(size - cap - 1)
     return _drop_partial_line(fobj.read()), True
 
 
@@ -165,7 +170,7 @@ def _read_gz(fobj):
             scanned += len(chunk)
             chunks.append(chunk)
             kept += len(chunk)
-            while kept - len(chunks[0]) >= cap:
+            while kept - len(chunks[0]) > cap:
                 kept -= len(chunks.popleft())
             if scanned >= scan_cap:
                 truncated = True
@@ -173,9 +178,8 @@ def _read_gz(fobj):
     except (OSError, EOFError, zlib.error) as exc:
         error = f'{type(exc).__name__}: {exc}'
     data = b''.join(chunks)
-    if len(data) > cap:
-        data = data[-cap:]
-    if scanned > len(data):
+    if scanned > cap:
+        data = data[-(cap + 1):]
         # Something was dropped from the front: cut at a line boundary.
         truncated = True
         data = _drop_partial_line(data)

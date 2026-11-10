@@ -92,6 +92,19 @@ def test_member_over_limit_keeps_tail_drops_partial_line(tmp_path, monkeypatch):
     assert inv.family('logs').truncated == ['big.log']
 
 
+@pytest.mark.parametrize('gz', [False, True])
+def test_cut_on_line_boundary_keeps_complete_line(tmp_path, monkeypatch, gz):
+    # The last 20 bytes start exactly at a line start: no complete line may be lost.
+    monkeypatch.setattr(archive, 'MAX_MEMBER_BYTES', 20)
+    monkeypatch.setattr(archive, '_CHUNK', 7)
+    data = b'first line long\n' + b'line three\nline 4\n'   # 16 + 20 bytes
+    name, payload = ('x.log.gz', gzip.compress(data)) if gz else ('x.log', data)
+    p = tmp_path / 'a.tgz'
+    build_tar(p, [(name, payload)])
+    (m,), _inv = read_all(p)
+    assert m.truncated and m.data == b'line three\nline 4\n'
+
+
 def test_member_at_limit_not_truncated(tmp_path, monkeypatch):
     monkeypatch.setattr(archive, 'MAX_MEMBER_BYTES', 9)
     p = tmp_path / 'a.tgz'
