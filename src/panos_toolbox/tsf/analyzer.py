@@ -24,6 +24,7 @@ anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options (s
 """
 import argparse
 import html
+import io
 import json
 import os
 import re
@@ -33,7 +34,8 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import if_glossary, pow_glossary
+from . import archive, if_glossary, pow_glossary
+from .model import Collected, Inventory
 from .interface_errors import (
     IF_THRESHOLDS,
     evaluate_interfaces,
@@ -213,26 +215,34 @@ def iter_text_lines(fobj):
         yield b.decode('utf-8', errors='replace')
 
 
+def _select_family(logical):
+    """Family of an archive member (logical path, '.gz' dropped), or None."""
+    if DP_FILE_RE.search('/' + logical):
+        return 'dp-monitor'
+    if CLI_FILE_RE.search('/' + logical):
+        return 'cli'
+    return None
+
+
 def collect(path, warnings):
-    """Returns (samples, offsets, n_files, pow_data, ifc_data) for a TSF / directory / file.
+    """Returns a Collected (samples, offsets, n_files, pow_data, ifc_data, inventory).
 
     pow_data is the parse_pow() result of the first 'debug dataplane pow
     performance' output found (tmp/cli/*.txt, or a single input file), or None.
     ifc_data is the merged parse_interfaces() result of the interface counter outputs
-    found in the same files, or None.
+    found in the same files, or None. Archives and directories are read with
+    archive.py (in memory, unsafe members skipped); dp-monitor files are parsed in
+    rotation order, oldest to current.
     """
     samples, seen, offsets = [], set(), set()
     n_files = 0
     pow_found = []
     ifc_found = []
+    inventory = Inventory()
 
     def handle(name, fobj):
         nonlocal n_files
         base = os.path.basename(name)
-        if base.endswith('.gz'):
-            warnings.append(f'{base}: compressed file (.gz) not supported, '
-                            f'skipped')
-            return
         n_files += 1
         try:
             found = parse_lines(iter_text_lines(fobj), base, samples, seen,
@@ -263,26 +273,27 @@ def collect(path, warnings):
     def have_ifc():
         return any(ifc_has_data(p) for p in ifc_found)
 
-    if os.path.isdir(path):
-        for root, _dirs, files in os.walk(path):
-            for f in sorted(files):
-                full = os.path.join(root, f)
-                rel = os.path.relpath(full, path).replace(os.sep, '/')
-                if DP_FILE_RE.search('/' + rel):
-                    with open(full, 'rb') as fh:
-                        handle(rel, fh)
-                elif CLI_FILE_RE.search('/' + rel):
-                    with open(full, 'rb') as fh:
-                        handle_cli(rel, fh)
-    elif tarfile.is_tarfile(path):
-        with tarfile.open(path, 'r:*') as tf:
-            for m in tf:                      # single-pass read
-                if not m.isfile():
-                    continue
-                if DP_FILE_RE.search(m.name.lstrip('./')):
-                    handle(m.name, tf.extractfile(m))
-                elif CLI_FILE_RE.search(m.name.lstrip('./')):
-                    handle_cli(m.name, tf.extractfile(m))
+    if os.path.isdir(path) or tarfile.is_tarfile(path):
+        dp_members = []
+        for mem in archive.iter_members(path, _select_family, inventory):
+            base = os.path.basename(mem.name)
+            if mem.error:
+                warnings.append(f'{base}: read error ({mem.error}), partial data kept')
+            if mem.truncated and not mem.error:
+                warnings.append(f'{base}: larger than the read limit, only its last '
+                                f'part was analysed')
+            if mem.family == 'dp-monitor':
+                dp_members.append(mem)
+            else:
+                handle_cli(mem.name, io.BytesIO(mem.data))
+        order = {n: i for i, n in enumerate(
+            archive.sort_rotations([m.name for m in dp_members]))}
+        for mem in sorted(dp_members, key=lambda m: order[m.name]):
+            handle(mem.name, io.BytesIO(mem.data))
+        for name, reason in inventory.skipped:
+            if reason == archive.REASON_UNSAFE:
+                warnings.append(f'{name}: unsafe member path, skipped')
+        warnings.extend(inventory.notes)
     else:                                     # single file: POW output or log
         with open(path, 'rb') as fh:
             handle_cli(path, fh)
@@ -298,7 +309,7 @@ def collect(path, warnings):
     samples.sort(key=lambda r: (r['t'], r['dp']))
     pow_data = pow_found[0][1] if pow_found else None
     ifc_data = merge_parsed(ifc_found) if have_ifc() else None
-    return samples, offsets, n_files, pow_data, ifc_data
+    return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory)
 
 
 def add_aggregate(samples):
@@ -447,7 +458,9 @@ def main(argv=None):
         warnings = []
         name = re.sub(r'(\.tar\.gz|\.tgz|\.tar)$', '', os.path.basename(path.rstrip('/')))
         try:
-            samples, offsets, n_files, pow_data, ifc_data = collect(path, warnings)
+            col = collect(path, warnings)
+            samples, offsets, n_files = col.samples, col.offsets, col.n_files
+            pow_data, ifc_data = col.pow_data, col.ifc_data
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
