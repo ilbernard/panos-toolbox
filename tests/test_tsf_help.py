@@ -65,6 +65,16 @@ def test_template_is_fluid_with_1200_minimum_width():
     assert 'max-width:1280px' not in tpl
 
 
+def test_tabs_have_a_normal_and_an_advanced_view():
+    tpl = report_template.TEMPLATE
+    assert '<label class="advtoggle" id="advwrap"' in tpl and 'id="advanced"' in tpl
+    assert '.advtoggle{margin-left:auto' in tpl
+    assert "NORMAL_TABS=['chart','sys','mp']" in tpl
+    assert "'panosToolbox.tsfReport.advanced'" in tpl
+    assert 'try{ return localStorage.getItem' in tpl and 'try{ localStorage.setItem' in tpl
+    assert 'Normal and Advanced view' in SECTION_HELP['chart']
+
+
 def test_render_help_rejects_unknown_threshold():
     with pytest.raises(ValueError):
         render_help({'no_such_key': 1})

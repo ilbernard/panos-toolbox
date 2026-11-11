@@ -56,6 +56,8 @@ th{cursor:pointer;background:#eef1f4;position:sticky;top:0}
 .tabs button:hover{color:var(--ink)}
 .tabs button[aria-selected=true]{background:var(--card);border-color:var(--line);color:var(--ink);font-weight:600;position:relative;top:1px}
 .panel{border-top-left-radius:0;overflow-x:auto}
+.advtoggle{margin-left:auto;align-self:center;display:flex;align-items:center;gap:5px;color:var(--ink);cursor:pointer;padding:0 8px}
+.advtoggle input{margin:0;padding:0}
 .sep{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 details{margin-top:8px}
 .hint{color:var(--mute);font-size:12px}
@@ -160,6 +162,7 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
   <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
+  <label class="advtoggle" id="advwrap" style="display:none"><input type="checkbox" id="advanced"> Advanced</label>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
@@ -1626,11 +1629,31 @@ if(hasMp) renderMpStatic();
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
-['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
-$('#tabs').style.display=TABS.length>1?'':'none';
-TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
+JS_TABS = r'''// Normal view: throughput, system health and management plane. Every other tab is advanced and is shown with the Advanced box.
+const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+const NORMAL_TABS=['chart','sys','mp'], ADV_KEY='panosToolbox.tsfReport.advanced';
+const hasNormalTab=ALL_TABS.some(k=>NORMAL_TABS.includes(k)), hasAdvTab=ALL_TABS.some(k=>!NORMAL_TABS.includes(k));
+// localStorage can throw (file:// in some browsers, private mode): the choice is then simply not remembered.
+const loadAdv=()=>{ try{ return localStorage.getItem(ADV_KEY)==='1'; }catch(e){ return false; } };
+const saveAdv=v=>{ try{ localStorage.setItem(ADV_KEY, v?'1':'0'); }catch(e){} };
+let advanced = hasNormalTab ? loadAdv() : true;   // no normal tab: the advanced ones are the only content
+let TABS=[];                                      // the visible tabs, in order
+function applyTabs(){
+  TABS=ALL_TABS.filter(k=>advanced||NORMAL_TABS.includes(k));
+  ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+  $('#tabs').style.display=ALL_TABS.length>1?'':'none';
+  $('#advwrap').style.display=hasAdvTab&&ALL_TABS.length>1?'':'none';
+  const cb=$('#advanced'); cb.checked=advanced; cb.disabled=!hasNormalTab;
+  $('#advwrap').title=hasNormalTab?'Show the advanced tabs (CPU load by group, Dataplane health, POW performance, Interface Errors, Source coverage)':'This report has no throughput, system health or management plane data, so the advanced tabs are always shown.';
+}
+function setAdvanced(v){
+  advanced=!!v||!hasNormalTab; if(hasNormalTab) saveAdv(advanced);
+  applyTabs(); if(!TABS.includes(activeTab)) showTab(TABS[0]);
+}
+ALL_TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
+$('#advanced').onchange=()=>setAdvanced($('#advanced').checked);
 $('#tabs').onkeydown=e=>{
+  if(e.target.id==='advanced') return;
   const i=TABS.indexOf(activeTab); let j=-1;
   if(e.key==='ArrowRight') j=(i+1)%TABS.length; else if(e.key==='ArrowLeft') j=(i+TABS.length-1)%TABS.length; else if(e.key==='Home') j=0; else if(e.key==='End') j=TABS.length-1;
   if(j<0) return; e.preventDefault(); showTab(TABS[j]); $('#tab-'+TABS[j]).focus();
@@ -1638,6 +1661,7 @@ $('#tabs').onkeydown=e=>{
 // Debounced: re-draws the visible tab at the new size. Zoom range and selections are state, so they are kept.
 let resizeTimer=null;
 window.addEventListener('resize',()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(renderActive,150); });
+applyTabs();
 showTab(TABS[0]);
 </script>
 </body>
@@ -1862,8 +1886,8 @@ function renderCov(){
   ab.style.display = ''; ab.className = 'badge astatus b-'+(CV.status==='complete'?'ok':'warn');
   ab.textContent = 'Analysis: '+CV.status;
   ab.title = CV.status==='complete' ? 'Every member found was read in full and no samples conflicted.' :
-    'Partial: '+(CV.summary.length ? CV.summary.join('; ') : 'see the Source coverage tab')+'. Results may miss data; see the Source coverage tab.';
-  ab.onclick = ()=>{ if(TABS.includes('cov')) showTab('cov'); };
+    'Partial: '+(CV.summary.length ? CV.summary.join('; ') : 'see the Source coverage tab (Advanced view)')+'. Results may miss data; see the Source coverage tab (Advanced view).';
+  ab.onclick = ()=>{ if(ALL_TABS.includes('cov')){ if(!TABS.includes('cov')) setAdvanced(true); showTab('cov'); } };
   $('#covmsg').textContent = CV.archive ? '' : 'Single-file input: source coverage is only meaningful for archives and directories.';
   covTable($('#covfam'), ['Family','State','Found','Read','Truncated','Skipped','Samples','Time range (UTC)','Conflicts','Members'], CV.families, (tr,f)=>{
     tr.insertCell().textContent = f.family;

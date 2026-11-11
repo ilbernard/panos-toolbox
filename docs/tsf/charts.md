@@ -107,3 +107,19 @@ The right column is the per-core peak in the visible range (`hmPeaks`). Row heig
 6-16 px, plot height 160-520 px. Drag selects a range like the line charts; double-click resets.
 The previous per-capture rows (per-second, per-minute max and average tables with their
 reconstructed UTC times, built on first expansion) are in the collapsed `Raw tables per capture`.
+
+## Layout and tab views
+
+**Responsive layout.** The page is fluid from 1200 CSS px (`body{min-width:1200px}`; a 1920x1080
+screen at 125% Windows scaling is about 1536 px) and its main column is capped at 3200 px.
+`.panel` has `overflow-x:auto` and the `.scroll` boxes scroll on their own, so wide tables
+(`white-space:nowrap`) scroll inside their panel and never the whole page. The charts take the
+width of their container (at least 480 px).
+
+**Normal and Advanced view.** The tab bar shows the Dataplane Throughput, System health and
+Management plane tabs by default (`NORMAL_TABS` in `JS_TABS`). The `Advanced` checkbox at the
+right end of the bar shows the other tabs; the choice is kept in `localStorage`
+(`panosToolbox.tsfReport.advanced`, wrapped in try/catch because file:// or private mode can
+throw). A report with no normal tab shows the advanced ones with the box ticked and disabled.
+When the active tab gets hidden the first visible tab is opened, and the arrow keys cycle only
+the visible tabs.
