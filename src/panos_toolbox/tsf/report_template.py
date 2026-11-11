@@ -1277,12 +1277,64 @@ function sysDetailCores(host, check){
   const msg = C.state==='files' ? C.files.length+' core file(s). The content was not read.' : (C.state==='empty' ? 'Core directory present, empty: '+C.dirs.join(', ') : 'No core directory in the archive.');
   sysBlock(host, 'Core files', C.files.length ? sysTable(['File','Size'], C.files, (tr,f)=>{ sysCell(tr, f.name); sysCell(tr, sysFmtBytes(f.size)); tr.className = 'anom-crit'; }) : null, msg);
 }
+// Logs group: kernel crashes, repeated daemon errors, commit and job context
+function sysUtc(ms){ return (ms===null||ms===undefined) ? '' : iso(ms)+' UTC'; }
+function sysDetailKernel(host, check){
+  const K = SYS.logs.kernel;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Kernel crashes'); return; }
+  const crit = SYS.thresholds.crash_min;
+  const note = K.lines.toLocaleString('en-US')+' kernel line(s) in '+K.files.join(', ')+'. Only segfault, general protection and out-of-memory kill lines are counted, per process and type; at or above '+crit+' is flagged. Times are the ones written in the log: device local time, no year, no offset (not used for correlation).'+(K.dropped ? ' '+K.dropped+' event(s) of further process/type pairs were not counted (limit reached).' : '');
+  sysBlock(host, 'Kernel crashes', K.events.length ? sysTable(['Process','Type','Events','First (local, no year)','Last (local, no year)','PIDs','Files'], K.events, (tr,e)=>{
+    sysCell(tr, e.process); sysCell(tr, e.type); sysCell(tr, e.count.toLocaleString('en-US')); sysCell(tr, e.first); sysCell(tr, e.last); sysCell(tr, e.pids.join(', ')); sysCell(tr, e.files.join(', '));
+    tr.className = e.count>=crit ? 'anom-crit' : 'anom-warn'; }) : null, K.events.length ? note : 'No crash line found. '+note);
+}
+function sysDetailLogErrors(host, check){
+  const L = SYS.logs.daemons, rep = SYS.thresholds.log_repeat_min;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Repeated daemon errors'); return; }
+  const d = sysBlock(host, 'Repeated daemon errors', sysTable(['Daemon','Files','Lines','Error lines','Distinct messages','Repeated (>= '+rep+')'], L.rows, (tr,r)=>{
+    sysCell(tr, r.daemon); sysCell(tr, r.files.join(', ')); sysCell(tr, r.lines.toLocaleString('en-US')); sysCell(tr, r.errors.toLocaleString('en-US')); sysCell(tr, r.distinct.toLocaleString('en-US'));
+    const n = r.messages.filter(m=>m.flagged).length; sysCell(tr, n); if(n) tr.className = 'anom-warn'; }),
+    'An error line starts (after the timestamp) with a level token ERROR/ERR/CRIT/CRITICAL/FATAL or Error:/error:/Crit:/fatal:. Messages are normalised (3+ digit numbers become N, 0x... becomes 0xH, bracketed or quoted paths are kept). Identical messages are counted per daemon; lines of rotated files are not de-duplicated. At most 50 messages per daemon are listed.');
+  L.rows.forEach(r=>{
+    if(!r.messages.length) return;
+    const det = sysEl('details'); const nf = r.messages.filter(m=>m.flagged).length;
+    det.appendChild(sysEl('summary', r.daemon+': '+r.errors.toLocaleString('en-US')+' error line(s), '+r.distinct.toLocaleString('en-US')+' distinct'+(nf ? ', '+nf+' repeated' : '')));
+    if(nf) det.open = true;
+    det.appendChild(sysTable(['Count','First (UTC)','Last (UTC)','Message','Files'], r.messages, (tr,m)=>{
+      sysCell(tr, m.count.toLocaleString('en-US')); sysCell(tr, sysUtc(m.first)); sysCell(tr, sysUtc(m.last)); sysCell(tr, m.msg); sysCell(tr, m.files.join(', ')); if(m.flagged) tr.className = 'anom-warn'; }));
+    if(r.omitted) det.appendChild(sysEl('p', r.omitted+' less frequent message(s) not listed (limit of 50 per daemon).', 'hint'));
+    if(r.dropped) det.appendChild(sysEl('p', r.dropped+' error line(s) with a new message were not counted (limit of distinct messages reached).', 'hint'));
+    d.appendChild(det);
+  });
+}
+function sysDetailCommits(host, check){
+  const C = SYS.logs.context;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Commit and job context'); return; }
+  const d = sysBlock(host, 'Commit and job context', null, 'Informational only: it never changes a flag. Commit windows come from COMMIT lines of configd.log (explicit UTC offset; lines at most '+SYS.thresholds.commit_gap_s+' s apart form one window). Jobs come from "show jobs processed" in device local time WITHOUT offset: the offset is inferred from the explicit-offset log headers of the same TSF; a job with an ambiguous (DST change within a day) or unknown offset has no UTC time and is not correlated. A flag is near a window or job when it lies within '+SYS.thresholds.corr_window_s+' s of it. Running jobs have no end and are not correlated.');
+  if(C.correlations.length){
+    d.appendChild(sysEl('h4', 'Items near a commit or job ('+C.correlations.length+')'));
+    const ul = sysEl('ul', null, 'banner');
+    C.correlations.forEach(c=>{ const li = sysEl('li', null, 'lvl-info'); li.append(sysEl('span', 'NEAR_COMMIT', 'badge b-info'), document.createTextNode(c.text)); ul.appendChild(li); });
+    d.appendChild(ul);
+  } else d.appendChild(sysEl('p', 'No flagged item is near a commit window or a job.', 'hint'));
+  const off = Object.entries(C.job_offsets).map(([k,v])=>v+' '+k).join(', ');
+  if(off) d.appendChild(sysEl('p', 'Job offsets: '+off+'.'+(C.jobs_src ? ' Source: '+C.jobs_src+'.' : ''), 'hint'));
+  const head = ['Kind','Item','Start (UTC)','End (UTC)','Offset','Detail','Near'];
+  const fill = (tr,r)=>{
+    sysCell(tr, r.kind); sysCell(tr, r.label); sysCell(tr, r.start===null ? '(no UTC: offset '+r.offset_state+')' : sysUtc(r.start)); sysCell(tr, r.running ? 'running' : sysUtc(r.end));
+    sysCell(tr, r.kind==='commit' ? 'explicit' : (r.offset ? 'inferred '+r.offset : r.offset_state)); sysCell(tr, r.detail); sysCell(tr, r.near.join(', ')); if(r.near.length) tr.className = 'anom-warn'; };
+  const tl = C.timeline;
+  d.appendChild(sysEl('h4', 'Commit and job timeline'));
+  d.appendChild(sysTable(head, tl.slice(0, 20), fill));
+  if(tl.length>20){ const det = sysEl('details'); det.appendChild(sysEl('summary', 'All '+tl.length+' rows')); det.appendChild(sysTable(head, tl, fill)); d.appendChild(det); }
+}
 // check id -> detail renderer; a later step registers its own here.
-const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores};
+const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores, kernel:sysDetailKernel, log_errors:sysDetailLogErrors, commits:sysDetailCommits};
 function renderSysStatic(){
   if(!hasSamples && !hasDph && !hasMp && !hasPow && !hasIfc) $('#sub').textContent = 'Generated '+D.generated+' UTC';
   const n = SYS.checks.length, nd = SYS.checks.filter(c=>c.status==='no_data').length;
-  $('#sysinfo').textContent = n+' check(s)'+(nd ? ', '+nd+' without data' : '')+'. Overall: '+(SYS_BADGE[SYS.status] || [SYS.status])[0]+'. Sources: the CLI dump of the TSF and the names of the core files in the archive.';
+  $('#sysinfo').textContent = n+' check(s)'+(nd ? ', '+nd+' without data' : '')+'. Overall: '+(SYS_BADGE[SYS.status] || [SYS.status])[0]+'. Sources: the CLI dump of the TSF, the names of the core files in the archive'+(SYS.logs ? ', var/log/messages and the daemon logs.' : '.');
+  if(SYS.logs && SYS.logs.budgets.length) $('#sysinfo').textContent += ' Limits reached: '+SYS.logs.budgets.join('; ')+'.';
   const t = $('#syschecks'); t.replaceChildren();
   const hr = t.createTHead().insertRow();
   ['Group','Check','Source','Status','Value','Note'].forEach(h=>{ const th = sysEl('th', h); th.className = 'l'; hr.appendChild(th); });

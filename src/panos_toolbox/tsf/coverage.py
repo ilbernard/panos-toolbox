@@ -15,7 +15,7 @@ from . import mp_monitor
 from .model import Collected
 
 # Families the analyzer knows about; listed even when no member was found ("absent").
-KNOWN_FAMILIES = ('dp-monitor', 'mp-monitor', 'cli', 'cores')
+KNOWN_FAMILIES = ('dp-monitor', 'mp-monitor', 'cli', 'cores', 'messages', 'daemon-log')
 MAX_CONFLICTS = 200
 
 # Family states, in the order they are reported.

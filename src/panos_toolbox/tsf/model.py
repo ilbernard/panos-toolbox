@@ -61,3 +61,5 @@ class Collected:
     mp_data: dict[str, Any] | None = None
     # system_health.new_store() filled from the CLI dump and the core file names, or None.
     sys_data: dict[str, Any] | None = None
+    # log_events.new_store() filled from var/log/messages, the daemon logs and the job list, or None.
+    log_data: dict[str, Any] | None = None

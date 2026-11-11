@@ -19,6 +19,7 @@ import html
 from . import if_glossary
 from .dp_health import DP_THRESHOLDS
 from .interface_errors import IF_THRESHOLDS
+from .log_events import DAEMON_LOGS, LOG_THRESHOLDS
 from .mp_monitor import MP_IGNORE_PROCS, MP_THRESHOLDS, MP_WORKER_PREFIXES
 from .pow_perf import POW_THRESHOLDS
 from .system_health import SYS_THRESHOLDS
@@ -451,6 +452,7 @@ row sums each core.</p>
 <ul>
 <li>The CLI dump <code>tmp/cli/techsupport_*.txt</code> of the TSF: a sequence of sections, each starting with a line <code>&gt; &lt;command&gt;</code> and ending at the next one. The commands read are <code>show system software status</code>, <code>debug dataplane show cfg-memstat statistics</code>, <code>show running global-ippool</code> and <code>show running ippool</code>. If a command appears twice, the first copy is used.</li>
 <li>The <b>names</b> of the archive members under <code>opt/dpfs/var/cores/</code> and <code>var/cores/</code>. Core files can be very large, so they are only listed (name and size) and their content is never read or extracted. Only regular files count: a directory alone is not a core.</li>
+<li>The <b>Logs</b> group reads <code>var/log/messages</code> (kernel log), the daemon logs <code>var/log/pan/&lt;daemon&gt;.log</code> and their rotations (<code>.1</code>, <code>.old</code>, <code>.gz</code>), and the CLI section <code>show jobs processed</code>. See <i>Logs checks</i> below.</li>
 </ul>
 <h3>Status of a check</h3>
 <ul>
@@ -459,8 +461,14 @@ row sums each core.</p>
 <li><b>no data</b>: the command is missing from the dump, or its section has no usable row (an empty section is never reported as ok), or, for the core files, the input is not an archive and has no member list. A check without data says nothing about the device.</li>
 </ul>
 <p>The values come from a single moment (when the TSF was generated). A condition that came and went before that is not visible here.</p>
+<h3>Logs checks</h3>
+<ul>
+<li><b>Kernel crashes</b> (<code>var/log/messages</code> and rotations): only <code>kernel:</code> lines are looked at, for <i>segfault</i>, <i>general protection</i> and <i>oom-kill</i> (out-of-memory killer) events, counted per process and type. A kill that is logged on several lines (<code>Out of memory: Kill process</code>, <code>oom-kill:</code>, <code>Killed process</code>) is counted once, by name and PID. The syslog format has <b>no year and no UTC offset</b> (<code>Apr 24 09:02:31</code>): the times are shown exactly as written, as device local time, and are never converted to UTC or used for correlation. A file with no such line is ok; no <code>messages</code> file is <i>no data</i>.</li>
+<li><b>Repeated daemon errors</b> (<code>var/log/pan/&lt;daemon&gt;.log</code>): the daemons read are {log_daemons}. A line is an <b>error line</b> when, after the timestamp, it starts with a level token: <code>ERROR</code>, <code>ERR</code>, <code>CRIT</code>, <code>CRITICAL</code>, <code>FATAL</code> (capitals, colon optional) or <code>Error:</code>, <code>error:</code>, <code>Crit:</code>, <code>fatal:</code> (with the colon). The word <i>error</i> in the middle of a message (<i>no error</i>, <i>0 errors</i>) does not count, and neither do <i>Warning</i> lines. The message is <b>normalised</b> so that repeats collapse: any number of 3 or more digits (PIDs, ids, line numbers, address octets) becomes <code>N</code>, <code>0x...</code> becomes <code>0xH</code>, bracketed or quoted text that contains a <code>/</code> (a path) is kept, and the key is cut at 300 characters. Identical messages are counted per daemon. The lines are <b>not de-duplicated</b> across rotated files; an overlap would double count. Times come from the lines that carry a UTC offset (<code>2026-11-06 11:18:48.794 +0100</code>); a line without a timestamp counts but has no time.</li>
+<li><b>Commit and job context</b> (informational): <code>COMMIT</code> lines of <code>configd.log</code> (and, best effort, <code>commit</code> lines of <code>ms.log</code>) have an explicit offset; lines at most {sys_commit_gap_s} s apart form one <b>commit window</b>. The jobs of <code>show jobs processed</code> are in device local time <b>without offset</b>, so their <b>offset is inferred</b> from the explicit-offset headers of the same TSF (daemon logs, mp-monitor, dp-monitor): the offsets seen on the dates within one day of the job. If they differ (a daylight-saving change) the job is <i>ambiguous</i>, and if there are none it is <i>unknown</i>: such a job is listed without UTC and never correlated. A job is an interval from <i>Dequeued</i> to <i>Completed</i> (a completed time earlier than the dequeued one means the next day); a running job has no end and is only listed. A flagged <code>PROC_CPU</code> run, a management plane memory peak (<code>MP_MEMORY</code>, <code>MP_MEMORY_PAST_PEAK</code>) or a dataplane core peak (<code>CORE_PEAK</code>; <code>CORE_PEAK_MINUTE</code> covers the 15 minutes before its sample) within {sys_corr_window_s} s of a window or job gets a <code>NEAR_COMMIT</code> note. The original flag is never removed and its level never changes. A correlation by time is a hint, not a proof of cause.</li>
+</ul>
 <h3>Not covered</h3>
-<p>Only these four checks exist so far. The firewall health checks of the GUI and the logs are not read here.</p>
+<p>The firewall health checks of the GUI are not read here. Only the daemon logs of the list above are read, and only their error lines.</p>
 """,
     'sysflags': """
 <p>The heuristics in <code>system_health.py</code> attach these flags. Levels: <b>crit</b> = high, <b>warn</b> = medium. The limits are <b>at or above</b> (a value equal to the limit is flagged). A check that has no flag and has data is shown as ok.</p>
@@ -470,8 +478,12 @@ row sums each core.</p>
 <tr><td><code>CFG_MEMORY</code></td><td>warn; crit at the crit limit</td><td>The configuration memory of the dataplane is filling up. One flag per allocator: the <b>config allocator</b> (<i>VSYS Config Allocator Usage</i>) and the <b>policy cache</b> (<i>POLICY CACHE USAGE</i>, printed once for the active and once for the passive copy, so two subjects) are separate. The percentage is recomputed as used / total (the device prints an integer). When the command prints one block per DP the blocks are kept separate and named in the text (this layout is unverified: only single-block output has been seen). A full allocator makes commits fail or slow; look at the number of objects, rules and vsys, and at unused configuration.</td><td>cfg_mem_warn = {sys_cfg_mem_warn}%; cfg_mem_crit = {sys_cfg_mem_crit}%</td></tr>
 <tr><td><code>NAT_POOL</code></td><td>warn</td><td>NAT dynamic IP / dynamic IP and port resources are used at or above the limit. Raised for the <b>shared memory</b> of the pools (<i>Used NAT DIP/DIPP shared memory size</i>), for each pool line of <code>show running global-ippool</code> (<i>Dynamic IP NAT Pool</i>, <i>Dynamic IP/Port NAT Pool</i>) and for each <b>rule</b> of <code>show running ippool</code> (used / (used + available)). Up to three offending rules get their own flag; more are summarised in one flag that lists the top ten. When a pool is exhausted new translations fail and sessions are dropped; add addresses to the pool or review the oversubscription.</td><td>nat_pool_warn = {sys_nat_pool_warn}% (no crit level)</td></tr>
 <tr><td><code>CORE_FILES</code></td><td>crit</td><td>One or more regular files exist under <code>opt/dpfs/var/cores/</code> or <code>var/cores/</code>: a process crashed and left a core file. The text lists the names and sizes; the content is not read. Open a support case with the core files and the TSF: the file name tells which process crashed. No directory (<i>absent</i>) and an empty directory (<i>empty</i>) are both normal and ok.</td><td>none (any file)</td></tr>
+<tr><td><code>KERNEL_CRASH</code></td><td>crit</td><td>The same process crashed or was killed by the kernel at least the limit number of times, as counted in <code>var/log/messages</code>: <i>segfault</i>, <i>general protection</i> fault or out-of-memory kill. One flag per process and type, with count, first and last time as written in the log (device local time, no year). A process that keeps crashing is a bug or a resource problem (for an oom-kill, look at the Management plane tab for memory); check the core files and open a support case with the TSF.</td><td>crash_min = {sys_crash_min} events</td></tr>
+<tr><td><code>KERNEL_CRASH_SEEN</code></td><td>info</td><td>Crash events exist but each (process, type) is below the limit. One finding lists them. Info never raises the status of the check, but a single segfault of a daemon is still worth a look.</td><td>below crash_min = {sys_crash_min}</td></tr>
+<tr><td><code>LOG_ERROR_REPEAT</code></td><td>warn</td><td>The same normalised error message appears at least the limit number of times in one daemon log (see the normalisation rules above). One flag per daemon and message with count, first and last UTC time (when the lines carry an offset) and files. At most 20 messages are flagged one by one; the rest are summarised in one flag, and at most 50 messages per daemon are listed in the details (the limits reached are declared in the tab). A message that repeats hundreds of times is a persistent condition (a missing file, an unreachable server), not an event: search for it with the daemon name and fix its cause.</td><td>log_repeat_min = {sys_log_repeat_min} occurrences</td></tr>
+<tr><td><code>NEAR_COMMIT</code></td><td>info</td><td>A flagged <code>PROC_CPU</code> run, memory peak or core peak lies within the margin of a commit window or of a completed job. One finding per item; the text names the window or job and, for a job, says <i>offset inferred (+HHMM)</i>. The original flag stays and is annotated; this is context, not a cause, and never changes any level.</td><td>corr_window_s = {sys_corr_window_s} s; commit_gap_s = {sys_commit_gap_s} s</td></tr>
 </table>
-<p class="hint">The thresholds are heuristics defined in <code>system_health.SYS_THRESHOLDS</code>. In code, override them with <code>evaluate_system_health(store, thresholds={{'cfg_mem_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--sys-&lt;name&gt;</code> options (for example <code>--sys-cfg-mem-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report.</p>
+<p class="hint">The thresholds are heuristics defined in <code>system_health.SYS_THRESHOLDS</code> and <code>log_events.LOG_THRESHOLDS</code>. In code, override them with <code>evaluate_system_health(store, thresholds={{'cfg_mem_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--sys-&lt;name&gt;</code> options (for example <code>--sys-cfg-mem-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report.</p>
 """,
     'sysdetail': """
 <ul>
@@ -479,11 +491,14 @@ row sums each core.</p>
 <li><b>Configuration memory</b>: for each allocator the memory used, the total and the percentage. The policy cache is printed for the <i>ACTIVE</i> and the <i>PASSIVE</i> copy; both are shown and evaluated.</li>
 <li><b>NAT pools</b>: first the shared memory summary and the two pool lines, then the rules of <code>show running ippool</code> sorted by used % (Used / (Used + Available)); the ten busiest are shown and the full list can be expanded. <i>Persistent</i>, <i>Min</i> and <i>Max</i> exist only on some PAN-OS versions and are left empty otherwise. Rule names can contain spaces. There can be several VSYS blocks; the VSYS column tells which.</li>
 <li><b>Core files</b>: the core files found (name, size), or the reason there are none: <i>no core directory in the archive</i> or <i>core directory present, empty</i>.</li>
+<li><b>Kernel crashes</b>: one row per process and type with the event count, the first and last time as written in the log (local, no year), the PIDs and the files. Rows at or above the limit are red.</li>
+<li><b>Repeated daemon errors</b>: one row per daemon (files, lines, error lines, distinct messages, repeated ones), then one collapsible table per daemon with its most frequent messages (count, first and last UTC, normalised message, files). The ones at or above the limit are highlighted and the table is open. The limits of the view (50 messages per daemon, 20 flags) are declared when reached.</li>
+<li><b>Commit and job context</b>: the items near a commit or job, then the <b>timeline</b> of commit windows and jobs, newest first, with UTC start and end, the offset (<i>explicit</i> for commit windows, <i>inferred +HHMM</i>, <i>ambiguous</i> or <i>unknown</i> for jobs), and which flagged items are near. The first 20 rows are shown; the rest can be expanded.</li>
 </ul>
 """,
     'coverage': """
 <p>Shows what this analysis actually looked at, so that a missing or partial source is never mistaken for a clean one. The badge in the page header summarises it: <b>Analysis: complete</b> or <b>Analysis: partial</b>.</p>
-<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>mp-monitor</code> (the <code>var/log/pan/mp-monitor.*</code> logs, which give the management plane memory and processes) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW, interface and system health data) and <code>cores</code> (the core files under <code>opt/dpfs/var/cores/</code> and <code>var/cores/</code>, which are only <i>listed</i>). The TSF is read in memory; nothing is extracted to disk.</p>
+<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>mp-monitor</code> (the <code>var/log/pan/mp-monitor.*</code> logs, which give the management plane memory and processes) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW, interface and system health data) and <code>messages</code> (<code>var/log/messages</code> and rotations, the kernel log) and <code>daemon-log</code> (the daemon logs <code>var/log/pan/&lt;daemon&gt;.log</code> of the list in the System health help, with rotations) and <code>cores</code> (the core files under <code>opt/dpfs/var/cores/</code> and <code>var/cores/</code>, which are only <i>listed</i>). The TSF is read in memory; nothing is extracted to disk.</p>
 <h3>States</h3>
 <ul>
 <li><b>absent</b>: no member of the family exists in the input. The matching tabs are simply missing; this is not an error in the report.</li>
@@ -533,8 +548,8 @@ def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
     if unknown:
         raise ValueError('unknown management plane threshold(s): ' + ', '.join(sorted(unknown)))
     mth.update(mp_thresholds or {})
-    sth = dict(SYS_THRESHOLDS)
-    unknown = set(sys_thresholds or {}) - set(SYS_THRESHOLDS)
+    sth = {**SYS_THRESHOLDS, **LOG_THRESHOLDS}
+    unknown = set(sys_thresholds or {}) - set(sth)
     if unknown:
         raise ValueError('unknown system health threshold(s): ' + ', '.join(sorted(unknown)))
     sth.update(sys_thresholds or {})
@@ -543,6 +558,7 @@ def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
                    for k, v in sth.items()})
     values.update({'mp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
                    for k, v in mth.items()})
+    values['log_daemons'] = html.escape(', '.join(DAEMON_LOGS))
     values['mp_workers'] = html.escape(', '.join(p + '*' for p in MP_WORKER_PREFIXES))
     values['mp_ignored'] = html.escape(', '.join(MP_IGNORE_PROCS))
     values.update({'dp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))

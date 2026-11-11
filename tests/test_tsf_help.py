@@ -10,6 +10,7 @@ import pytest
 from panos_toolbox.tsf import (
     analyzer,
     dp_health,
+    log_events,
     mp_monitor,
     pow_perf,
     report_template,
@@ -27,6 +28,7 @@ PERF_SRC = Path(pow_perf.__file__).read_text(encoding='utf-8')
 DPH_SRC = Path(dp_health.__file__).read_text(encoding='utf-8')
 MP_SRC = Path(mp_monitor.__file__).read_text(encoding='utf-8')
 SYS_SRC = Path(system_health.__file__).read_text(encoding='utf-8')
+LOG_SRC = Path(log_events.__file__).read_text(encoding='utf-8')
 
 
 def test_template_import_and_pieces():
@@ -109,6 +111,24 @@ def test_every_flag_code_in_system_health_is_documented():
     out = render_help()
     missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
     assert not missing, missing
+
+
+def test_every_flag_code_in_log_events_is_documented():
+    codes = set(re.findall(r"_flag\(.*?,\s*'([A-Z][A-Z_]+)',\s*'(?:crit|warn|info)'", LOG_SRC,
+                           re.DOTALL))
+    assert {'KERNEL_CRASH', 'KERNEL_CRASH_SEEN', 'LOG_ERROR_REPEAT', 'NEAR_COMMIT'} <= codes
+    assert codes <= set(log_events.FLAG_CODES) and set(log_events.CODE_CHECK) == codes
+    out = render_help()
+    missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
+    assert not missing, missing
+
+
+def test_render_help_shows_live_log_thresholds():
+    out = ''.join(render_section_help(None, None, None, None, {'crash_min': 7}).values())
+    assert 'crash_min = 7 events' in out and 'crash_min = 5 events' not in out
+    out = ''.join(render_section_help(None, None, None, None,
+                                      {'log_repeat_min': 33, 'corr_window_s': 45}).values())
+    assert 'log_repeat_min = 33 occurrences' in out and 'corr_window_s = 45 s' in out
 
 
 def test_render_help_shows_live_sys_thresholds():
