@@ -433,7 +433,7 @@ row sums each core.</p>
 </ul>
 """,
     'mpprocs': """
-<p>One row per process name. <b>Show</b> selects the rows: the processes with a <code>PROC_CPU</code> flag, the top 10 by peak CPU, by peak <code>Res+Swap</code> or by growth, or all of them. The table can be collapsed. Workers and short-lived commands are listed too and marked "not flagged".</p>
+<p>One row per process name. <b>Show</b> selects the rows: the processes with a <code>PROC_CPU</code> flag, the top 10 by peak CPU, by peak <code>Res+Swap</code> or by growth, or all of them. The table can be collapsed. Workers and short-lived commands are listed too and marked "not flagged". Names that embed the parent PID, such as <code>httpd(ppid:6709)</code>, are grouped as <code>httpd(ppid:*)</code>: per sample the highest CPU and the sum of <code>Res+Swap</code> of those children are used.</p>
 <ul>
 <li><b>Peak CPU</b>: the highest value seen and when (UTC). <b>Samples at/above</b>: how many samples reached the CPU limit ({mp_proc_cpu_warn}%), also as isolated spikes.</li>
 <li><b>Longest run</b>: the longest series of consecutive samples at or above the limit (see <code>PROC_CPU</code> for what breaks a run), with its UTC time range. <b>Runs</b>: how many runs reached the minimum length ({mp_proc_cpu_min_samples} samples).</li>

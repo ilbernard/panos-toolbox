@@ -145,6 +145,20 @@ def _unknown_or(tok: str, conv, cnt):
     return _BAD if v is None else v
 
 
+_PPID_RE = re.compile(r'\(ppid:\d+\)$')
+
+
+def normalize_name(name: str) -> str:
+    """Process name used to group samples over time.
+
+    Some daemons embed the parent PID in their name (``httpd(ppid:6709)``); it changes
+    when the parent restarts, so it is replaced with ``*`` (``httpd(ppid:*)``) and all
+    the children of that daemon are tracked as one process (highest CPU, summed
+    Res+Swap per sample, as for any repeated name).
+    """
+    return _PPID_RE.sub('(ppid:*)', name)
+
+
 def parse_mp_monitor(lines, src, store, warnings) -> int:
     """Walks the lines of an mp-monitor.* file and adds the samples to `store`.
 
@@ -275,7 +289,7 @@ def parse_mp_monitor(lines, src, store, warnings) -> int:
         if pid is None or cpu is _BAD or rss is _BAD:
             cnt['bad_rows'] += 1
             continue
-        proc['rows'].append((d['name'], pid, cpu, rss, d['state']))
+        proc['rows'].append((normalize_name(d['name']), pid, cpu, rss, d['state']))
     end_section()
     return n_found
 

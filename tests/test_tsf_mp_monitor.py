@@ -549,3 +549,10 @@ def test_generated_javascript_is_valid(tmp_path):
     js.write_text(scripts[-1], encoding='utf-8')
     res = subprocess.run(['node', '--check', str(js)], check=False, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
+
+
+def test_ppid_in_process_name_is_normalized():
+    from panos_toolbox.tsf.mp_monitor import normalize_name
+    assert normalize_name('httpd(ppid:6709)') == 'httpd(ppid:*)'
+    assert normalize_name('httpd') == 'httpd'
+    assert normalize_name('all_task_1') == 'all_task_1'
