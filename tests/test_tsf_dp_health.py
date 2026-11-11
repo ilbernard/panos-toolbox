@@ -513,3 +513,20 @@ def test_generated_javascript_is_valid(tmp_path):
     js.write_text(scripts[-1], encoding='utf-8')
     res = subprocess.run(['node', '--check', str(js)], check=False, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
+
+
+def test_shared_pools_core_table_is_not_a_cpu_table():
+    # Real panio sections also carry "Shared Pools Statistics", whose table has a
+    # 'core 0 1 ...' header too; it must neither be read as CPU nor discarded as bad rows.
+    pools = [':Shared Pools Statistics', ':', ':Current local reuse cache counts for each pool:',
+             ':core       0     1     2     3',
+             ':24         0   372    25   378',
+             ':192        0   602   219   644', ':']
+    block = res_block(cpu=3)
+    n, store, w = parse(section('2026-10-27 08:20:20.485', [pools + block], [target()]))
+    rec = sample_of(store)
+    assert n == 1 and not w
+    assert sorted(rec['core_s']) == [0, 1, 2, 3]
+    assert max(rec['core_s'].values()) == 3
+    assert store['counters']['bad_rows'] == 0
+    assert store['counters']['out_of_range'] == 0
