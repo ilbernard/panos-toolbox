@@ -34,7 +34,7 @@ SECTION_TITLES = {
     'itable': 'Interfaces table', 'ixchk': 'Cross-check with the global counters',
     'coverage': 'Source coverage',
     'dph': 'Dataplane health', 'dphflags': 'Dataplane health findings and flag reference',
-    'dphcores': 'CPU peak per core',
+    'dphcores': 'CPU per core (heatmap)',
     'mp': 'Management plane', 'mpflags': 'Management plane findings and flag reference',
     'mpchart': 'Management plane memory chart', 'mpprocs': 'Management plane processes',
     'sys': 'System health', 'sysflags': 'System health findings and flag reference',
@@ -396,7 +396,7 @@ row sums each core.</p>
 <h3>Peak versus last</h3>
 <p>The firewall's own health checks look at the last sample only. A TSF is a history, so the flags here are based on the <b>peak over the whole period</b>. The text of each flag gives the peak (value and UTC time), the last value and how many samples were at or above the threshold, so that you can tell a spike that is over from a condition that is still there.</p>
 <h3>Where the charts are</h3>
-<p>This tab keeps only the summary table and the findings. The charts (session table utilization, packet buffer, packet descriptors, busiest core and CPU per core, second by second and minute by minute) are in the <b>Dataplane Throughput</b> tab, under the Metric selector, and the per-core tables with all values are under <b>CPU peak per core</b> in the same tab.</p>
+<p>This tab keeps only the summary table and the findings. The charts (session table utilization, packet buffer, packet descriptors, busiest core and CPU per core, second by second and minute by minute) are in the <b>Dataplane Throughput</b> tab, under the Metric selector, and the per-core heatmap (and, collapsed, the raw per-capture tables) is under <b>CPU per core (heatmap)</b> in the same tab.</p>
 <h3>Summary table</h3>
 <p>For each DP: the number of samples and the period, then for the session table, the packet buffer, the packet descriptors and the busiest core, once from the per-second table and once from the per-minute max, the last and the peak value (the peak with its UTC time and, for the CPU, the core). Per-minute values have no time of their own: the time shown is that of the section, and the value covers the 15 minutes before it. Rows are coloured by the worst flag of the DP.</p>
 """,
@@ -412,11 +412,18 @@ row sums each core.</p>
 <p class="hint">The thresholds are heuristics defined in <code>dp_health.DP_THRESHOLDS</code>. In code, override them with <code>evaluate_dp_health(store, thresholds={{'pkt_buffer_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--dp-&lt;name&gt;</code> options (for example <code>--dp-pkt-buffer-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report. The packet descriptors have no flag: they are shown for context.</p>
 """,
     'dphcores': """
-<p>Shown in the Dataplane Throughput tab for the DP chosen in the <b>DP</b> filter of the samples table (all DPs when it is All) and for the captures inside the current zoom range.</p>
-<h3>Peak blocks</h3>
-<p>One cell per core, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the captures in the range (the maximum of every value of the per-second table) and the highest per-minute maximum. The colour goes from white (idle) to red (100%). A bold border marks a cell at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) in the first row and <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) in the second. Hover a cell for the UTC time of the peak (the reconstructed second, or the minute ending) and the last value.</p>
-<h3>Captures</h3>
-<p>One collapsible row per capture (the <code>panio</code> section): its UTC time, the DP, and the busiest core with its value in the per-second table and in the per-minute max table (red when at or above the limit). <b>Only captures with a core at or above the limit</b> filters the rows. Expand a row to see every value of that capture: the 15 rows of the per-second table, each with its reconstructed UTC time to the second, and the 15 rows of the per-minute max and of the per-minute average tables, each with the UTC time of the minute end, one column per core. Rows are listed oldest first. The content is built when a row is expanded, so a large report stays fast; at most 300 rows are listed until <b>Show all</b>.</p>
+<p>Shown in the Dataplane Throughput tab, under the chart, for the DP chosen in the <b>DP</b> filter of the samples table (one heatmap per DP, with a heading, when it is All and there are several DPs).</p>
+<h3>Heatmap</h3>
+<p>One row per core (<code>core N</code> on the left; with many cores only every k-th label is written) and time on the horizontal axis, with the same left and right margins and the same time range as the chart above, so a spike in the throughput can be read straight down onto the cores. The colour goes from white (idle) to red (100%); grey means <b>no data</b> and is never drawn as 0. Each pixel column shows the <b>maximum</b> of the measurements that fall in it, and a measurement longer than a pixel column (a minute, or a second on a long range) fills all the columns it covers.</p>
+<ul>
+<li><b>Source</b>: <i>Per-minute max</i> (the default; practically the whole period is covered, one cell per whole minute), <i>Per-minute average</i> and <i>Per-second</i> (15 seconds about every 10 minutes, so most of the time is empty). Only the sources present in the file are listed.</li>
+<li><b>Limit marker</b>: a cell with a dark outline is at or above <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) for the per-minute max source, or <code>core_peak_warn</code> ({dp_core_peak_warn}%) for the per-second source. The per-minute average has no limit.</li>
+<li><b>peak</b> column (right): the highest value of each core in the visible range, coloured like the cells.</li>
+<li><b>Hover</b> a cell for the core, the UTC time range of the pixel column, the maximum value and the source.</li>
+<li><b>Zoom</b>: drag horizontally to select a range, as in the chart; the range is shared with the throughput chart and the samples table. Double-click the heatmap or use <b>Reset zoom</b> to go back to the full period.</li>
+</ul>
+<h3>Raw tables per capture</h3>
+<p>The collapsed <b>Raw tables per capture</b> section keeps the old per-capture view. One collapsible row per capture (the <code>panio</code> section) inside the zoom range: its UTC time, the DP, and the busiest core with its value in the per-second table and in the per-minute max table (red when at or above the limit). <b>Only captures with a core at or above the limit</b> filters the rows. Expand a row to see every value of that capture: the 15 rows of the per-second table, each with its reconstructed UTC time to the second, and the 15 rows of the per-minute max and of the per-minute average tables, each with the UTC time of the minute end, one column per core. Rows are listed oldest first. The content is built when a row is expanded, so a large report stays fast; at most 300 rows are listed until <b>Show all</b>.</p>
 <p><b>Timestamps.</b> The capture time T is when the command ran. Per-minute row i is the whole minute ending i minutes before the last minute boundary at or before T (rows newest first: verified on real data; the seconds of T are not part of row 0). The per-second row i is taken as the second T - i seconds: the same order as the per-minute table, inferred and not verifiable from the file. Consecutive per-minute tables overlap; the table of a capture always shows that capture's own values, while the chart keeps the most recent capture's value for each minute.</p>
 <p>A missing value (<code>*</code> in the file) is shown as <code>&ndash;</code> with a tooltip; it is never counted as 0. Cores that show no data at all are left empty. A core that is always 0 is normally not used by the dataplane (cores reserved for other functions).</p>
 """,

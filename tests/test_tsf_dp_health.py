@@ -732,11 +732,12 @@ def test_charts_and_core_tables_moved_to_the_throughput_tab(tmp_path):
     out = run_main(tmp_path)
     chart_tab, dph_tab = tab_html(out, 'chart'), tab_html(out, 'dph')
     # moved into the throughput tab
-    for needle in ('id="pcsec"', 'id="dphcores"', 'id="help-dphcores"', 'CPU peak per core', 'id="metric"',
+    for needle in ('id="pcsec"', 'id="dphcores"', 'id="help-dphcores"', 'CPU per core (heatmap)', 'id="hmsrc"',
+                   'id="pcraw"', 'Raw tables per capture', 'id="metric"',
                    'id="hdp"', 'id="hcol"', 'Dataplane health columns'):
         assert needle in chart_tab, needle
     # gone from the Dataplane health tab, which keeps the summary and the findings
-    for needle in ('<h2>Utilization over time</h2>', '<h2>CPU peak per core</h2>', 'id="dphchart"', 'id="dphstats"', 'id="dphdp"',
+    for needle in ('<h2>Utilization over time</h2>', '<h2>CPU per core (heatmap)</h2>', 'id="dphchart"', 'id="dphstats"', 'id="dphdp"',
                    'id="dphcores"', 'id="dphleg"'):
         assert needle not in dph_tab, needle
     for needle in ('id="dphsum"', 'id="dphbanner"', 'id="help-dphflags"', 'id="help-dph"'):
@@ -759,4 +760,7 @@ def test_help_describes_the_merge_and_the_reconstruction(tmp_path):
     assert 'Dataplane health columns' in table_help
     cores_help = re.search(r'id="help-dphcores" hidden>(.*?)</div>', out, re.DOTALL).group(1)
     assert 'collapsible' in cores_help and 'Show all' in cores_help
+    for needle in ('Heatmap', 'Per-minute max', 'Per-second', 'no data', 'Raw tables per capture', 'peak</b> column',
+                   f"{dp_health.DP_THRESHOLDS['core_peak_warn']}%", f"{dp_health.DP_THRESHOLDS['core_peak_minute_warn']}%"):
+        assert needle in cores_help, needle
     assert 'Dataplane Throughput' in re.search(r'id="help-dph" hidden>(.*?)</div>', out, re.DOTALL).group(1)

@@ -175,16 +175,20 @@ TEMPLATE_BODY = r'''</style>
   <p class="hint">Drag on the chart to zoom into a range; the range also applies to the other charts and to the table.</p>
   <table class="stats" id="stats"></table>
   <div class="sep" id="pcsec" style="display:none">
-  <div class="sechead"><h2>CPU peak per core</h2>__HB_dphcores__</div>__HP_dphcores__
-  <p class="hint" id="pcinfo"></p>
+  <div class="sechead"><h2>CPU per core (heatmap)</h2>__HB_dphcores__</div>__HP_dphcores__
+  <div class="bar">
+    <label>Source <select id="hmsrc"></select></label>
+    <span class="hint" id="pcinfo"></span>
+  </div>
   <div id="dphcores"></div>
+  <details id="pcraw"><summary>Raw tables per capture</summary>
   <div class="bar" style="margin-top:8px">
-    <strong>Captures</strong>
     <label><input type="checkbox" id="pchot"> only captures with a core at or above the limit</label>
     <span class="hint" id="pccount"></span>
   </div>
   <div id="pclist"></div>
   <p class="hint" id="pcmore"></p>
+  </details>
   </div>
   <div class="sep">
   <div class="sechead"><h3>Samples table</h3>__HB_table__</div>__HP_table__
@@ -223,7 +227,7 @@ TEMPLATE_BODY = r'''</style>
   <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
   <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
   <ul class="banner" id="dphbanner"></ul>
-  <p class="hint">The utilization charts and the CPU per core tables are in the <b>Dataplane Throughput</b> tab (Metric selector and "CPU peak per core").</p>
+  <p class="hint">The utilization charts and the CPU per core tables are in the <b>Dataplane Throughput</b> tab (Metric selector and "CPU per core (heatmap)").</p>
 </section>
 
 <section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
@@ -595,6 +599,28 @@ function dphAvail(detail, dps){
   if(any(d=>has(d.cma))) out.push('pc_ma');
   return out;
 }
+// Heatmap buckets (see docs/tsf/charts.md). g = a core grid {t, cols} whose cell j covers the dur ms ending at t[j]. The range
+// [x0,x1] is split into nb equal buckets; every bucket of every core holds the MAXIMUM of the cells that overlap it (null = no
+// data, never 0), so a cell longer than a bucket fills all the buckets it covers.
+function hmBucket(g, dur, x0, x1, nb){
+  const nc=g.cols.length, cells=Array.from({length:nc},()=>new Array(Math.max(0,nb)).fill(null)), span=x1-x0;
+  if(!(span>0) || !(nb>=1)) return cells;
+  const bw=span/nb;
+  for(let j=0;j<g.t.length;j++){
+    const b=g.t[j], a=b-dur; if(b<=x0 || a>=x1) continue;
+    let i0=Math.floor((a-x0)/bw), i1=Math.ceil((b-x0)/bw)-1;
+    if(i0<0) i0=0; if(i1>=nb) i1=nb-1; if(i1<i0) i1=i0;
+    for(let k=0;k<nc;k++){
+      const v=g.cols[k][j]; if(!isNum(v)) continue; const row=cells[k];
+      for(let i=i0;i<=i1;i++) if(row[i]===null || v>row[i]) row[i]=v;
+    }
+  }
+  return cells;
+}
+// The peak of every core over the cells that overlap [x0,x1] (null when the core has no value there).
+function hmPeaks(g, dur, x0, x1){
+  return g.cols.map(col=>{ let mx=null; for(let j=0;j<g.t.length;j++){ const v=col[j]; if(isNum(v) && g.t[j]>x0 && g.t[j]-dur<x1 && (mx===null || v>mx)) mx=v; } return mx; });
+}
 // DPH-HELPERS-END
 const HAVAIL = HD ? dphAvail(HD, HDPS) : [];
 
@@ -607,7 +633,7 @@ function makeChart(svg, tip, wrap){
   const el=(n,a)=>{const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); svg.appendChild(e); return e;};
   const niceMax=v=>{ if(v<=0) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))), n=v/p; return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p; };
   function draw(series,o){
-    const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=16,T=12,B=34, u=o.u;
+    const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=o.R||16,T=12,B=34, u=o.u;
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
     const all=series.flatMap(s=>realPts(s.d).map(p=>p.v));
     const x0=state.range[0]!==null?state.range[0]:(o.t0!==undefined?o.t0:TMIN), x1=state.range[1]!==null?state.range[1]:(o.t1!==undefined?o.t1:TMAX);
@@ -670,7 +696,7 @@ function makeChart(svg, tip, wrap){
       if(Math.abs(x-a)>6) setRange(Math.round(tOf(Math.min(a,x))),Math.round(tOf(Math.max(a,x)))); else view.sel.setAttribute('display','none');
     };
   }
-  return {draw};
+  return {draw, view:()=>view};
 }
 const chart=makeChart($('#chart'),$('#tip'),$('#chartwrap'));
 const gchart=hasG?makeChart($('#gchart'),$('#gtip'),$('#gwrap')):null;
@@ -761,6 +787,7 @@ function healthExtent(){
 }
 function drawMain(){
   const ser=mainSeries(), u=mainUnit(ser), o={label:METRICS[state.metric].label,u};
+  if(HD && hmShown()) o.R=hmRight();   // same plot width as the CPU per core heatmap below
   if(usesHealth()){ o.cap=100; const e=healthExtent(); if(e){ o.t0=e[0]; o.t1=e[1]; } }
   chart.draw(ser,o); statsTable($('#stats'),ser,u);
 }
@@ -1332,8 +1359,8 @@ if(hasDph) renderDphStatic();
 
 '''
 
-# CPU peak per core (throughput tab): compact peak blocks and one lazily expanded row per capture.
-JS_PERCORE = r'''// CPU peak per core (throughput tab): compact peak blocks and one collapsible row per capture
+# CPU per core (throughput tab): one core x time heatmap and, collapsed, one lazily expanded row per capture.
+JS_PERCORE = r'''// CPU per core (throughput tab): a core x time heatmap and the raw tables of each capture
 const pcState = {hot:false, all:false, open:new Set()};
 const dphHeat = v => isNum(v) ? 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')' : '';
 const pcDps = () => HD ? ((state.dp && state.dp!=='ALL') ? HDPS.filter(d=>d===state.dp) : HDPS).filter(d=>DH.cores[d].ids.length) : [];
@@ -1341,43 +1368,96 @@ function heatTd(td, v, hot){
   if(isNum(v)){ td.textContent = v; td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff'; if(hot) td.classList.add('hot'); }
   else { td.textContent = '–'; td.title = 'Missing measurement (*)'; }
 }
-// Peak per core over the captures in the zoom range, with the reconstructed time of the peak and the last value.
-function corePeaks(dp){
-  const d = HD.by_dp[dp], ts = DH.series[dp].t, nc = DH.cores[dp].ids.length;
-  const mk = () => ({v:new Array(nc).fill(null), t:new Array(nc).fill(null), last:new Array(nc).fill(null)});
-  const S = mk(), M = mk();
-  const scan = (R, flat, tc, rt) => {
-    if(!flat) return; const n = Math.floor(flat.length/nc);
-    for(let r=n-1;r>=0;r--) for(let k=0;k<nc;k++){
-      const v = flat[r*nc+k]; if(!isNum(v)) continue;
-      const t = rt(tc, r); R.last[k] = v;
-      if(R.v[k]===null || v>R.v[k]){ R.v[k] = v; R.t[k] = t; }
-    }
-  };
-  for(let c=0;c<ts.length;c++){ if(!inRange(ts[c])) continue; scan(S, d.cs[c], ts[c], recSec); scan(M, d.cmm[c], ts[c], recMin); }
-  return {S, M};
-}
-function renderCorePeaks(host, dp, label){
-  const ids = DH.cores[dp].ids, P = corePeaks(dp), th = DH.thresholds;
+// Heatmap geometry: the left margin is the one of the line charts; the right margin is theirs (R) plus the 'peak' column (PK).
+// When the heatmap is shown the throughput chart uses the same right margin, so both plots have the same x scale.
+const HM = {L:70, R:16, PK:46, T:12, B:34, LEG:26, BUCKET_PX:2, ROW_MIN:6, ROW_MAX:16, H_MIN:160, H_MAX:520};
+const hmRight = () => HM.R + HM.PK;
+const HM_SRC = {mm:['Per-minute max', 60000], ma:['Per-minute average', 60000], s:['Per-second', 1000]};
+const hmState = {src:'mm'};
+// The sources that have a value for at least one core of the DPs shown.
+const hmSources = dps => ['mm','ma','s'].filter(g=>dps.some(dp=>{ const gr = coreGrid(dp, g); return gr.t.length>0 && gr.cols.some(hasReal); }));
+const hmShown = () => { const d = pcDps(); return d.length>0 && hmSources(d).length>0; };
+function hmThreshold(src){ const th = DH.thresholds; return src==='s' ? th.core_peak_warn : (src==='mm' ? th.core_peak_minute_warn : null); }
+function drawHeat(host, dp, src, label){
+  const g = coreGrid(dp, src), dur = HM_SRC[src][1], ids = DH.cores[dp].ids, n = ids.length, thr = hmThreshold(src);
   if(label){ const h = document.createElement('h4'); h.textContent = label; host.appendChild(h); }
-  const rows = [['Peak, per-second table', P.S, true, th.core_peak_warn], ['Peak, per-minute max', P.M, false, th.core_peak_minute_warn]];
-  for(let i=0;i<ids.length;i+=16){
-    const t = document.createElement('table'); t.className = 'hm';
-    const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = i===0 ? 'Core' : 'Core (cont.)';
-    ids.slice(i,i+16).forEach(c=>{ const th=document.createElement('th'); th.textContent=c; hr.appendChild(th); });
-    const tb = t.createTBody();
-    rows.forEach(rw=>{
-      const r = tb.insertRow(); r.insertCell().textContent = rw[0];
-      for(let j=i;j<Math.min(i+16,ids.length);j++){
-        const v = rw[1].v[j], td = r.insertCell();
-        heatTd(td, v, isNum(v) && v>=rw[3]);
-        td.title = !isNum(v) ? 'Core '+ids[j]+': no value in the selected range'
-          : (rw[2] ? 'Core '+ids[j]+': peak '+v+'% at '+iso(rw[1].t[j])+' UTC; last '+rw[1].last[j]+'%'
-                   : 'Core '+ids[j]+': highest per-minute maximum '+v+'% in the minute ending '+iso(rw[1].t[j])+' UTC; last '+rw[1].last[j]+'%');
-      }
-    });
-    host.appendChild(t);
+  if(!g.t.length || !g.cols.some(hasReal)){ const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'No '+HM_SRC[src][0].toLowerCase()+' CPU data for this DP.'; host.appendChild(p); return; }
+  const wrap = document.createElement('div'); wrap.className = 'cw'; const svg = document.createElementNS(NS, 'svg'), tip = document.createElement('div'); tip.className = 'tip';
+  wrap.append(svg, tip); host.appendChild(wrap);
+  const W = Math.max(480, $('#chartwrap').clientWidth), L = HM.L, Rr = hmRight(), T = HM.T, B = HM.B, plotW = W-L-Rr;
+  const cv = chart.view(); let x0, x1;
+  if(cv){ x0 = cv.x0; x1 = cv.x1; } else { x0 = g.t[0]-dur; x1 = g.t[g.t.length-1]; }
+  if(state.range[0]!==null) x0 = state.range[0]; if(state.range[1]!==null) x1 = state.range[1];
+  const nb = Math.max(1, Math.floor(plotW/HM.BUCKET_PX)), bwPx = plotW/nb, span = x1-x0, bwT = span/nb;
+  const rowH = Math.min(HM.ROW_MAX, Math.max(HM.ROW_MIN, Math.floor(HM.H_MAX/n))), plotH = Math.min(HM.H_MAX, Math.max(HM.H_MIN, n*rowH)), rp = plotH/n;
+  const H = T+plotH+B+HM.LEG; svg.setAttribute('viewBox', '0 0 '+W+' '+H); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'CPU per core heatmap, '+HM_SRC[src][0]+(label?', '+label:''));
+  const el = (nm, a, par) => { const e = document.createElementNS(NS, nm); for(const k in a) e.setAttribute(k, a[k]); (par||svg).appendChild(e); return e; };
+  const txt = (a, t) => { const e = el('text', a); e.textContent = t; return e; };
+  el('rect', {x:L, y:T, width:plotW, height:plotH, fill:'#eef1f4'});
+  if(!(span>0)){ txt({x:W/2, y:T+plotH/2, 'text-anchor':'middle', fill:'#5d6b7a'}, 'No data to display'); return; }
+  const cells = hmBucket(g, dur, x0, x1, nb), peaks = hmPeaks(g, dur, x0, x1);
+  cells.forEach((row, k)=>{
+    const y = T+k*rp; let i = 0;
+    while(i<nb){
+      const v = row[i]; if(v===null){ i++; continue; }
+      let j = i; while(j+1<nb && row[j+1]===v) j++;
+      const hot = thr!==null && v>=thr, x = L+i*bwPx, w = (j-i+1)*bwPx;
+      if(hot) el('rect', {x:x+.5, y:y+.5, width:Math.max(.5,w-1), height:Math.max(.5,rp-1), fill:dphHeat(v), stroke:'#1c2530', 'stroke-width':1});
+      else el('rect', {x:x, y:y, width:w, height:rp+.3, fill:dphHeat(v)});
+      i = j+1;
+    }
+  });
+  // core labels (every one when the rows are tall enough, else every k-th) and the peak column
+  const step = rp>=10 ? 1 : Math.ceil(10/rp), fs = Math.max(8, Math.min(11, rp-1));
+  for(let k=0;k<n;k++){
+    const yc = T+(k+.5)*rp+fs*.35;
+    if(k%step===0) txt({x:L-6, y:yc, 'text-anchor':'end', 'font-size':fs, fill:'#5d6b7a'}, 'core '+ids[k]);
+    const pv = peaks[k]; if(!isNum(pv)) continue;
+    const px = W-Rr+4;
+    el('rect', {x:px, y:T+k*rp, width:HM.PK-8, height:rp+.3, fill:dphHeat(pv)});
+    if(rp>=8) txt({x:px+(HM.PK-8)/2, y:yc, 'text-anchor':'middle', 'font-size':fs, fill:pv>=55?'#fff':'#1c2530'}, pv);
   }
+  txt({x:W-Rr+4+(HM.PK-8)/2, y:T-2, 'text-anchor':'middle', 'font-size':10, fill:'#5d6b7a'}, 'peak');
+  // time axis, same ticks as the line charts
+  const multi = span>86400000;
+  for(let i=0;i<=6;i++){
+    const t = x0+span*i/6, x = L+(t-x0)/span*plotW, d = new Date(t);
+    const lab = multi ? pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate())+' '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes()) : pad(d.getUTCHours())+':'+pad(d.getUTCMinutes());
+    el('line', {x1:x, x2:x, y1:T+plotH, y2:T+plotH+4, stroke:'#5d6b7a'});
+    txt({x:x, y:T+plotH+17, 'text-anchor':i===0?'start':i===6?'end':'middle', 'font-size':11, fill:'#5d6b7a'}, lab);
+  }
+  el('line', {x1:L, x2:L+plotW, y1:T+plotH, y2:T+plotH, stroke:'#5d6b7a'});
+  // colour legend: 0..100 %, no data, marker of the limit
+  const ly = T+plotH+B+4, gid = 'hmg'+Math.random().toString(36).slice(2, 8), defs = el('defs', {}), lg = el('linearGradient', {id:gid, x1:0, x2:1, y1:0, y2:0}, defs);
+  el('stop', {offset:0, 'stop-color':dphHeat(0)}, lg); el('stop', {offset:1, 'stop-color':dphHeat(100)}, lg);
+  txt({x:L, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, '0%'); el('rect', {x:L+26, y:ly, width:140, height:11, fill:'url(#'+gid+')', stroke:'#d8dde3'}); txt({x:L+172, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, '100%');
+  el('rect', {x:L+226, y:ly, width:14, height:11, fill:'#eef1f4', stroke:'#d8dde3'}); txt({x:L+246, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'no data');
+  if(thr!==null){ el('rect', {x:L+316, y:ly+.5, width:14, height:10, fill:dphHeat(thr), stroke:'#1c2530', 'stroke-width':1}); txt({x:L+336, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'at or above '+thr+'%'); }
+  txt({x:L+(thr!==null?470:316), y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'Each pixel column shows the maximum of the cells in it. '+HM_SRC[src][0]+'.');
+  // hover and drag-to-zoom, as in the line charts
+  const sel = el('rect', {y:T, height:plotH, fill:'rgba(31,111,139,.15)', stroke:'#1f6f8b', display:'none'});
+  const cur = el('line', {y1:T, y2:T+plotH, stroke:'#8a95a1', 'stroke-dasharray':'3 3', display:'none'});
+  const hit = el('rect', {x:L, y:T, width:plotW, height:plotH, fill:'transparent'});
+  const pos = e => { const r = svg.getBoundingClientRect(); return [(e.clientX-r.left)*W/r.width, (e.clientY-r.top)*H/r.height, r]; };
+  const tOf = x => x0+(x-L)/plotW*span;
+  let drag = null;
+  hit.onpointerdown = e => { drag = pos(e)[0]; hit.setPointerCapture(e.pointerId); };
+  hit.onpointermove = e => {
+    const [x, y, r] = pos(e);
+    if(drag!==null){ sel.setAttribute('display', ''); sel.setAttribute('x', Math.min(drag, x)); sel.setAttribute('width', Math.abs(x-drag)); tip.style.display = 'none'; return; }
+    const i = Math.min(nb-1, Math.max(0, Math.floor((x-L)/bwPx))), k = Math.min(n-1, Math.max(0, Math.floor((y-T)/rp))), v = cells[k][i];
+    const bs = Math.round(x0+i*bwT), be = Math.round(x0+(i+1)*bwT), cx = L+(i+.5)*bwPx;
+    cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.setAttribute('display', '');
+    tip.innerHTML = '<div>core '+ids[k]+'</div><div>'+iso(bs)+' - '+iso(be)+' UTC</div><div>'+(v===null ? 'no data' : 'max '+v+'%')+'</div><div>'+HM_SRC[src][0]+(label?' | '+label:'')+'</div>';
+    tip.style.display = 'block'; let left = (cx/W)*r.width+12; if(left>r.width-230) left -= 250;
+    tip.style.left = left+'px'; tip.style.top = Math.max(0, (y/H)*r.height+8)+'px';
+  };
+  hit.onpointerleave = () => { if(drag===null){ tip.style.display = 'none'; cur.setAttribute('display', 'none'); } };
+  hit.onpointerup = e => {
+    if(drag===null) return; const x = pos(e)[0], a = drag; drag = null;
+    if(Math.abs(x-a)>6) setRange(Math.round(tOf(Math.min(a, x))), Math.round(tOf(Math.max(a, x)))); else sel.setAttribute('display', 'none');
+  };
+  hit.ondblclick = () => setRange(null, null);
 }
 // Peak value and core of one flat table (the first core, by number, on a tie).
 function flatPeak(flat, ids){
@@ -1409,12 +1489,7 @@ function buildCap(host, dp, c){
   capTable(host, 'Per-minute CPU maximum (%)', nM, d.cmm[c], ids, tc, false, th.core_peak_minute_warn);
   capTable(host, 'Per-minute CPU average (%)', nM, d.cma[c], ids, tc, false, null);
 }
-function renderCoreTable(){
-  const sec = $('#pcsec'), dps = pcDps();
-  sec.style.display = dps.length ? '' : 'none';
-  if(!dps.length) return;
-  const host = $('#dphcores'); host.replaceChildren();
-  dps.forEach(dp=>renderCorePeaks(host, dp, dps.length>1 ? 'DP '+dp : ''));
+function renderCoreList(dps){
   const th = DH.thresholds, items = [];
   dps.forEach(dp=>{
     const d = HD.by_dp[dp], ids = DH.cores[dp].ids, ts = DH.series[dp].t;
@@ -1427,7 +1502,6 @@ function renderCoreTable(){
     });
   });
   items.sort((a,b)=>a.t-b.t || (a.dp<b.dp?-1:1));
-  $('#pcinfo').textContent = 'Peak over the captures in the selected range and DP. Times of the peaks are reconstructed from the capture time (see Help).';
   $('#pccount').textContent = items.length+' capture(s)';
   const list = $('#pclist'); list.replaceChildren();
   const lim = pcState.all ? items.length : 300;
@@ -1448,8 +1522,24 @@ function renderCoreTable(){
     if(pcState.open.has(key)) det.open = true;
   });
   const m = $('#pcmore'); m.textContent = '';
-  if(items.length>lim){ m.textContent = 'Showing the first '+lim+' captures. '; const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = 'Show all'; bt.onclick = ()=>{ pcState.all = true; renderCoreTable(); }; m.appendChild(bt); }
+  if(items.length>lim){ m.textContent = 'Showing the first '+lim+' captures. '; const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = 'Show all'; bt.onclick = ()=>{ pcState.all = true; renderCoreList(dps); }; m.appendChild(bt); }
 }
+function renderCoreTable(){
+  const sec = $('#pcsec'), dps = pcDps();
+  sec.style.display = dps.length ? '' : 'none';
+  if(!dps.length) return;
+  const srcs = hmSources(dps), sel = $('#hmsrc');
+  sel.replaceChildren();
+  srcs.forEach(g=>{ const o = document.createElement('option'); o.value = g; o.textContent = HM_SRC[g][0]; sel.appendChild(o); });
+  if(!srcs.includes(hmState.src)) hmState.src = srcs[0] || 'mm';
+  sel.value = hmState.src;
+  const host = $('#dphcores'); host.replaceChildren();
+  $('#pcinfo').textContent = srcs.length ? 'Core by time. Drag to zoom (shared with the chart above), double-click to reset. Times are reconstructed from the capture time (see Help).' : 'No CPU per core table in the selected DP.';
+  if(srcs.length) dps.forEach(dp=>drawHeat(host, dp, hmState.src, dps.length>1 ? 'DP '+dp : ''));
+  if($('#pcraw').open) renderCoreList(dps);
+}
+$('#hmsrc').onchange = ()=>{ hmState.src = $('#hmsrc').value; renderCoreTable(); };
+$('#pcraw').addEventListener('toggle', ()=>{ if($('#pcraw').open && HD) renderCoreList(pcDps()); });
 $('#pchot').onchange = ()=>{ pcState.hot = $('#pchot').checked; pcState.all = false; renderCoreTable(); };
 
 '''

@@ -93,7 +93,17 @@ missing value is `null` and a missing table is `null`. The pure helpers (`second
 `minuteGrid`, `gridMax`, `mergeMax`, `sessionSeries`, `dphAvail`, between the
 `DPH-HELPERS-BEGIN`/`END` markers) are tested with node in `tests/test_tsf_charts.py`.
 
-**CPU peak per core** (below the chart): the compact 16-core blocks of peak values for the
-captures in the zoom range and the DP filter, then one collapsible row per capture. The
-expanded content (per-second table, per-minute max and average tables, with their
-reconstructed UTC times) is built on first expansion.
+**CPU per core heatmap** (below the chart, `drawHeat` in `JS_PERCORE`): one SVG per DP in the
+DP filter, core on the vertical axis and time on the horizontal axis, with the left and right
+margins of the line charts (the throughput chart takes the same right margin while the heatmap
+is shown) and the x range of the throughput chart (the zoom range, else its full extent), so
+the two line up. The `Source` select picks a grid of `coreGrid`: per-minute max (`mm`, default),
+per-minute average (`ma`) or per-second (`s`); only sources with data are listed. The range is
+split into buckets of 2 px; `hmBucket` (a pure helper, tested with node) puts in each bucket
+the maximum of the cells that overlap it, a cell lasting 60 s or 1 s filling every bucket it
+covers, and a bucket with no cell stays empty (never 0). Cells at or above
+`core_peak_minute_warn` (per-minute max) or `core_peak_warn` (per-second) get a dark outline.
+The right column is the per-core peak in the visible range (`hmPeaks`). Row height is
+6-16 px, plot height 160-520 px. Drag selects a range like the line charts; double-click resets.
+The previous per-capture rows (per-second, per-minute max and average tables with their
+reconstructed UTC times, built on first expansion) are in the collapsed `Raw tables per capture`.

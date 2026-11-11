@@ -199,6 +199,30 @@ def test_packet_metric_lists_only_the_kinds_with_data():
     assert len(js('PKT_KINDS')) == 4 and len({k[2] for k in js('PKT_KINDS')}) == 4     # distinct colours
 
 
+def test_heatmap_buckets_take_the_maximum_and_keep_gaps_empty():
+    # two cores, three per-minute cells ending at 60 s, 120 s and 360 s; range 0..360 s in 6 buckets of 60 s
+    g = '{t:[60000,120000,360000],cols:[[10,30,50],[null,5,null]]}'
+    out = js(f'hmBucket({g},60000,0,360000,6)')
+    assert out[0] == [10, 30, None, None, None, 50]            # a minute with no cell stays empty, never 0
+    assert out[1] == [None, 5, None, None, None, None]
+    # coarser buckets: the maximum of the cells in a bucket; a cell longer than a bucket fills all of them
+    assert js(f'hmBucket({g},60000,0,360000,3)')[0] == [30, None, 50]
+    assert js(f'hmBucket({g},60000,0,360000,12)')[0] == [10, 10, 30, 30, None, None, None, None, None, None, 50, 50]
+    # a cell that straddles the start of the range, and cells outside the range are ignored
+    assert js(f'hmBucket({g},60000,90000,150000,2)')[0] == [30, None]
+    assert js(f'hmBucket({g},60000,400000,500000,4)')[0] == [None] * 4
+    # per-second cells (1 s) on a 6 s range: one bucket per second
+    assert js('hmBucket({t:[2000,3000],cols:[[7,9]]},1000,0,6000,6)')[0] == [None, 7, 9, None, None, None]
+    assert js(f'hmBucket({g},60000,5,5,4)')[0] == [None] * 4   # empty range
+
+
+def test_heatmap_peaks_use_the_cells_in_the_range():
+    g = '{t:[60000,120000,360000],cols:[[10,30,50],[null,5,null]]}'
+    assert js(f'hmPeaks({g},60000,0,360000)') == [50, 5]
+    assert js(f'hmPeaks({g},60000,0,130000)') == [30, 5]
+    assert js(f'hmPeaks({g},60000,200000,300000)') == [None, None]
+
+
 def test_chart_help_mentions_the_reconstruction_and_the_new_metrics():
     txt = SECTION_HELP['chart']
     for needle in ('Reconstructed timestamps', 'newest first', 'inferred', 'most recent capture',
