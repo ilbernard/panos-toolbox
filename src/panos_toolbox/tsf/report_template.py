@@ -970,7 +970,8 @@ const DPH_SERIES = [
   {k:'sess', name:'Session utilization', color:'#1f6f8b', w:1.8},
   {k:'pb_avg', name:'Packet buffer (avg)', color:'#2f855a', w:1.4},
   {k:'pb_max', name:'Packet buffer (max)', color:'#c2410c', w:1.4},
-  {k:'core_max', name:'Busiest core', color:'#7c3aed', w:1.4}
+  {k:'core_max', name:'Busiest core (per-second)', color:'#7c3aed', w:1.4},
+  {k:'core_m_max', name:'Busiest core (per-minute max)', color:'#0e7490', w:1.4}
 ];
 const dphChart = hasDph ? makeChart($('#dphchart'), $('#dphtip'), $('#dphwrap')) : null;
 let DPH_T0 = 0, DPH_T1 = 0;
@@ -992,7 +993,7 @@ function renderDphStatic(){
   if(DH.warnings.length){ $('#dphwarn').style.display=''; $('#dphwarnsum').textContent = DH.warnings.length+' note(s)'; DH.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#dphwarnlist').appendChild(li); }); }
   const onchip = DH.dps.some(d=>DH.summary[d].pkt_desc_onchip.n>0);
   const metrics = [['session','Session util'],['pkt_buffer','Packet buffer'],['pkt_desc','Packet descriptor']]
-    .concat(onchip?[['pkt_desc_onchip','Pkt desc on-chip']]:[], [['core','Busiest core']]);
+    .concat(onchip?[['pkt_desc_onchip','Pkt desc on-chip']]:[], [['core','Busiest core (per-second)'],['core_minute','Busiest core (per-minute max)']]);
   const t = $('#dphsum'); t.replaceChildren();
   const h1 = t.createTHead().insertRow();
   ['DP','Samples','Period (UTC)'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; th.rowSpan=2; h1.appendChild(th); });
@@ -1006,8 +1007,8 @@ function renderDphStatic(){
     r.insertCell().textContent = iso(ts[0])+' - '+iso(ts[ts.length-1]);
     metrics.forEach(m=>{
       const x = S[m[0]];
-      const core = m[0]==='core';
-      r.insertCell().textContent = x.last===null ? '' : x.last+'%'+(core && S.core.last_core!==null ? ' (core '+S.core.last_core+')' : '');
+      const core = m[0]==='core' || m[0]==='core_minute';
+      r.insertCell().textContent = x.last===null ? '' : x.last+'%'+(core && x.last_core!==null ? ' (core '+x.last_core+')' : '');
       r.insertCell().textContent = x.peak===null ? '' : x.peak+'% @ '+iso(x.peak_t)+(core && x.peak_core!==null ? ' (core '+x.peak_core+')' : '');
     });
     const lv = dphWorst(dp); if(lv) r.className = 'anom-'+lv;
@@ -1028,9 +1029,9 @@ function renderDphStatic(){
 function dphHeat(v){ return v===null||v===undefined ? '' : 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')'; }
 function renderDphCores(){
   const host = $('#dphcores'); host.replaceChildren();
-  const C = DH.cores[dphState.dp], warn = DH.thresholds.core_peak_warn;
+  const C = DH.cores[dphState.dp];
   if(!C.ids.length){ const p=document.createElement('p'); p.className='hint'; p.textContent='No CPU load per core was found for this DP.'; host.appendChild(p); return; }
-  const rows = [['Peak, per-second table', C.peak, true], ['Peak, per-minute max', C.peak_m, false]];
+  const rows = [['Peak, per-second table', C.peak, true, DH.thresholds.core_peak_warn], ['Peak, per-minute max', C.peak_m, false, DH.thresholds.core_peak_minute_warn]];
   for(let i=0;i<C.ids.length;i+=16){
     const t = document.createElement('table'); t.className = 'hm';
     const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = i===0 ? 'Core' : 'Core (cont.)';
@@ -1042,9 +1043,9 @@ function renderDphCores(){
         const td = r.insertCell(); td.textContent = v===null||v===undefined ? '' : v;
         if(v!==null&&v!==undefined){
           td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff';
-          if(v>=warn) td.classList.add('hot');
+          if(v>=rw[3]) td.classList.add('hot');
           if(rw[2]) td.title = 'Core '+C.ids[i+j]+': peak '+v+'% at '+iso(C.peak_t[i+j])+' UTC; last '+C.last[i+j]+'%';
-          else td.title = 'Core '+C.ids[i+j]+': highest per-minute maximum '+v+'%';
+          else td.title = 'Core '+C.ids[i+j]+': highest per-minute maximum '+v+'% in the 15 minutes before '+iso(C.peak_m_t[i+j])+' UTC; last '+C.last_m[i+j]+'%';
         }
       });
     });

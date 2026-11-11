@@ -49,8 +49,8 @@ def util(name, vals):
     return [f':{name}:', ':' + ''.join(f'{v:4d}' for v in vals) + ' ', ':']
 
 
-def res_block(*, sess=1, pb=4, pd=0, cores=4, cpu=1, spike=None, extra_s=None, extra_m=None,
-              dp_line=None):
+def res_block(*, sess=1, pb=4, pd=0, cores=4, cpu=1, spike=None, mspike=None, extra_s=None,
+              extra_m=None, dp_line=None):
     """One resource monitor block. sess/pb/pd are ints (15 equal values) or lists."""
     def v15(x):
         return list(x) if isinstance(x, (list, tuple)) else [x] * 15
@@ -71,6 +71,8 @@ def res_block(*, sess=1, pb=4, pd=0, cores=4, cpu=1, spike=None, extra_s=None, e
     out += util('packet descriptor', v15(pd))
     out += [':Resource monitoring statistics (per minute):', ':CPU load (%) during last 15 minutes: ']
     mrows = [[(cpu, cpu)] * cores for _ in range(15)]
+    if mspike:
+        mrows[3] = [(cpu, mspike[1]) if c == mspike[0] else (cpu, cpu) for c in range(cores)]
     out += extra_m if extra_m is not None else cpu_m(cols, mrows)
     out += [':Resource utilization (%) during last 15 minutes: ']
     out += util('session (average)', v15(sess)) + util('session (maximum)', v15(sess))
@@ -171,8 +173,9 @@ def test_asterisk_in_a_column_that_is_all_missing_still_gives_other_cores():
     rec = sample_of(store)
     assert rec['core_s'] == {} and rec['core_m'] != {}
     view = evaluate_dp_health(store)
-    # falls back to the per-minute maximum for the busiest core
-    assert view['series']['dp0']['core_max'] == [1]
+    # no fallback: the per-second series has no value, the per-minute one is separate
+    assert view['series']['dp0']['core_max'] == [None]
+    assert view['series']['dp0']['core_m_max'] == [1]
 
 
 def test_out_of_range_values_are_discarded_and_counted():
@@ -269,7 +272,8 @@ def test_fallback_to_session_table_utilization():
     ser = view['series']['dp0']
     assert ser['sess'] == [42] and ser['sess_src'] == ['tdp']
     assert any('Session table utilization' in x for x in view['warnings'])
-    assert any('no CPU load per core' in x for x in view['warnings'])
+    assert any('no per-second CPU load per core' in x for x in view['warnings'])
+    assert any('no per-minute CPU load per core' in x for x in view['warnings'])
     # Per-second block wins when it exists.
     lines = section('2026-10-27 08:20:20.485', [res_block(sess=[3] * 14 + [8])], [target('*.dp0', 42)])
     _n, store, _w = parse(lines)
@@ -344,6 +348,54 @@ def test_core_peak_names_every_hot_core():
     assert '0 (95%)' in fl['text'] and '2 (92%)' in fl['text'] and '1 (' not in fl['text']
 
 
+def test_core_peak_does_not_fall_back_to_the_per_minute_table():
+    rows = [['*', '*', '*', '*']] * 15            # no per-second value at all
+    block = res_block(extra_s=cpu_s(range(4), rows), mspike=(2, 97))
+    _n, store, _w = parse(section('2026-10-27 08:20:20.485', [block], [target()]))
+    v = evaluate_dp_health(store)
+    assert 'CORE_PEAK' not in codes(v) and 'CORE_PEAK_MINUTE' in codes(v)
+    assert v['summary']['dp0']['core']['peak'] is None
+    assert v['cores']['dp0']['peak'] == [None] * 4 and v['cores']['dp0']['peak_m'][2] == 97
+
+
+def test_per_minute_spike_raises_only_core_peak_minute():
+    v = view_for(('2026-10-27 08:20:20.485', {'cores': 6, 'mspike': (4, 93)}))
+    assert 'CORE_PEAK' not in codes(v)
+    fl = codes(v)['CORE_PEAK_MINUTE']
+    assert fl['level'] == 'warn' and fl['dp'] == 'dp0'
+    assert 'core 4' in fl['text'] and '93%' in fl['text']
+    assert 'in the 15 minutes before 2026-10-27 07:20:20 UTC' in fl['text']
+    assert '1 of 1 samples had a core at or above 90%' in fl['text']
+    s = v['summary']['dp0']['core_minute']
+    assert (s['peak'], s['peak_core'], s['last'], s['last_core'], s['over']) == (93, 4, 93, 4, 1)
+
+
+@pytest.mark.parametrize('peak,expected', [(89, None), (90, 'warn'), (100, 'warn')])
+def test_core_peak_minute_levels(peak, expected):
+    v = view_for(('2026-10-27 08:20:20.485', {'cores': 6, 'mspike': (4, peak)}))
+    fl = codes(v).get('CORE_PEAK_MINUTE')
+    assert (fl['level'] if fl else None) == expected
+
+
+def test_core_peak_minute_peak_versus_last_and_count():
+    v = view_for(('2026-10-27 08:20:20.485', {'mspike': (1, 95)}),
+                 ('2026-10-27 08:30:20.485', {'mspike': (2, 91)}),
+                 ('2026-10-27 08:40:20.485', {}))
+    fl = codes(v)['CORE_PEAK_MINUTE']
+    assert 'core 1 reached a per-minute maximum of 95%' in fl['text']
+    assert 'last sample: 0 at 1%' in fl['text'] and '2 of 3 samples' in fl['text']
+    assert '1 (95%)' in fl['text'] and '2 (91%)' in fl['text']
+
+
+def test_core_peak_minute_threshold_override():
+    v = view_for(('2026-10-27 08:20:20.485', {'mspike': (1, 60)}),
+                 thresholds={'core_peak_minute_warn': 55})
+    assert 'CORE_PEAK_MINUTE' in codes(v) and 'CORE_PEAK' not in codes(v)
+    v = view_for(('2026-10-27 08:20:20.485', {'mspike': (1, 60), 'spike': (1, 60)}),
+                 thresholds={'core_peak_warn': 55})
+    assert 'CORE_PEAK' in codes(v) and 'CORE_PEAK_MINUTE' not in codes(v)
+
+
 def test_no_flags_on_a_healthy_device():
     v = view_for(('2026-10-27 08:20:20.485', {}))
     assert v['findings'] == [] and v['n_samples'] == 1
@@ -391,7 +443,7 @@ def test_thresholds_override_and_unknown_key():
 def test_defaults():
     assert DP_THRESHOLDS == {'session_util_warn': 70, 'session_util_crit': 90,
                              'pkt_buffer_warn': 50, 'pkt_buffer_crit': 80,
-                             'core_peak_warn': 90}
+                             'core_peak_warn': 90, 'core_peak_minute_warn': 90}
 
 
 def test_view_is_json_serializable_and_works_with_findings():
@@ -400,7 +452,7 @@ def test_view_is_json_serializable_and_works_with_findings():
     view = evaluate_dp_health(store)
     json.dumps(view)
     fs = findings.from_flags(view['findings'], scope='dp0')
-    assert {f.code for f in fs} == {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK'}
+    assert {f.code for f in fs} == {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK', 'CORE_PEAK_MINUTE'}
     assert {f.level for f in fs} == {findings.WARNING}
     assert set(view) >= {'thresholds', 'dps', 'series', 'summary', 'cores', 'findings',
                          'discarded', 'warnings', 'n_samples'}
@@ -470,7 +522,7 @@ def test_render_report_contains_the_tab_and_help(tmp_path):
     assert '__HB_' not in out and '__HP_' not in out
     data = report_data(out)
     assert data['dph']['dps'] == ['dp0'] and data['dph']['n_samples'] == 2
-    assert {f['code'] for f in data['dph']['findings']} == {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK'}
+    assert {f['code'] for f in data['dph']['findings']} == {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK', 'CORE_PEAK_MINUTE'}
     for code in dp_health.FLAG_CODES:
         assert f'<code>{code}</code>' in out
     assert 'session_util_warn = 70%' in out
@@ -490,6 +542,15 @@ def test_cli_thresholds_reach_the_view_and_the_help(tmp_path):
     assert 'SESSION_UTIL' not in {f['code'] for f in data['dph']['findings']}
     assert 'session_util_warn = 95%' in out and 'core_peak_warn = 50.5%' in out
     assert 'session_util_warn = 70%' not in out
+
+
+def test_cli_core_peak_minute_option_reaches_view_and_help(tmp_path):
+    out = run_main(tmp_path, '--dp-core-peak-minute-warn', '99')
+    data = report_data(out)
+    assert data['dph']['thresholds']['core_peak_minute_warn'] == 99
+    assert 'CORE_PEAK_MINUTE' not in {f['code'] for f in data['dph']['findings']}
+    assert 'core_peak_minute_warn = 99%' in out and 'core_peak_minute_warn = 90%' not in out
+    assert '<code>CORE_PEAK_MINUTE</code>' in out
 
 
 def test_cli_rejects_negative_dp_threshold(tmp_path):
