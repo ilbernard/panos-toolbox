@@ -49,3 +49,5 @@ class Collected:
     # Conflicting duplicate samples (dp, t, kept_src, dropped_src), first one kept.
     conflicts: list = field(default_factory=list)
     status: str = 'complete'                             # findings.analysis_status()
+    # dp_health.new_store() filled by the panio resource-monitor parser, or None.
+    dp_health: dict[str, Any] | None = None
