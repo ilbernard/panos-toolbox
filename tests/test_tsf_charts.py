@@ -181,13 +181,46 @@ def test_grid_max_merge_max_and_session_series():
 def test_metric_list_contains_only_present_metrics():
     full = ('{by_dp:{dp0:{us:{sess:[[1]],pb:[[1]],pd:[[1]],pdc:[[1]]},um:{pb_avg:[[1]]},cs:[[1]],cma:[[1]],cmm:[[1]]}}}')
     assert js(f'dphAvail({full},["dp0"])') == [
-        'util', 'hpb_avg', 'hpb_max', 'hpd_max', 'hpdc_max', 'hcore_s', 'pc_s', 'hcore_mm', 'pc_mm', 'pc_ma']
+        'util', 'hpkt', 'hcore_s', 'pc_s', 'hcore_mm', 'pc_mm', 'pc_ma']
     # no on-chip descriptors, no per-minute average, no per-second CPU table
     part = '{by_dp:{dp0:{us:{sess:[[1]],pb:[[1]],pd:[[1]]},um:{},cs:[null],cma:[null],cmm:[[1]]}}}'
-    assert js(f'dphAvail({part},["dp0"])') == ['util', 'hpb_max', 'hpd_max', 'hcore_mm', 'pc_mm']
+    assert js(f'dphAvail({part},["dp0"])') == ['util', 'hpkt', 'hcore_mm', 'pc_mm']
+    # any single kind is enough, and the combined metric is listed once
+    assert js('dphAvail({by_dp:{dp0:{us:{},um:{pb_avg:[[3]]},cs:[],cma:[],cmm:[]},dp1:{us:{pdc:[[2]]},um:{},cs:[],cma:[],cmm:[]}}},["dp0","dp1"])') == ['hpkt']
     # all-missing values do not count as present
     assert js('dphAvail({by_dp:{dp0:{us:{pb:[[null,null]]},um:{},cs:[[null]],cma:[],cmm:[]}}},["dp0"])') == []
     assert js('dphAvail({by_dp:{}},["dp0"])') == []
+
+
+def test_packet_metric_lists_only_the_kinds_with_data():
+    got = js('pktKinds(m=>({hpb_avg:[{t:1,v:null}], hpb_max:[{t:1,v:5},{t:2,v:null}], hpd_max:[], hpdc_max:[{t:1,v:0}]})[m]).map(k=>[k[0],k[1]])')
+    assert got == [['hpb_max', 'Packet buffer (max)'], ['hpdc_max', 'Packet descriptor on-chip (max)']]
+    assert js('pktKinds(m=>[])') == []
+    assert len(js('PKT_KINDS')) == 4 and len({k[2] for k in js('PKT_KINDS')}) == 4     # distinct colours
+
+
+def test_heatmap_buckets_take_the_maximum_and_keep_gaps_empty():
+    # two cores, three per-minute cells ending at 60 s, 120 s and 360 s; range 0..360 s in 6 buckets of 60 s
+    g = '{t:[60000,120000,360000],cols:[[10,30,50],[null,5,null]]}'
+    out = js(f'hmBucket({g},60000,0,360000,6)')
+    assert out[0] == [10, 30, None, None, None, 50]            # a minute with no cell stays empty, never 0
+    assert out[1] == [None, 5, None, None, None, None]
+    # coarser buckets: the maximum of the cells in a bucket; a cell longer than a bucket fills all of them
+    assert js(f'hmBucket({g},60000,0,360000,3)')[0] == [30, None, 50]
+    assert js(f'hmBucket({g},60000,0,360000,12)')[0] == [10, 10, 30, 30, None, None, None, None, None, None, 50, 50]
+    # a cell that straddles the start of the range, and cells outside the range are ignored
+    assert js(f'hmBucket({g},60000,90000,150000,2)')[0] == [30, None]
+    assert js(f'hmBucket({g},60000,400000,500000,4)')[0] == [None] * 4
+    # per-second cells (1 s) on a 6 s range: one bucket per second
+    assert js('hmBucket({t:[2000,3000],cols:[[7,9]]},1000,0,6000,6)')[0] == [None, 7, 9, None, None, None]
+    assert js(f'hmBucket({g},60000,5,5,4)')[0] == [None] * 4   # empty range
+
+
+def test_heatmap_peaks_use_the_cells_in_the_range():
+    g = '{t:[60000,120000,360000],cols:[[10,30,50],[null,5,null]]}'
+    assert js(f'hmPeaks({g},60000,0,360000)') == [50, 5]
+    assert js(f'hmPeaks({g},60000,0,130000)') == [30, 5]
+    assert js(f'hmPeaks({g},60000,200000,300000)') == [None, None]
 
 
 def test_chart_help_mentions_the_reconstruction_and_the_new_metrics():

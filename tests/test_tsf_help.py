@@ -57,10 +57,22 @@ def test_render_help_includes_live_thresholds_and_escapes():
     assert '&lt;script&gt;x&lt;/script&gt;' in hostile
 
 
-def test_template_is_fluid_with_1900_minimum_width():
+def test_template_is_fluid_with_1200_minimum_width():
     tpl = report_template.TEMPLATE
-    assert 'min-width:1900px' in tpl
+    assert 'min-width:1200px' in tpl
+    assert 'min-width:1900px' not in tpl
+    assert '.panel{border-top-left-radius:0;overflow-x:auto}' in tpl
     assert 'max-width:1280px' not in tpl
+
+
+def test_tabs_have_a_normal_and_an_advanced_view():
+    tpl = report_template.TEMPLATE
+    assert '<label class="advtoggle" id="advwrap"' in tpl and 'id="advanced"' in tpl
+    assert '.advtoggle{margin-left:auto' in tpl
+    assert "NORMAL_TABS=['chart','sys','mp']" in tpl
+    assert "'panosToolbox.tsfReport.advanced'" in tpl
+    assert 'try{ return localStorage.getItem' in tpl and 'try{ localStorage.setItem' in tpl
+    assert 'Normal and Advanced view' in SECTION_HELP['chart']
 
 
 def test_render_help_rejects_unknown_threshold():

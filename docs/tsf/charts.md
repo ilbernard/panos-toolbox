@@ -58,9 +58,10 @@ into the Dataplane Throughput tab. That tab keeps the Metric selector, the serie
 (legend checkboxes), the zoomable chart, the stats table and the samples table; the
 Dataplane health tab keeps only the per-DP summary and the findings.
 
-**New Metric entries** (listed only when the data has them): Packet buffer (avg) (the
-per-minute average), Packet buffer (max), Packet descriptor (max), Packet descriptor
-on-chip (max) (per-second values), Busiest core (per-second), Busiest core (per-minute
+**New Metric entries** (listed only when the data has them): Packet buffer & descriptors
+(one chart for one DP, one line per kind that has data: Packet buffer (avg), the per-minute
+average, Packet buffer (max), Packet descriptor (max), Packet descriptor on-chip (max),
+the per-second values; internal metric key `hpkt`, `PKT_KINDS`), Busiest core (per-second), Busiest core (per-minute
 max), and CPU per core (per-second / per-minute max / per-minute avg), one series per core
 of a DP chosen in a DP selector, with All/None legend buttons. Session table utilization
 stays one entry: the per-second `session` value of the resource monitor when the capture
@@ -92,7 +93,33 @@ missing value is `null` and a missing table is `null`. The pure helpers (`second
 `minuteGrid`, `gridMax`, `mergeMax`, `sessionSeries`, `dphAvail`, between the
 `DPH-HELPERS-BEGIN`/`END` markers) are tested with node in `tests/test_tsf_charts.py`.
 
-**CPU peak per core** (below the chart): the compact 16-core blocks of peak values for the
-captures in the zoom range and the DP filter, then one collapsible row per capture. The
-expanded content (per-second table, per-minute max and average tables, with their
-reconstructed UTC times) is built on first expansion.
+**CPU per core heatmap** (below the chart, `drawHeat` in `JS_PERCORE`): one SVG per DP in the
+DP filter, core on the vertical axis and time on the horizontal axis, with the left and right
+margins of the line charts (the throughput chart takes the same right margin while the heatmap
+is shown) and the x range of the throughput chart (the zoom range, else its full extent), so
+the two line up. The `Source` select picks a grid of `coreGrid`: per-minute max (`mm`, default),
+per-minute average (`ma`) or per-second (`s`); only sources with data are listed. The range is
+split into buckets of 2 px; `hmBucket` (a pure helper, tested with node) puts in each bucket
+the maximum of the cells that overlap it, a cell lasting 60 s or 1 s filling every bucket it
+covers, and a bucket with no cell stays empty (never 0). Cells at or above
+`core_peak_minute_warn` (per-minute max) or `core_peak_warn` (per-second) get a dark outline.
+The right column is the per-core peak in the visible range (`hmPeaks`). Row height is
+6-16 px, plot height 160-520 px. Drag selects a range like the line charts; double-click resets.
+The previous per-capture rows (per-second, per-minute max and average tables with their
+reconstructed UTC times, built on first expansion) are in the collapsed `Raw tables per capture`.
+
+## Layout and tab views
+
+**Responsive layout.** The page is fluid from 1200 CSS px (`body{min-width:1200px}`; a 1920x1080
+screen at 125% Windows scaling is about 1536 px) and its main column is capped at 3200 px.
+`.panel` has `overflow-x:auto` and the `.scroll` boxes scroll on their own, so wide tables
+(`white-space:nowrap`) scroll inside their panel and never the whole page. The charts take the
+width of their container (at least 480 px).
+
+**Normal and Advanced view.** The tab bar shows the Dataplane Throughput, System health and
+Management plane tabs by default (`NORMAL_TABS` in `JS_TABS`). The `Advanced` checkbox at the
+right end of the bar shows the other tabs; the choice is kept in `localStorage`
+(`panosToolbox.tsfReport.advanced`, wrapped in try/catch because file:// or private mode can
+throw). A report with no normal tab shows the advanced ones with the box ticked and disabled.
+When the active tab gets hidden the first visible tab is opened, and the arrow keys cycle only
+the visible tabs.
