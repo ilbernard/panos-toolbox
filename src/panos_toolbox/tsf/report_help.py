@@ -61,6 +61,7 @@ tables sit side by side. Below 1900 px wide the page scrolls horizontally.</p>
 <p><b>Time zone.</b> All dp-monitor timestamps are converted to UTC. The original firewall
 offsets are listed in the note above the tabs. The POW "Collected at" line is the raw
 <code>show clock</code> string from the firewall and is not converted.</p>
+<p><b>Long series, gaps and missing values.</b> When a series has far more samples than the chart has pixels, it is drawn reduced: the visible range is split into blocks of about 2 pixels and, for each block, only the lowest and the highest sample are kept (plus the first and the last), so short peaks stay visible at wide zoom; zooming in re-reduces only the range shown. Hover, the stats table and the data table always use the real samples, never the reduced ones. The line is <b>broken</b> (not joined) between two consecutive samples that are further apart than 3 times the median interval of the series, but never for a distance of 60 s or less and always for a distance above 6 hours (for example between rotated files or around a reboot). A missing value is drawn as a gap, never as 0; a sample with no neighbour on either side is drawn as a dot.</p>
 """,
     'table': """
 <ul>
@@ -86,6 +87,7 @@ and <b>None</b> (hide every workgroup), to change them.</li>
 as in the throughput chart.</li>
 </ul>
 <p>Hover or focus a group name in the legend for its description when it is a known dataplane group.</p>
+<p><b>Reduction, gaps and missing values.</b> A long series is drawn reduced to the lowest and highest sample of each block of about 2 pixels (plus the first and last), so peaks stay visible; the stats table and the hover use the real samples. The line is broken between samples further apart than 3 times the median interval (never under 60 s, always over 6 hours), and a missing value is a gap, never 0.</p>
 """,
     'pow': """
 <p>Built from the <code>tmp/cli/*.txt</code> files of the TSF that contain <code>debug dataplane pow performance</code> output (recognised by content), or from a plain text file with that output.</p>
@@ -400,6 +402,7 @@ row sums each core.</p>
 <li>Each point is one <code>panio</code> section, about 10 minutes apart: between two points nothing is known, so a short peak can fall between samples.</li>
 <li>The vertical axis runs from 0 to 100 percent. Zoom (drag across the chart), <b>Reset zoom</b> and the stats table work as in the throughput chart. Hover for the values at the nearest sample.</li>
 </ul>
+<p><b>Reduction, gaps and missing values.</b> A long series is drawn reduced to the lowest and highest sample of each block of about 2 pixels (plus the first and last), so peaks stay visible; the stats table and the hover use the real samples. The line is broken between samples further apart than 3 times the median interval (never under 60 s, always over 6 hours), and a missing value is a gap, never 0.</p>
 """,
     'dphcores': """
 <p>One cell per core of the selected DP, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the whole period (the maximum of the 15 values of every sample), and the highest per-minute maximum. The colour goes from white (idle) to red (100%). A bold border marks a cell at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) in the first row and <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) in the second. Hover a cell for the UTC time of the peak and the last value.</p>
@@ -436,6 +439,7 @@ row sums each core.</p>
 <li>The vertical axis runs from 0 to 100 percent. Zoom (drag across the chart), <b>Reset zoom</b> and the stats table work as in the throughput chart. The stats table lists, for each line, the samples, the minimum, the average, the maximum and its UTC time. Hover for the values at the nearest sample.</li>
 <li>A steadily rising line over days points to a leak; saw-tooth patterns that drop at the same time are usually a restart of a daemon or a reboot.</li>
 </ul>
+<p><b>Reduction, gaps and missing values.</b> A long series is drawn reduced to the lowest and highest sample of each block of about 2 pixels (plus the first and last), so peaks stay visible; the stats table and the hover use the real samples. The line is broken between samples further apart than 3 times the median interval (never under 60 s, always over 6 hours), and a missing value is a gap, never 0.</p>
 """,
     'mpprocs': """
 <p>One row per process name. <b>Show</b> selects the rows: the processes with a <code>PROC_CPU</code> flag, the top 10 by peak CPU, by peak <code>Res+Swap</code> or by growth, or all of them. The table can be collapsed. Workers and short-lived commands are listed too and marked "not flagged". Names that embed the parent PID, such as <code>httpd(ppid:6709)</code>, are grouped as <code>httpd(ppid:*)</code>: per sample the highest CPU and the sum of <code>Res+Swap</code> of those children are used.</p>

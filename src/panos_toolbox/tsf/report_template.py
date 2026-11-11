@@ -420,6 +420,66 @@ $('#utc').textContent = 'Reminder: all times in this report are in UTC. The orig
 $('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
 
+// CHART-HELPERS-BEGIN
+// Chart point reduction and gap breaking (see docs/tsf/charts.md). Pure functions, no DOM.
+// Tunables:
+//  CH.REDUCE_FACTOR   reduce a series only when it has more than this many points per plot pixel
+//  CH.PX_PER_BLOCK    width in plot pixels of one reduction block (one min and one max point each)
+//  CH.GAP_FACTOR      a line is broken when two consecutive samples are further apart than this many median intervals...
+//  CH.GAP_MIN_MS      ...but never for a distance up to this value (60 s)...
+//  CH.GAP_MAX_MS      ...and always for a distance above this value (6 h)
+const CH = {REDUCE_FACTOR:2, PX_PER_BLOCK:2, GAP_FACTOR:3, GAP_MIN_MS:60000, GAP_MAX_MS:6*3600000};
+const isNum = v => v!==null && v!==undefined && !Number.isNaN(v);
+// Median distance between consecutive real samples (a missing value separates its neighbours, it is not bridged).
+function medianInterval(ts, vs){
+  const d=[]; let prev=null;
+  for(let i=0;i<ts.length;i++){ if(!isNum(vs[i])){ prev=null; continue; } if(prev!==null) d.push(ts[i]-ts[prev]); prev=i; }
+  if(!d.length) return 0;
+  d.sort((a,b)=>a-b); const m=d.length>>1;
+  return d.length%2 ? d[m] : (d[m-1]+d[m])/2;
+}
+// Splits the points into runs of consecutive indices: a missing value (null/undefined/NaN) is never part of a run and ends it,
+// and so does a distance larger than min(hi, max(lo, factor*median interval)). Returns an array of arrays of indices.
+function splitGaps(ts, vs, lo, hi, factor){
+  const thr=Math.min(hi, Math.max(lo, factor*medianInterval(ts, vs)));
+  const segs=[]; let cur=null, prevT=null;
+  for(let i=0;i<ts.length;i++){
+    if(!isNum(vs[i])){ cur=null; prevT=null; continue; }
+    if(cur===null || ts[i]-prevT>thr){ cur=[]; segs.push(cur); }
+    cur.push(i); prevT=ts[i];
+  }
+  return segs;
+}
+// Block reduction that keeps the extremes: the range [t0,t1] is split into nBlocks blocks; of the points in each block only the
+// one with the lowest and the one with the highest value are kept, plus always the first and the last point.
+// Returns the kept indices in time order. All indices are returned when there is nothing to gain (<= 2 points per block).
+function reduceMinMax(ts, vs, t0, t1, nBlocks){
+  const n=ts.length, all=()=>Array.from({length:n},(_,i)=>i);
+  if(n<=2*nBlocks+2 || nBlocks<1) return all();
+  const span=t1-t0, imin=new Array(nBlocks).fill(-1), imax=new Array(nBlocks).fill(-1);
+  for(let i=0;i<n;i++){
+    if(!isNum(vs[i])) continue;
+    let b=span>0 ? Math.floor((ts[i]-t0)/span*nBlocks) : 0; if(b<0) b=0; else if(b>=nBlocks) b=nBlocks-1;
+    if(imin[b]<0 || vs[i]<vs[imin[b]]) imin[b]=i;
+    if(imax[b]<0 || vs[i]>vs[imax[b]]) imax[b]=i;
+  }
+  const keep=new Set([0,n-1]);
+  for(let b=0;b<nBlocks;b++){ if(imin[b]>=0) keep.add(imin[b]); if(imax[b]>=0) keep.add(imax[b]); }
+  return Array.from(keep).sort((a,b)=>a-b);
+}
+// The runs to draw for one series {d:[{t,v}]}: gaps and missing values break the line, long runs are reduced (only the given range).
+function chartRuns(d, t0, t1, plotW){
+  const ts=d.map(p=>p.t), vs=d.map(p=>p.v), nB=Math.max(1, Math.round(plotW/CH.PX_PER_BLOCK));
+  return splitGaps(ts, vs, CH.GAP_MIN_MS, CH.GAP_MAX_MS, CH.GAP_FACTOR).map(seg=>{
+    if(seg.length<=CH.REDUCE_FACTOR*plotW) return seg.map(i=>d[i]);
+    const st=seg.map(i=>ts[i]), sv=seg.map(i=>vs[i]);
+    return reduceMinMax(st, sv, t0, t1, nB).map(k=>d[seg[k]]);
+  });
+}
+// The real samples of a series (missing values are kept in d only to break the line).
+const realPts = d => d.filter(p=>isNum(p.v));
+// CHART-HELPERS-END
+
 // reusable chart
 // Chart height follows the window height: 360px (the 1080p size) up to 720px on 4K.
 // The width comes from the container, so the viewBox ratio gives the drawn height.
@@ -431,7 +491,7 @@ function makeChart(svg, tip, wrap){
   function draw(series,o){
     const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=16,T=12,B=34, u=o.u;
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
-    const all=series.flatMap(s=>s.d.map(p=>p.v));
+    const all=series.flatMap(s=>realPts(s.d).map(p=>p.v));
     const x0=state.range[0]!==null?state.range[0]:(o.t0!==undefined?o.t0:TMIN), x1=state.range[1]!==null?state.range[1]:(o.t1!==undefined?o.t1:TMAX);
     let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.top) ymax=Math.max(ymax,o.top); if(o.cap) ymax=Math.min(ymax,o.cap);
     const X=t=>L+(x1===x0?0.5:(t-x0)/(x1-x0))*(W-L-R), Y=v=>T+(1-v/u.div/ymax)*(H-T-B);
@@ -453,9 +513,13 @@ function makeChart(svg, tip, wrap){
     el('line',{x1:L,x2:W-R,y1:H-B,y2:H-B,stroke:'#5d6b7a'});
     (o.lines||[]).forEach(l=>{ if(l.v>ymax*u.div) return; const y=Y(l.v*u.div); el('line',{x1:L,x2:W-R,y1:y,y2:y,stroke:l.color,'stroke-width':1.2,'stroke-dasharray':'6 4'}); const t=el('text',{x:W-R-4,y:y-4,'text-anchor':'end','font-size':11,fill:l.color}); t.textContent=l.label; });
     series.forEach(s=>{
-      if(!s.d.length) return;
-      el('polyline',{points:s.d.map(p=>X(p.t).toFixed(1)+','+Y(p.v).toFixed(1)).join(' '),fill:'none',stroke:s.color,'stroke-width':s.w||1.6,'stroke-linejoin':'round'});
-      if(s.d.length<=80) s.d.forEach(p=>el('circle',{cx:X(p.t),cy:Y(p.v),r:2.6,fill:s.color}));
+      const real=realPts(s.d); if(!real.length) return;
+      const runs=chartRuns(s.d,x0,x1,W-L-R);
+      const dd=runs.map(r=>r.length>1?r.map((p,i)=>(i?'L':'M')+X(p.t).toFixed(1)+','+Y(p.v).toFixed(1)).join(''):'').join('');
+      if(dd) el('path',{d:dd,fill:'none',stroke:s.color,'stroke-width':s.w||1.6,'stroke-linejoin':'round'});
+      // isolated samples (both neighbours missing or too far) have no line: draw them as dots; short series get a dot per sample
+      if(real.length<=80) real.forEach(p=>el('circle',{cx:X(p.t),cy:Y(p.v),r:2.6,fill:s.color}));
+      else runs.forEach(r=>{ if(r.length===1) el('circle',{cx:X(r[0].t),cy:Y(r[0].v),r:2.2,fill:s.color}); });
     });
     if(!all.length){ const t=el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'#5d6b7a'}); t.textContent='No data to display'; }
     view.sel=el('rect',{y:T,height:H-T-B,fill:'rgba(31,111,139,.15)',stroke:'#1f6f8b',display:'none'});
@@ -472,10 +536,10 @@ function makeChart(svg, tip, wrap){
       const x=px(e);
       if(drag!==null){ view.sel.setAttribute('display',''); view.sel.setAttribute('x',Math.min(drag,x)); view.sel.setAttribute('width',Math.abs(x-drag)); tip.style.display='none'; return; }
       const t=tOf(x); let best=null,bd=Infinity;
-      series.forEach(s=>s.d.forEach(p=>{const d=Math.abs(p.t-t); if(d<bd){bd=d;best=p.t;}}));
+      series.forEach(s=>s.d.forEach(p=>{if(!isNum(p.v)) return; const d=Math.abs(p.t-t); if(d<bd){bd=d;best=p.t;}}));
       if(best===null){tip.style.display='none'; return;}
       const cx=view.X(best); view.cur.setAttribute('x1',cx); view.cur.setAttribute('x2',cx); view.cur.setAttribute('display','');
-      const rows=series.map(s=>{const p=s.d.find(z=>z.t===best); return p?'<div><span class="sw" style="background:'+s.color+'"></span> '+s.name+': '+fmt(p.v,view.u.div)+' '+view.u.unit+'</div>':'';}).join('');
+      const rows=series.map(s=>{const p=s.d.find(z=>z.t===best&&isNum(z.v)); return p?'<div><span class="sw" style="background:'+s.color+'"></span> '+s.name+': '+fmt(p.v,view.u.div)+' '+view.u.unit+'</div>':'';}).join('');
       tip.innerHTML='<div>'+iso(best)+' UTC</div>'+rows; tip.style.display='block';
       const r=svg.getBoundingClientRect(); let left=(cx/view.W)*r.width+12; if(left>r.width-190) left-=210;
       tip.style.left=left+'px'; tip.style.top='12px';
@@ -496,9 +560,9 @@ function statsTable(t, series, u){
   const hd=t.createTHead().insertRow(); ['Series','Samples','Min','Avg','Max','Time of maximum (UTC)'].forEach(h=>{const c=document.createElement('th'); c.textContent=h; hd.appendChild(c);});
   const tb=t.createTBody();
   series.forEach(s=>{
-    if(!s.d.length) return;
-    const v=s.d.map(p=>p.v), mx=maxOf(v), at=s.d.find(p=>p.v===mx).t;
-    const r=tb.insertRow(); [s.name,s.d.length,fmt(minOf(v),u.div)+' '+u.unit,fmt(v.reduce((a,b)=>a+b,0)/v.length,u.div)+' '+u.unit,fmt(mx,u.div)+' '+u.unit,iso(at)].forEach(x=>{r.insertCell().textContent=x;});
+    const real=realPts(s.d); if(!real.length) return;   // all real samples, never the reduced ones
+    const v=real.map(p=>p.v), mx=maxOf(v), at=real.find(p=>p.v===mx).t;
+    const r=tb.insertRow(); [s.name,real.length,fmt(minOf(v),u.div)+' '+u.unit,fmt(v.reduce((a,b)=>a+b,0)/v.length,u.div)+' '+u.unit,fmt(mx,u.div)+' '+u.unit,iso(at)].forEach(x=>{r.insertCell().textContent=x;});
   });
 }
 
@@ -506,10 +570,10 @@ function statsTable(t, series, u){
 const visibleSeries=()=>D.series.filter(s=>!state.hidden.has(s));
 function mainSeries(){
   return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,
-    d:D.samples.filter(x=>x.dp===s&&x[state.metric]!==null&&x[state.metric]!==undefined&&inRange(x.t)).map(x=>({t:x.t,v:x[state.metric]}))}));
+    d:D.samples.filter(x=>x.dp===s&&inRange(x.t)).map(x=>({t:x.t,v:isNum(x[state.metric])?x[state.metric]:null}))}));   // a missing value stays in d as null (breaks the line)
 }
 function mainUnit(ser){
-  const vals=ser.flatMap(s=>s.d.map(p=>p.v));
+  const vals=ser.flatMap(s=>realPts(s.d).map(p=>p.v));
   return state.metric==='kbps'?scaleFor(vals):{div:1,unit:METRICS[state.metric].unit};
 }
 function drawMain(){ const ser=mainSeries(), u=mainUnit(ser); chart.draw(ser,{label:METRICS[state.metric].label,u}); statsTable($('#stats'),ser,u); }
@@ -517,7 +581,7 @@ function drawMain(){ const ser=mainSeries(), u=mainUnit(ser); chart.draw(ser,{la
 // CPU by group chart
 function groupSeries(){
   return D.groups.map((n,i)=>({name:n,color:GCOL[i],w:1.5,i})).filter(s=>!gs.hidden.has(s.name)).map(s=>({name:s.name,color:s.color,w:s.w,
-    d:D.samples.filter(x=>x.dp===gs.dp&&x.g&&x.g[s.i]!==null&&x.g[s.i]!==undefined&&inRange(x.t)).map(x=>({t:x.t,v:x.g[s.i]}))}));
+    d:D.samples.filter(x=>x.dp===gs.dp&&inRange(x.t)).map(x=>({t:x.t,v:x.g&&isNum(x.g[s.i])?x.g[s.i]:null}))}));
 }
 function drawGroups(){
   if(!hasG) return;
@@ -1088,7 +1152,7 @@ function renderDphCores(){
 function renderDph(){
   const S = DH.series[dphState.dp], u = {div:1, unit:'%'};
   const ser = DPH_SERIES.filter(s=>!dphState.hidden.has(s.name)).map(s=>({name:s.name, color:s.color, w:s.w,
-    d:S.t.map((t,i)=>({t:t, v:S[s.k][i]})).filter(p=>p.v!==null&&p.v!==undefined&&inRange(p.t))}));
+    d:S.t.map((t,i)=>({t:t, v:isNum(S[s.k][i])?S[s.k][i]:null})).filter(p=>inRange(p.t))}));
   dphChart.draw(ser, {label:'Utilization', u, cap:100, t0:DPH_T0, t1:DPH_T1});
   statsTable($('#dphstats'), ser, u);
   renderDphCores();
@@ -1168,7 +1232,7 @@ function renderMpProcs(){
 function renderMp(){
   const M = MP.memory, u = {div:1, unit:'%'};
   const ser = MP_SERIES.filter(s=>!mpState.hidden.has(s.name) && M[s.k].some(v=>v!==null)).map(s=>({name:s.name, color:s.color, w:s.w,
-    d:M.t.map((t,i)=>({t:t, v:M[s.k][i]})).filter(p=>p.v!==null&&p.v!==undefined&&inRange(p.t))}));
+    d:M.t.map((t,i)=>({t:t, v:isNum(M[s.k][i])?M[s.k][i]:null})).filter(p=>inRange(p.t))}));
   mpChart.draw(ser, {label:'Memory', u, cap:100, top:100, t0:MP_T0, t1:MP_T1,
     lines:[{v:MP.thresholds.mem_warn, color:'#b7791f', label:'warn '+MP.thresholds.mem_warn+'%'}, {v:MP.thresholds.mem_crit, color:'#b42318', label:'crit '+MP.thresholds.mem_crit+'%'}]});
   statsTable($('#mpstats'), ser, u);
