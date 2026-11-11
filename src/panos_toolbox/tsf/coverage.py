@@ -2,7 +2,7 @@
 
 Turns the inventory, the samples and the conflicts of a Collected into a JSON-serializable
 dict: for each source family what was found, read, truncated or skipped, which time range
-the dp-monitor files cover and which samples conflicted. It answers "what did this
+the dp-monitor and mp-monitor files cover and which samples conflicted. It answers "what did this
 analysis actually look at?", so that a missing or partial source is never mistaken for
 a clean one.
 """
@@ -11,16 +11,17 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from . import mp_monitor
 from .model import Collected
 
 # Families the analyzer knows about; listed even when no member was found ("absent").
-KNOWN_FAMILIES = ('dp-monitor', 'cli')
+KNOWN_FAMILIES = ('dp-monitor', 'mp-monitor', 'cli')
 MAX_CONFLICTS = 200
 
 # Family states, in the order they are reported.
 ABSENT = 'absent'            # no member of the family at all
 UNREAD = 'unread'            # members found, none could be read
-ZERO_SAMPLES = 'zero_samples'  # dp-monitor members read, no sample extracted
+ZERO_SAMPLES = 'zero_samples'  # dp-/mp-monitor members read, no sample extracted
 TRUNCATED = 'truncated'      # at least one member read only in part (tail kept)
 ERROR = 'error'              # at least one member hit a read error
 CONFLICT = 'conflict'        # dp-monitor samples with the same DP and time but other values
@@ -40,13 +41,16 @@ def _time_ranges(samples) -> dict[str, dict[str, int]]:
     return out
 
 
-def _family_row(name: str, fam, ranges, conflicts) -> dict[str, Any]:
+def _family_row(name: str, fam, ranges, conflicts, mp_ranges=None) -> dict[str, Any]:
     found = list(fam.found) if fam else []
     read = set(fam.read) if fam else set()
     trunc = set(fam.truncated) if fam else set()
     errors = dict(fam.errors) if fam else {}
     skipped = dict(fam.skipped) if fam else {}
     is_dp = name == 'dp-monitor'
+    is_mp = name == 'mp-monitor'
+    if is_mp:
+        ranges = mp_ranges or {}
     members = []
     for m in found:
         base = os.path.basename(m)
@@ -62,7 +66,7 @@ def _family_row(name: str, fam, ranges, conflicts) -> dict[str, Any]:
             state, detail = 'skipped:not read', 'not read'
         row: dict[str, Any] = {'name': m, 'state': state, 'detail': detail,
                                'samples': None, 'first': None, 'last': None}
-        if is_dp and m in read:
+        if (is_dp or is_mp) and m in read:
             r = ranges.get(base)
             row['samples'] = r['n'] if r else 0
             if r:
@@ -74,7 +78,7 @@ def _family_row(name: str, fam, ranges, conflicts) -> dict[str, Any]:
     n_trunc = len([m for m in found if m in trunc and m not in errors])
     row_first = row_last = None
     n_samples = None
-    if is_dp:
+    if is_dp or is_mp:
         got = [m for m in members if m['samples']]
         n_samples = sum(m['samples'] or 0 for m in members)
         if got:
@@ -86,7 +90,7 @@ def _family_row(name: str, fam, ranges, conflicts) -> dict[str, Any]:
     else:
         if n_read == 0:
             states.append(UNREAD)
-        if is_dp and n_read > 0 and n_samples == 0:
+        if (is_dp or is_mp) and n_read > 0 and n_samples == 0:
             states.append(ZERO_SAMPLES)
         if n_trunc:
             states.append(TRUNCATED)
@@ -114,11 +118,12 @@ def build_coverage(collected: Collected) -> dict[str, Any]:
     inv = collected.inventory
     conflicts = collected.conflicts
     ranges = _time_ranges(collected.samples)
+    mp_ranges = mp_monitor.source_ranges(collected.mp_data)
     is_archive = bool(inv.families or inv.skipped or inv.members_seen)
     names = list(KNOWN_FAMILIES) + sorted(n for n in inv.families if n not in KNOWN_FAMILIES)
     families = []
     if is_archive:
-        families = [_family_row(n, inv.families.get(n), ranges, conflicts) for n in names]
+        families = [_family_row(n, inv.families.get(n), ranges, conflicts, mp_ranges) for n in names]
     skipped = [{'name': n, 'reason': r} for n, r in inv.skipped]
     items = [{'dp': dp, 't': t, 'kept': kept, 'dropped': dropped}
              for dp, t, kept, dropped in conflicts[:MAX_CONFLICTS]]

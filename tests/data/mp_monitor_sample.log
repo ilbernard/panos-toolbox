@@ -1,0 +1,51 @@
+2026-10-27 01:00:00.250 -0700  --- memory
+Last 180 seconds
+Type       Free (kB)     min (kB)      Total (kB)    MemAvailable (kB)
+Mem        344656        323512        8000000       2000000          
+Swap       4858572       4858572       UNKNOWN
+-----------------------------
+2026-10-27 01:00:00.087 -0700  --- processes
+Total num processes: 5
+Name                   PID      CPU%  FDs Open   Virt Mem     Res+Swap     State      Res+Swap-Lazy   
+configd                12473    85    9          358116       900000       S          858624
+brdagent               4205     0     9          358116       6324         S          
+all_task_1             6168     95    9          358116       10376        R          
+pan_logdb+             7001     2     9          358116       50000        S          
+mgmtsrvr               7002     1     9          358116       70000        S          
+-----------------------------
+2026-10-27 01:00:05.000 -0700  --- cpu
+Cpu(s):  3.0%us,  1.0%sy
+-----------------------------
+2026-10-27 01:01:00.250 -0700  --- memory
+Last 180 seconds
+Type       Free (kB)     min (kB)      Total (kB)    MemAvailable (kB)
+Mem        344656        323512        8000000       1900000          
+Swap       4858572       4858572       6104084   
+-----------------------------
+2026-10-27 01:01:00.087 -0700  --- processes
+Total num processes: 6
+Name                   PID      CPU%  FDs Open   Virt Mem     Res+Swap     State      Res+Swap-Lazy   
+configd                12473    90    9          358116       910000       S          858624
+brdagent               4205     0     9          358116       6324         S          
+all_task_1             6168     95    9          358116       10376        R          
+pan_logdb+             7001     2     9          358116       51000        S          
+mgmtsrvr               7002     1     9          358116       70000        S          
+grep                   9001     100   9          358116       900          R          
+-----------------------------
+2026-10-27 01:02:00.250 -0700  --- memory
+Last 180 seconds
+Type       Free (kB)     min (kB)      Total (kB)    MemAvailable (kB)
+Mem        344656        323512        8000000       1800000          
+Swap       4858572       4858572       6104084   
+-----------------------------
+2026-10-27 01:02:00.087 -0700  --- processes
+Total num processes: 7
+Name                   PID      CPU%  FDs Open   Virt Mem     Res+Swap     State      Res+Swap-Lazy   
+configd                12473    10    9          358116       920000       S          858624
+brdagent               4205     0     9          358116       6324         S          
+all_task_1             6168     95    9          358116       10376        R          
+pan_logdb+             7001     2     9          358116       52000        S          
+mgmtsrvr               7002     1     9          358116       70000        S          
+oldchild               9100     0     9          358116       0            Z          
+badrow 12 3
+-----------------------------

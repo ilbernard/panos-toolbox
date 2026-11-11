@@ -51,3 +51,5 @@ class Collected:
     status: str = 'complete'                             # findings.analysis_status()
     # dp_health.new_store() filled by the panio resource-monitor parser, or None.
     dp_health: dict[str, Any] | None = None
+    # mp_monitor.new_store() filled by the mp-monitor memory/processes parser, or None.
+    mp_data: dict[str, Any] | None = None

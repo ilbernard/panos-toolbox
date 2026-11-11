@@ -146,6 +146,7 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-dph" aria-controls="p-dph" aria-selected="false" tabindex="-1" style="display:none">Dataplane health</button>
+  <button type="button" role="tab" id="tab-mp" aria-controls="p-mp" aria-selected="false" tabindex="-1" style="display:none">Management plane</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
   <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
@@ -207,6 +208,26 @@ TEMPLATE_BODY = r'''</style>
   <table class="stats" id="dphstats"></table></div>
   <div class="sep"><div class="sechead"><h2>CPU peak per core</h2>__HB_dphcores__</div>__HP_dphcores__
   <div id="dphcores"></div></div>
+</section>
+
+<section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
+  <div class="sechead"><h2>Management plane</h2>__HB_mp__</div>__HP_mp__
+  <p class="hint" id="mpinfo"></p>
+  <details id="mpwarn" style="display:none;margin:0 0 12px"><summary id="mpwarnsum"></summary><ul id="mpwarnlist"></ul></details>
+  <div class="scroll"><table class="stats dphs" id="mpsum"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_mpflags__</div>__HP_mpflags__
+  <ul class="banner" id="mpbanner"></ul>
+  <div class="sep"><div class="sechead"><h2>Memory over time</h2>__HB_mpchart__</div>__HP_mpchart__
+  <div class="bar">
+    <button id="mpreset" type="button">Reset zoom</button>
+    <div class="leg" id="mpleg"></div>
+  </div>
+  <div class="cw" id="mpwrap"><svg id="mpchart" role="img" aria-label="Management plane memory over time chart"></svg><div class="tip" id="mptip"></div></div>
+  <table class="stats" id="mpstats"></table></div>
+  <div class="sep"><div class="sechead"><h2>Processes</h2>__HB_mpprocs__</div>__HP_mpprocs__
+  <div class="bar"><label>Show <select id="mpview"></select></label><span class="hint" id="mpcount"></span></div>
+  <details id="mpproctab" open><summary>Process table</summary>
+  <div class="scroll"><table class="stats dphs" id="mpprocs"></table></div></details></div>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
@@ -401,7 +422,7 @@ function makeChart(svg, tip, wrap){
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
     const all=series.flatMap(s=>s.d.map(p=>p.v));
     const x0=state.range[0]!==null?state.range[0]:(o.t0!==undefined?o.t0:TMIN), x1=state.range[1]!==null?state.range[1]:(o.t1!==undefined?o.t1:TMAX);
-    let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.cap) ymax=Math.min(ymax,o.cap);
+    let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.top) ymax=Math.max(ymax,o.top); if(o.cap) ymax=Math.min(ymax,o.cap);
     const X=t=>L+(x1===x0?0.5:(t-x0)/(x1-x0))*(W-L-R), Y=v=>T+(1-v/u.div/ymax)*(H-T-B);
     view={W,L,R,T,B,x0,x1,X,u};
     for(let i=0;i<=5;i++){
@@ -419,6 +440,7 @@ function makeChart(svg, tip, wrap){
       const tx=el('text',{x:x,y:H-B+17,'text-anchor':i===0?'start':i===6?'end':'middle','font-size':11,fill:'#5d6b7a'}); tx.textContent=lab;
     }
     el('line',{x1:L,x2:W-R,y1:H-B,y2:H-B,stroke:'#5d6b7a'});
+    (o.lines||[]).forEach(l=>{ if(l.v>ymax*u.div) return; const y=Y(l.v*u.div); el('line',{x1:L,x2:W-R,y1:y,y2:y,stroke:l.color,'stroke-width':1.2,'stroke-dasharray':'6 4'}); const t=el('text',{x:W-R-4,y:y-4,'text-anchor':'end','font-size':11,fill:l.color}); t.textContent=l.label; });
     series.forEach(s=>{
       if(!s.d.length) return;
       el('polyline',{points:s.d.map(p=>X(p.t).toFixed(1)+','+Y(p.v).toFixed(1)).join(' '),fill:'none',stroke:s.color,'stroke-width':s.w||1.6,'stroke-linejoin':'round'});
@@ -493,10 +515,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','dph','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','dph','mp','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -1064,9 +1086,90 @@ if(hasDph) renderDphStatic();
 
 '''
 
+# Management plane tab (mp-monitor memory and processes sections)
+JS_MP = r'''// Management plane tab (memory used %, per-process CPU and Res+Swap)
+const MP = D.mp || null;
+const hasMp = !!MP;
+const mpState = {hidden:new Set(), view:null};
+const MP_SERIES = [
+  {k:'used_pct', name:'Memory used', color:'#c2410c', w:1.8},
+  {k:'swap_used_pct', name:'Swap used', color:'#0e7490', w:1.4}
+];
+const mpChart = hasMp ? makeChart($('#mpchart'), $('#mptip'), $('#mpwrap')) : null;
+let MP_T0 = 0, MP_T1 = 0;
+const mpKb = v => v===null||v===undefined ? '' : (v/1024).toLocaleString('en-US',{maximumFractionDigits:1})+' MB';
+const mpGrowth = v => (v>0?'+':v<0?'-':'')+mpKb(Math.abs(v));
+const mpPct = v => v===null||v===undefined ? '' : v+'%';
+function mpRow(t, cells){ const r = t.insertRow(); cells.forEach(c=>{ r.insertCell().textContent = c; }); return r; }
+function mpHead(t, names){ const r = t.createTHead().insertRow(); names.forEach(x=>{ const th=document.createElement('th'); th.textContent=x; r.appendChild(th); }); }
+function mpWorst(){
+  return MP.findings.some(f=>f.level==='crit') ? 'crit' : (MP.findings.some(f=>f.level==='warn') ? 'warn' : '');
+}
+function renderMpStatic(){
+  const M = MP.memory, S = M.summary, P = MP.period;
+  MP_T0 = M.t.length ? M.t[0] : P.first; MP_T1 = M.t.length ? M.t[M.t.length-1] : P.last;
+  if(!hasSamples && !hasDph){
+    $('#sub').textContent = 'Period '+iso(P.first)+' - '+iso(P.last)+' UTC | generated '+D.generated+' UTC';
+  }
+  if(!hasSamples) $('#utc').style.display = '';
+  const dsc = MP.discarded;
+  $('#mpinfo').textContent = MP.n_mem+' memory and '+MP.n_proc+' processes sample(s)'+(MP.interval_s!==null ? ' (processes about every '+MP.interval_s+' s)' : '')+'. Discarded while reading: '+dsc.bad_rows+' row(s), '+dsc.bad_values+' non-numeric memory value(s); '+dsc.duplicates+' duplicate section(s) from rotated files ignored.';
+  if(MP.warnings.length){ $('#mpwarn').style.display=''; $('#mpwarnsum').textContent = MP.warnings.length+' note(s)'; MP.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#mpwarnlist').appendChild(li); }); }
+  const t = $('#mpsum'); t.replaceChildren();
+  mpHead(t, ['Memory samples','Processes samples','Period (UTC)','Total memory','Memory used, last','Memory used, peak','Lowest MemAvailable']);
+  const tb = t.createTBody();
+  const r = mpRow(tb, [MP.n_mem, MP.n_proc, iso(P.first)+' - '+iso(P.last),
+    S ? mpKb(S.total_kb) : '', S ? S.last+'% @ '+iso(S.last_t) : '', S ? S.peak+'% @ '+iso(S.peak_t) : '', S ? mpKb(S.min_avail_kb) : '']);
+  const lv = mpWorst(); if(lv) r.className = 'anom-'+lv;
+  const ul = $('#mpbanner'); ul.replaceChildren();
+  if(!MP.findings.length){ const li=document.createElement('li'); li.textContent='No management plane flags with the current thresholds.'; ul.appendChild(li); }
+  MP.findings.forEach(f=>{
+    const li = document.createElement('li'); li.className = 'lvl-'+f.level;
+    const b = document.createElement('span'); b.className = 'badge b-'+f.level; b.textContent = f.code;
+    li.append(b, document.createTextNode(f.text)); ul.appendChild(li);
+  });
+  $('#mpreset').onclick = ()=>setRange(null,null);
+  MP_SERIES.filter(s=>M[s.k].some(v=>v!==null)).forEach(s=>legendItem($('#mpleg'), s.name, s.color, mpState.hidden, renderMp));
+  const views = [['flagged','Processes with a PROC_CPU flag ('+MP.flagged.length+')'], ['cpu','Top '+MP.top_cpu.length+' by peak CPU'], ['rss','Top '+MP.top_rss.length+' by peak Res+Swap'], ['growth','Top '+MP.top_growth.length+' by Res+Swap growth'], ['all','All processes ('+MP.procs.length+')']];
+  views.forEach(v=>{ const o=document.createElement('option'); o.value=v[0]; o.textContent=v[1]; $('#mpview').appendChild(o); });
+  mpState.view = MP.flagged.length ? 'flagged' : 'rss';
+  $('#mpview').value = mpState.view;
+  $('#mpview').onchange = ()=>{ mpState.view = $('#mpview').value; renderMpProcs(); };
+}
+function renderMpProcs(){
+  const by = {}; MP.procs.forEach(p=>{ by[p.name] = p; });
+  const names = {flagged:MP.flagged, cpu:MP.top_cpu, rss:MP.top_rss, growth:MP.top_growth, all:MP.procs.map(p=>p.name)}[mpState.view];
+  const t = $('#mpprocs'); t.replaceChildren();
+  mpHead(t, ['Process','Samples','Peak CPU','Samples at/above '+MP.thresholds.proc_cpu_warn+'%','Longest run','Longest run period (UTC)','Runs (>= '+MP.thresholds.proc_cpu_min_samples+')','Peak Res+Swap','Last Res+Swap','Growth','State Z','Flag']);
+  const tb = t.createTBody();
+  names.forEach(n=>{
+    const p = by[n];
+    const r = mpRow(tb, [n+(p.ignored ? ' ('+p.ignored+', not flagged)' : ''), p.n, p.peak_cpu===null ? '' : p.peak_cpu+'% @ '+iso(p.peak_cpu_t), p.n_high, p.longest_run || '',
+      p.run_start===null ? '' : iso(p.run_start)+' - '+iso(p.run_end), p.n_runs || '',
+      p.peak_rss===null ? '' : mpKb(p.peak_rss)+' @ '+iso(p.peak_rss_t), mpKb(p.last_rss), p.n_rss>1 ? mpGrowth(p.growth) : '', p.zombie || '', '']);
+    if(MP.flagged.includes(n)){
+      r.className = 'anom-warn';
+      const b = document.createElement('span'); b.className = 'badge b-warn'; b.textContent = 'PROC_CPU'; r.cells[r.cells.length-1].appendChild(b);
+    }
+  });
+  $('#mpcount').textContent = names.length+' process(es) shown.';
+}
+function renderMp(){
+  const M = MP.memory, u = {div:1, unit:'%'};
+  const ser = MP_SERIES.filter(s=>!mpState.hidden.has(s.name) && M[s.k].some(v=>v!==null)).map(s=>({name:s.name, color:s.color, w:s.w,
+    d:M.t.map((t,i)=>({t:t, v:M[s.k][i]})).filter(p=>p.v!==null&&p.v!==undefined&&inRange(p.t))}));
+  mpChart.draw(ser, {label:'Memory', u, cap:100, top:100, t0:MP_T0, t1:MP_T1,
+    lines:[{v:MP.thresholds.mem_warn, color:'#b7791f', label:'warn '+MP.thresholds.mem_warn+'%'}, {v:MP.thresholds.mem_crit, color:'#b42318', label:'crit '+MP.thresholds.mem_crit+'%'}]});
+  statsTable($('#mpstats'), ser, u);
+  renderMpProcs();
+}
+if(hasMp) renderMpStatic();
+
+'''
+
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
-['chart','cpu','dph','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+['chart','cpu','dph','mp','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
@@ -1090,7 +1193,7 @@ const hasCov = !!CV;
 const COV_STATE = {
   absent:['absent','info','No member of this family was found in the input.'],
   unread:['unread','warn','Members were found but none could be read.'],
-  zero_samples:['0 samples','warn','Files were read but no Throughput sample could be extracted.'],
+  zero_samples:['0 samples','warn','Files were read but no sample could be extracted.'],
   truncated:['truncated','warn','At least one member exceeded the read limit: only its last part was analysed.'],
   error:['read error','crit','At least one member could not be read to the end.'],
   conflict:['conflict','warn','Samples with the same DP and time but different values were found; the first was kept.'],
@@ -1164,5 +1267,6 @@ TEMPLATE = (TEMPLATE_HEAD +
             JS_POW +
             JS_IFC +
             JS_DPH +
+            JS_MP +
             JS_COV +
             JS_TABS)

@@ -6,7 +6,8 @@ that expands a text at the top of that section). There is no global help page.
 SECTION_HELP maps a section id to an HTML template. Its {name} placeholders are filled
 with the live values of pow_perf.POW_THRESHOLDS by render_section_help(). The thresholds of
 the Interface Errors tab (interface_errors.IF_THRESHOLDS) are available as {if_<name>} and those of the
-Dataplane health tab (dp_health.DP_THRESHOLDS) as {dp_<name>}. Literal braces
+Dataplane health tab (dp_health.DP_THRESHOLDS) as {dp_<name>}, those of the Management plane
+tab (mp_monitor.MP_THRESHOLDS) as {mp_<name>}. Literal braces
 in the HTML are doubled. The report template contains the placeholders __HB_<id>__
 (the button) and __HP_<id>__ (the collapsible text) for each id.
 
@@ -17,6 +18,7 @@ import html
 from . import if_glossary
 from .dp_health import DP_THRESHOLDS
 from .interface_errors import IF_THRESHOLDS
+from .mp_monitor import MP_IGNORE_PROCS, MP_THRESHOLDS, MP_WORKER_PREFIXES
 from .pow_perf import POW_THRESHOLDS
 
 # Titles are used for the accessible name of the buttons.
@@ -30,6 +32,8 @@ SECTION_TITLES = {
     'coverage': 'Source coverage',
     'dph': 'Dataplane health', 'dphflags': 'Dataplane health findings and flag reference',
     'dphchart': 'Dataplane health chart', 'dphcores': 'CPU peak per core',
+    'mp': 'Management plane', 'mpflags': 'Management plane findings and flag reference',
+    'mpchart': 'Management plane memory chart', 'mpprocs': 'Management plane processes',
 }
 
 SECTION_HELP = {
@@ -396,9 +400,50 @@ row sums each core.</p>
 <p>One cell per core of the selected DP, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the whole period (the maximum of the 15 values of every sample), and the highest per-minute maximum. The colour goes from white (idle) to red (100%). A bold border marks a cell at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) in the first row and <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) in the second. Hover a cell for the UTC time of the peak and the last value.</p>
 <p>Cores that show no data at all (always <code>*</code>) are left empty. A core that is always 0 is normally not used by the dataplane (cores reserved for other functions).</p>
 """,
+    'mp': """
+<p>Built from the <code>memory</code> and <code>processes</code> sections of <code>var/log/pan/mp-monitor.log</code> and its rotations (<code>.1</code> to <code>.4</code>) in the TSF. They describe the <b>management plane</b> (the control CPU and its RAM, where <code>configd</code>, <code>mgmtsrvr</code>, <code>logrcvr</code> and the other daemons run), not the dataplane. The time of a sample is the one of its section header, converted to UTC with the offset written in that header: the offset of mp-monitor can differ from the one of dp-monitor, so the two are not assumed to be equal. The other sections of the file (cpu, top_summary, pidstat, filesystem, ...) are not read.</p>
+<h3>How it is read</h3>
+<ul>
+<li><b>Memory</b>: a table with the rows <code>Mem</code> and <code>Swap</code>. The columns are found by their header names. <b>Memory used %</b> = (Total - MemAvailable) / Total x 100 of the <code>Mem</code> row. <code>MemAvailable</code> is the kernel's estimate of the memory that can be given to applications without swapping, so caches that can be dropped are not counted as used. A <code>Mem</code> row without Total or MemAvailable is discarded. The Swap total can be <code>UNKNOWN</code>; the swap series is then empty.</li>
+<li><b>Processes</b>: a table with name, PID, CPU %, open file descriptors, virtual memory, <code>Res+Swap</code> (resident plus swapped memory, in kB), state and sometimes <code>Res+Swap-Lazy</code>. The columns are found by their header names. A row with fewer than the mandatory fields, or with a non-numeric value, is discarded and counted. The value <code>Unknown</code> (CPU, virtual or Res+Swap of a process that ended while the sample was taken, state <code>Unk</code>) is not an error: the row is kept and that value is ignored. The <code>Totals</code> row that closes the table is skipped. Names can be truncated by the tool with a trailing <code>+</code> (for example <code>pan_logdb+</code>) and are used as they are. If a name appears several times in one sample (different PIDs) the highest CPU and the sum of Res+Swap are used.</li>
+<li>When the same section appears in several rotated files, the first copy (the oldest file) is kept. The number of duplicates ignored and of discarded rows is shown under the title.</li>
+<li>The sections are about 3 minutes apart on the devices seen (the memory table covers the last 180 seconds); between two samples nothing is known, so a short peak can fall between them. The info line under the title gives the median interval of the processes samples.</li>
+</ul>
+<h3>Last versus peak</h3>
+<p>The level of the memory flag is based on the <b>last sample</b> (is the box in trouble now?), while <code>MP_MEMORY_PAST_PEAK</code> tells that the memory was above the warning limit earlier in the period and is back to normal. A TSF is taken after the problem is noticed, so both views are useful. Short one-sample CPU spikes are common on the management plane (a <code>grep</code>, a <code>python</code> job, a <code>monitor-dp</code> burst) and are not flagged: see <code>PROC_CPU</code>.</p>
+<h3>Summary table</h3>
+<p>Number of samples, period, total RAM, memory used in the last sample and at its peak (with UTC time), and the lowest MemAvailable seen. The row is coloured by the worst flag of the tab.</p>
+""",
+    'mpflags': """
+<p>The heuristics in <code>mp_monitor.py</code> attach these flags. Levels: <b>crit</b> = high, <b>warn</b> = medium, <b>info</b> = for your attention only (an info flag does not change the status of the module). The last column shows the live thresholds used for this report.</p>
+<table>
+<tr><th>Code</th><th>Level</th><th>Meaning and suggestion</th><th>Live thresholds</th></tr>
+<tr><td><code>MP_MEMORY</code></td><td>warn; crit at the crit limit</td><td>The memory used % of the <b>last</b> sample is strictly greater than the limit (a value equal to the limit is not flagged). A management plane short of memory starts swapping and may kill processes (out-of-memory killer), which shows as slow commit, GUI or API, or restarted daemons. Check the process table for the biggest and the growing Res+Swap, look in the system log for out-of-memory messages and process restarts, and consider a reboot or a PAN-OS release that fixes a known leak if the growth is steady.</td><td>mem_warn = {mp_mem_warn}%; mem_crit = {mp_mem_crit}% (strictly greater)</td></tr>
+<tr><td><code>MP_MEMORY_PAST_PEAK</code></td><td>warn</td><td>The memory used % was above the warning limit at some time in the period but the last sample is back at or below it. The cause may be gone (a commit, a report job, a restart of a daemon) or it may come back: compare the time of the peak with the process table and with what was done on the device at that time. It is never raised together with <code>MP_MEMORY</code>.</td><td>mem_warn = {mp_mem_warn}%</td></tr>
+<tr><td><code>PROC_CPU</code></td><td>warn</td><td>A process (one flag per process name) used at least the CPU limit in the minimum number of <b>consecutive</b> samples. The text gives the longest run (length and UTC time range), the peak and the number of runs. A single sample above the limit is not flagged, because short spikes are normal. A run is broken when the process is missing from a sample or when the gap to the previous sample is larger than the gap factor times the median interval between processes samples (so a hole in the log does not join two bursts). The workers (<code>{mp_workers}</code>) and the short-lived commands (<code>{mp_ignored}</code>) are never flagged, but stay in the tables. A process can use more than 100% when it has several threads. A long run of a daemon points to a stuck or overloaded task: check what it does (for example <code>configd</code> during a large commit, <code>logrcvr</code> or <code>mgmtsrvr</code> under heavy logging or API load) and whether it ended.</td><td>proc_cpu_warn = {mp_proc_cpu_warn}% (at or above); proc_cpu_min_samples = {mp_proc_cpu_min_samples}; proc_cpu_gap_factor = {mp_proc_cpu_gap_factor}</td></tr>
+<tr><td><code>PROC_ZOMBIE</code></td><td>info</td><td>One or more processes were seen in state <code>Z</code> (zombie: the process ended but its parent has not collected its exit status). A few zombies for a short time are harmless; many of them, or the same one for the whole period, point to a parent that does not reap its children. The text lists the names and in how many samples each was seen, and those in the last sample. Other states (S, R, D, I, Unk) are normal and are not reported.</td><td>none</td></tr>
+</table>
+<p class="hint">The thresholds are heuristics defined in <code>mp_monitor.MP_THRESHOLDS</code>; the ignored names are <code>MP_WORKER_PREFIXES</code> and <code>MP_IGNORE_PROCS</code>. In code, override the thresholds with <code>evaluate_mp_monitor(store, thresholds={{'mem_warn': 80}})</code>. Unknown keys raise an error. On the command line use the <code>--mp-&lt;name&gt;</code> options (for example <code>--mp-mem-warn 80</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report.</p>
+""",
+    'mpchart': """
+<ul>
+<li>The line is the <b>memory used %</b> of the management plane at each sample; the second line, when present, is the swap used % (omitted if the swap total is unknown). The dashed lines mark the warn and crit limits ({mp_mem_warn}% and {mp_mem_crit}%); a value is flagged when it is strictly above them. The legend checkboxes show or hide a line.</li>
+<li>The vertical axis runs from 0 to 100 percent. Zoom (drag across the chart), <b>Reset zoom</b> and the stats table work as in the throughput chart. The stats table lists, for each line, the samples, the minimum, the average, the maximum and its UTC time. Hover for the values at the nearest sample.</li>
+<li>A steadily rising line over days points to a leak; saw-tooth patterns that drop at the same time are usually a restart of a daemon or a reboot.</li>
+</ul>
+""",
+    'mpprocs': """
+<p>One row per process name. <b>Show</b> selects the rows: the processes with a <code>PROC_CPU</code> flag, the top 10 by peak CPU, by peak <code>Res+Swap</code> or by growth, or all of them. The table can be collapsed. Workers and short-lived commands are listed too and marked "not flagged".</p>
+<ul>
+<li><b>Peak CPU</b>: the highest value seen and when (UTC). <b>Samples at/above</b>: how many samples reached the CPU limit ({mp_proc_cpu_warn}%), also as isolated spikes.</li>
+<li><b>Longest run</b>: the longest series of consecutive samples at or above the limit (see <code>PROC_CPU</code> for what breaks a run), with its UTC time range. <b>Runs</b>: how many runs reached the minimum length ({mp_proc_cpu_min_samples} samples).</li>
+<li><b>Peak Res+Swap</b>: the highest resident plus swapped memory (kB converted to MB) and when. <b>Last Res+Swap</b> is the value of the last sample where the process was present. <b>Growth</b> is last minus first Res+Swap of the process; the top-by-growth view lists only positive growth. A process restarted during the period restarts from a low value, which hides or inflates the growth: check the peak and the PID changes before blaming a daemon. No correlation between processes and the memory curve is computed.</li>
+<li><b>State Z</b>: in how many samples the process was a zombie.</li>
+</ul>
+""",
     'coverage': """
 <p>Shows what this analysis actually looked at, so that a missing or partial source is never mistaken for a clean one. The badge in the page header summarises it: <b>Analysis: complete</b> or <b>Analysis: partial</b>.</p>
-<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW and interface data). The TSF is read in memory; nothing is extracted to disk.</p>
+<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>mp-monitor</code> (the <code>var/log/pan/mp-monitor.*</code> logs, which give the management plane memory and processes) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW and interface data). The TSF is read in memory; nothing is extracted to disk.</p>
 <h3>States</h3>
 <ul>
 <li><b>absent</b>: no member of the family exists in the input. The matching tabs are simply missing; this is not an error in the report.</li>
@@ -416,13 +461,15 @@ row sums each core.</p>
 }
 
 
-def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None):
+def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
+                        mp_thresholds=None):
     """Returns {placeholder: html} for every section (buttons and collapsible texts).
 
     thresholds: optional overrides with the keys of pow_perf.POW_THRESHOLDS. Unknown keys
     raise ValueError, as in evaluate(). if_thresholds: the same for
     interface_errors.IF_THRESHOLDS (available as {if_<name>}). The values are escaped before
     insertion. dp_thresholds: the same for dp_health.DP_THRESHOLDS (available as {dp_<name>}).
+    mp_thresholds: the same for mp_monitor.MP_THRESHOLDS (available as {mp_<name>}).
     """
     th = dict(POW_THRESHOLDS)
     unknown = set(thresholds or {}) - set(POW_THRESHOLDS)
@@ -439,7 +486,16 @@ def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None)
     if unknown:
         raise ValueError('unknown dataplane health threshold(s): ' + ', '.join(sorted(unknown)))
     dth.update(dp_thresholds or {})
+    mth = dict(MP_THRESHOLDS)
+    unknown = set(mp_thresholds or {}) - set(MP_THRESHOLDS)
+    if unknown:
+        raise ValueError('unknown management plane threshold(s): ' + ', '.join(sorted(unknown)))
+    mth.update(mp_thresholds or {})
     values = {k: html.escape(str(v)) for k, v in th.items()}
+    values.update({'mp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
+                   for k, v in mth.items()})
+    values['mp_workers'] = html.escape(', '.join(p + '*' for p in MP_WORKER_PREFIXES))
+    values['mp_ignored'] = html.escape(', '.join(MP_IGNORE_PROCS))
     values.update({'dp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
                    for k, v in dth.items()})
     values.update({'if_' + k: html.escape(str(v)) for k, v in ith.items()})

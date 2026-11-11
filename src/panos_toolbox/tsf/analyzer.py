@@ -8,7 +8,8 @@ including CPU load by group). The output of `debug dataplane pow performance`
 counters (`show counter interface all`, `show interface ...`) into an "Interface Errors" tab
 (see interface_errors.py). The resource monitor of the same dp-monitor files (session, packet
 buffer and descriptor utilization, CPU load per core) goes into a "Dataplane health" tab (see
-dp_health.py).
+dp_health.py). The memory and processes sections of the mp-monitor.* files go into a
+"Management plane" tab (see mp_monitor.py).
 
 Standard library only.
 
@@ -20,10 +21,11 @@ Usage:
     python -m panos_toolbox.tsf.analyzer ...    # equivalent
 
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
-data, <name>_interfaces.html when it has only interface data, <name>_tsf.html when it has
-both); with multiple inputs a summary index.html is also created. The POW and interface
+data, <name>_interfaces.html when it has only interface data, <name>_dphealth.html /
+<name>_mp.html when it has only dataplane health / management plane data, <name>_tsf.html when
+it has several kinds); with multiple inputs a summary index.html is also created. The POW and interface
 anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options, the dataplane
-health ones with --dp-<name> (see --help).
+health ones with --dp-<name> and the management plane ones with --mp-<name> (see --help).
 """
 import argparse
 import html
@@ -37,11 +39,12 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import archive, dp_health, if_glossary, pow_glossary
+from . import archive, dp_health, if_glossary, mp_monitor, pow_glossary
 from .coverage import build_coverage
 from .dp_health import DP_THRESHOLDS, evaluate_dp_health
 from .findings import analysis_status
 from .model import Collected, Inventory
+from .mp_monitor import MP_THRESHOLDS, evaluate_mp_monitor
 from .interface_errors import (
     IF_THRESHOLDS,
     evaluate_interfaces,
@@ -58,6 +61,7 @@ from .report_template import TEMPLATE
 # Parsing
 # --------------------------------------------------------------------------
 DP_FILE_RE = re.compile(r'(?:^|/)var/log/pan/(dp-monitor\.[^/]+)$')
+MP_FILE_RE = re.compile(r'(?:^|/)var/log/pan/(mp-monitor\.[^/]+)$')
 CLI_FILE_RE = re.compile(r'(?:^|/)tmp/cli/[^/]+\.txt$')
 HDR_RE = re.compile(
     r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d+))? '
@@ -271,6 +275,8 @@ def _select_family(logical):
     """Family of an archive member (logical path, '.gz' dropped), or None."""
     if DP_FILE_RE.search('/' + logical):
         return 'dp-monitor'
+    if MP_FILE_RE.search('/' + logical):
+        return 'mp-monitor'
     if CLI_FILE_RE.search('/' + logical):
         return 'cli'
     return None
@@ -290,6 +296,7 @@ def collect(path, warnings):
     samples, seen, offsets = [], {}, set()
     conflicts = []
     dp_store = dp_health.new_store()
+    mp_store = mp_monitor.new_store()
     n_files = 0
     pow_found = []
     ifc_found = []
@@ -321,6 +328,15 @@ def collect(path, warnings):
         if found == 0:
             warnings.append(f'{base}: no Throughput samples found')
 
+    def handle_mp(name, fobj):
+        base = os.path.basename(name)
+        try:
+            mp_monitor.parse_mp_monitor(iter_text_lines(fobj), base, mp_store, warnings)
+        except (OSError, EOFError, tarfile.TarError, ValueError, KeyError, IndexError,
+                TypeError, AttributeError) as exc:  # corrupted/truncated file
+            warnings.append(f'{base}: management plane data not parsed ({exc}), '
+                            f'partial data kept')
+
     def handle_cli(name, fobj):
         base = os.path.basename(name)
         try:
@@ -342,6 +358,7 @@ def collect(path, warnings):
 
     if os.path.isdir(path) or tarfile.is_tarfile(path):
         dp_members = []
+        mp_members = []
         for mem in archive.iter_members(path, _select_family, inventory):
             base = os.path.basename(mem.name)
             if mem.error:
@@ -351,12 +368,18 @@ def collect(path, warnings):
                                 f'part was analysed')
             if mem.family == 'dp-monitor':
                 dp_members.append(mem)
+            elif mem.family == 'mp-monitor':
+                mp_members.append(mem)
             else:
                 handle_cli(mem.name, io.BytesIO(mem.data))
         order = {n: i for i, n in enumerate(
             archive.sort_rotations([m.name for m in dp_members]))}
         for mem in sorted(dp_members, key=lambda m: order[m.name]):
             handle(mem.name, io.BytesIO(mem.data))
+        mp_order = {n: i for i, n in enumerate(
+            archive.sort_rotations([m.name for m in mp_members]))}
+        for mem in sorted(mp_members, key=lambda m: mp_order[m.name]):
+            handle_mp(mem.name, io.BytesIO(mem.data))
         for name, reason in inventory.skipped:
             if reason == archive.REASON_UNSAFE:
                 warnings.append(f'{name}: unsafe member path, skipped')
@@ -366,9 +389,12 @@ def collect(path, warnings):
             handle_cli(path, fh)
         if not pow_found and not have_ifc():
             with open(path, 'rb') as fh:
-                handle(path, fh)
+                handle_mp(path, fh)
+            if not mp_monitor.has_data(mp_store):    # not an mp-monitor file: dp-monitor log
+                with open(path, 'rb') as fh:
+                    handle(path, fh)
 
-    if n_files == 0 and not pow_found and not have_ifc():
+    if n_files == 0 and not pow_found and not have_ifc() and not mp_monitor.has_data(mp_store):
         warnings.append('no dp-monitor.* file found in /var/log/pan')
     if len(pow_found) > 1:
         warnings.append(f'POW output found in {len(pow_found)} files, '
@@ -376,9 +402,11 @@ def collect(path, warnings):
     samples.sort(key=lambda r: (r['t'], r['dp']))
     pow_data = pow_found[0][1] if pow_found else None
     ifc_data = merge_parsed(ifc_found) if have_ifc() else None
+    offsets |= mp_store['offsets']
     return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory, conflicts,
                      analysis_status(inventory, len(conflicts)),
-                     dp_store if dp_health.has_data(dp_store) else None)
+                     dp_store if dp_health.has_data(dp_store) else None,
+                     mp_store if mp_monitor.has_data(mp_store) else None)
 
 
 def add_aggregate(samples):
@@ -422,10 +450,10 @@ def utc_str(ms):
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
                   thresholds=None, ifc_view=None, if_thresholds=None, coverage=None,
-                  dph_view=None, dp_thresholds=None):
+                  dph_view=None, dp_thresholds=None, mp_view=None, mp_thresholds=None):
     data = {
         'name': name,
-        'kind': 'TSF analysis' if pow_view or ifc_view or dph_view else 'Throughput',
+        'kind': 'TSF analysis' if pow_view or ifc_view or dph_view or mp_view else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
@@ -436,6 +464,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'ifc': ifc_view,
         'coverage': coverage,
         'dph': dph_view,
+        'mp': mp_view,
     }
     groups = []
     for smp in samples:
@@ -467,7 +496,8 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
     data['gl'] = {'names': gl_names, 'fields': gl_fields, 'conf': pow_glossary.CONF_TEXT}
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     out = tpl
-    for key, val in render_section_help(thresholds, if_thresholds, dp_thresholds).items():
+    for key, val in render_section_help(thresholds, if_thresholds, dp_thresholds,
+                                         mp_thresholds).items():
         out = out.replace(key, val)
     return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
@@ -520,6 +550,14 @@ def main(argv=None):
     for key, default in DP_THRESHOLDS.items():
         dgrp.add_argument('--dp-' + key.replace('_', '-'), dest='dp_' + key, metavar='N',
                           type=float, default=None, help=f'{key} [{default:g}]')
+    mgrp = ap.add_argument_group(
+        'Management plane thresholds',
+        'Tunables of the management plane memory and process flags (defaults in brackets; '
+        'see mp_monitor.MP_THRESHOLDS and the flag reference in the report help). Percent '
+        'values are 0-100.')
+    for key, default in MP_THRESHOLDS.items():
+        mgrp.add_argument('--mp-' + key.replace('_', '-'), dest='mp_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
     overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
                  if getattr(args, 'pow_' + k) is not None}
@@ -533,6 +571,10 @@ def main(argv=None):
                     if getattr(args, 'dp_' + k) is not None}
     if any(v < 0 for v in dp_overrides.values()):
         ap.error('dataplane health thresholds must be >= 0')
+    mp_overrides = {k: getattr(args, 'mp_' + k) for k in MP_THRESHOLDS
+                    if getattr(args, 'mp_' + k) is not None}
+    if any(v < 0 for v in mp_overrides.values()):
+        ap.error('management plane thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -548,7 +590,8 @@ def main(argv=None):
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
-        if not samples and pow_data is None and ifc_data is None and col.dp_health is None:
+        if not samples and pow_data is None and ifc_data is None and col.dp_health is None \
+                and col.mp_data is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
@@ -557,12 +600,14 @@ def main(argv=None):
         pow_view = evaluate(pow_data, overrides) if pow_data else None
         ifc_view = evaluate_interfaces(ifc_data, if_overrides) if ifc_data else None
         dph_view = evaluate_dp_health(col.dp_health, dp_overrides) if col.dp_health else None
+        mp_view = evaluate_mp_monitor(col.mp_data, mp_overrides) if col.mp_data else None
         pow_warnings = pow_data['warnings'] if pow_data else []
         ifc_warnings = ifc_view['warnings'] if ifc_view else []
         if samples:
             suffix = '_throughput.html'
         elif pow_data is None and ifc_view is None:
-            suffix = '_dphealth.html'
+            suffix = ('_tsf.html' if dph_view and mp_view
+                      else '_dphealth.html' if dph_view else '_mp.html')
         elif pow_data is None:
             suffix = '_interfaces.html'
         else:
@@ -571,14 +616,17 @@ def main(argv=None):
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
                                    pow_view, overrides, ifc_view, if_overrides,
-                                   build_coverage(col), dph_view, dp_overrides))
+                                   build_coverage(col), dph_view, dp_overrides,
+                                   mp_view, mp_overrides))
         partial = ''
         if col.status == 'partial':
             n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())
             partial = (f' [analysis partial: {len(col.conflicts)} conflicts, '
                        f'{n_trunc} truncated members]')
         dph_warnings = dph_view['warnings'] if dph_view else []
-        n_warn = len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
+        mp_warnings = mp_view['warnings'] if mp_view else []
+        n_warn = (len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
+                  + len(mp_warnings))
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
         if samples:
@@ -595,13 +643,18 @@ def main(argv=None):
                   f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
                   f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None and not dph_view:
+            print(f'[OK] {path}: management plane only ({mp_view["n_mem"]} memory and '
+                  f'{mp_view["n_proc"]} processes samples), '
+                  f'{n_warn} warnings{partial} -> {out}')
         elif pow_data is None and ifc_view is None:
-            print(f'[OK] {path}: dataplane health only ({dph_view["n_samples"]} samples), '
+            print(f'[OK] {path}: dataplane health{" and management plane" if mp_view else " only"} '
+                  f'({dph_view["n_samples"]} samples), '
                   f'{n_warn} warnings{partial} -> {out}')
         else:
             print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
                   f'{n_warn} warnings{partial} -> {out}')
-        for w in warnings + pow_warnings + ifc_warnings + dph_warnings:
+        for w in warnings + pow_warnings + ifc_warnings + dph_warnings + mp_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)
 
