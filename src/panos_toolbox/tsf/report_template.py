@@ -18,11 +18,11 @@ TEMPLATE_HEAD = r'''<!doctype html>
 # Stylesheet rules (CSS variables, layout, tabs, tables, badges).
 TEMPLATE_CSS = r''':root{--ink:#1c2530;--mute:#5d6b7a;--line:#d8dde3;--bg:#f4f6f8;--card:#fff;--acc:#1f6f8b;--warn-bg:#fff4d6;--warn-bd:#c98a00}
 *{box-sizing:border-box}
-/* Layout: designed for Full HD (1920x1080) or larger; 1900 leaves room for a classic scrollbar. Below 1900 CSS px the page keeps
-   its width and scrolls horizontally, so no layout reflows at smaller sizes. The main
-   column grows with the window; it is capped at 3200px on ultrawide and 4K screens so
-   that lines of tables and text do not run across the whole display. */
-body{margin:0;min-width:1900px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+/* Layout: fluid from 1200 CSS px up (1280x800, Full HD at 125% scaling = 1536, Full HD = 1920, and wider). Below 1200 px the page keeps
+   its width and scrolls horizontally. The main column grows with the window; it is capped at 3200px on ultrawide and 4K screens so
+   that lines of tables and text do not run across the whole display. Wide content (tables that do not wrap) scrolls inside its
+   own box (.panel and .scroll), never the whole page. */
+body{margin:0;min-width:1200px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:3200px;margin:0 auto;padding:20px 24px 48px}
 h1{font-size:20px;margin:0 0 2px}
 h2{font-size:15px;margin:0 0 10px}
@@ -55,7 +55,7 @@ th{cursor:pointer;background:#eef1f4;position:sticky;top:0}
 .tabs button{border:1px solid transparent;border-bottom:none;border-radius:4px 4px 0 0;background:transparent;color:var(--mute);padding:8px 18px}
 .tabs button:hover{color:var(--ink)}
 .tabs button[aria-selected=true]{background:var(--card);border-color:var(--line);color:var(--ink);font-weight:600;position:relative;top:1px}
-.panel{border-top-left-radius:0}
+.panel{border-top-left-radius:0;overflow-x:auto}
 .sep{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 details{margin-top:8px}
 .hint{color:var(--mute);font-size:12px}

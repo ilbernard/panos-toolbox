@@ -57,9 +57,11 @@ def test_render_help_includes_live_thresholds_and_escapes():
     assert '&lt;script&gt;x&lt;/script&gt;' in hostile
 
 
-def test_template_is_fluid_with_1900_minimum_width():
+def test_template_is_fluid_with_1200_minimum_width():
     tpl = report_template.TEMPLATE
-    assert 'min-width:1900px' in tpl
+    assert 'min-width:1200px' in tpl
+    assert 'min-width:1900px' not in tpl
+    assert '.panel{border-top-left-radius:0;overflow-x:auto}' in tpl
     assert 'max-width:1280px' not in tpl
 
 
