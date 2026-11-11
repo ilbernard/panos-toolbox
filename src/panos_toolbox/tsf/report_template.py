@@ -400,17 +400,15 @@ const DH = D.dph || null;
 const hasDph = !!DH;
 const HD = (hasDph && DH.detail) ? DH.detail : null;
 const HDPS = HD ? DH.dps.filter(dp=>HD.by_dp[dp]) : [];
-// h: 'dp' = one series per DP (ALL = maximum across DPs); 'core' = one series per core of the selected DP (g = which grid).
+// h: 'dp' = one series per DP (ALL = maximum across DPs); 'core' = one series per core of the selected DP (g = which grid);
+// 'pkt' = one series per packet buffer / descriptor kind of the selected DP.
 const METRICS = {
   kbps:{label:'Throughput'},
   pps:{label:'Packet rate', unit:'pkt/s'},
   cps:{label:'New connections', unit:'cps'},
   sess:{label:'Allocated sessions', unit:''},
   util:{label:'Session table utilization', unit:'%'},
-  hpb_avg:{label:'Packet buffer (avg)', unit:'%', h:'dp'},
-  hpb_max:{label:'Packet buffer (max)', unit:'%', h:'dp'},
-  hpd_max:{label:'Packet descriptor (max)', unit:'%', h:'dp'},
-  hpdc_max:{label:'Packet descriptor on-chip (max)', unit:'%', h:'dp'},
+  hpkt:{label:'Packet buffer & descriptors', unit:'%', h:'pkt'},
   hcore_s:{label:'Busiest core (per-second)', unit:'%', h:'dp'},
   hcore_mm:{label:'Busiest core (per-minute max)', unit:'%', h:'dp'},
   pc_s:{label:'CPU per core (per-second)', unit:'%', h:'core', g:'s'},
@@ -426,7 +424,7 @@ const colors = {}; SERIES.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
 const hasG = D.groups.length>0;
 const hasSamples = D.samples.length>0;
 const GCOL = D.groups.map((_,i)=>'hsl('+Math.round(i*360/D.groups.length)+',62%,40%)');
-const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false, showH:false, hdp:null, hiddenCores:new Set()};
+const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false, showH:false, hdp:null, hiddenCores:new Set(), hiddenPkt:new Set()};
 const gs = {dp:null, hidden:new Set()};
 const maxOf = a => a.reduce((m,v)=>v>m?v:m,-Infinity);
 const minOf = a => a.reduce((m,v)=>v<m?v:m,Infinity);
@@ -580,16 +578,18 @@ function sessionSeries(ts, arrs, fb){
   for(let c=0;c<ts.length;c++) if(!hasReal(arrs[c]) && isNum(fb[c])) d.push({t:ts[c], v:fb[c]});
   return d.sort((a,b)=>a.t-b.t);
 }
+// The packet buffer / descriptor kinds of the combined 'hpkt' metric: [internal series key (see dpMetric), label, colour].
+const PKT_KINDS = [['hpb_avg','Packet buffer (avg)','#1f6f8b'], ['hpb_max','Packet buffer (max)','#c2410c'],
+                   ['hpd_max','Packet descriptor (max)','#7c3aed'], ['hpdc_max','Packet descriptor on-chip (max)','#2f855a']];
+// The kinds that have at least one real value for one DP; get(key) returns the [{t,v}] points of a kind.
+const pktKinds = get => PKT_KINDS.filter(k=>hasReal(get(k[0]).map(p=>p.v)));
 // The metric keys present in the health detail ({by_dp}); absent metrics are not listed.
 function dphAvail(detail, dps){
   const any = fn => dps.some(dp=>{ const d=detail.by_dp[dp]; return !!d && fn(d); });
   const has = arr => !!arr && arr.some(x=>hasReal(Array.isArray(x)?x:[x]));
   const out=[];
   if(any(d=>d.us && has(d.us.sess))) out.push('util');
-  if(any(d=>d.um && has(d.um.pb_avg))) out.push('hpb_avg');
-  if(any(d=>d.us && has(d.us.pb))) out.push('hpb_max');
-  if(any(d=>d.us && has(d.us.pd))) out.push('hpd_max');
-  if(any(d=>d.us && has(d.us.pdc))) out.push('hpdc_max');
+  if(any(d=>(d.um && has(d.um.pb_avg)) || (d.us && (has(d.us.pb) || has(d.us.pd) || has(d.us.pdc))))) out.push('hpkt');
   if(any(d=>has(d.cs))) out.push('hcore_s', 'pc_s');
   if(any(d=>has(d.cmm))) out.push('hcore_mm', 'pc_mm');
   if(any(d=>has(d.cma))) out.push('pc_ma');
@@ -689,6 +689,7 @@ function statsTable(t, series, u){
 // grafico principale
 const visibleSeries=()=>SERIES.filter(s=>!state.hidden.has(s));
 const isCoreMetric=()=>METRICS[state.metric].h==='core';
+const isPktMetric=()=>METRICS[state.metric].h==='pkt';
 const usesHealth=()=>!!METRICS[state.metric].h || (state.metric==='util' && HAVAIL.includes('util'));
 // Health grids and series are built once per DP and kept (a metric switch only filters them by the zoom range).
 const gridMemo={}, dpMemo={};
@@ -730,8 +731,17 @@ function coreSeriesList(){
   });
   return out;
 }
+// The kinds of the combined packet metric that have data for the selected DP, with their whole-period points.
+function pktAvail(){
+  const dp=state.hdp; if(!dp || !HD || !HD.by_dp[dp]) return [];
+  return pktKinds(m=>dpFull(dp,m)).map(k=>({key:k[0], name:k[1], color:k[2]}));
+}
+function pktSeriesList(){
+  return pktAvail().filter(k=>!state.hiddenPkt.has(k.name)).map(k=>({name:k.name, color:k.color, w:1.6, d:dpFull(state.hdp,k.key).filter(p=>inRange(p.t))}));
+}
 function mainSeries(){
   if(isCoreMetric()) return coreSeriesList();
+  if(isPktMetric()) return pktSeriesList();
   if(usesHealth()) return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,d:dpFull(s,state.metric).filter(p=>inRange(p.t))}));
   return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,
     d:D.samples.filter(x=>x.dp===s&&inRange(x.t)).map(x=>({t:x.t,v:isNum(x[state.metric])?x[state.metric]:null}))}));   // a missing value stays in d as null (breaks the line)
@@ -745,6 +755,7 @@ function healthExtent(){
   let lo=Infinity, hi=-Infinity;
   const take = d => { if(d.length){ lo=Math.min(lo,d[0].t); hi=Math.max(hi,d[d.length-1].t); } };
   if(isCoreMetric()){ const dp=state.hdp; if(dp && HD && HD.by_dp[dp]) take(coreGrid(dp, METRICS[state.metric].g).t.map(t=>({t}))); }
+  else if(isPktMetric()) pktAvail().forEach(k=>take(dpFull(state.hdp,k.key)));
   else SERIES.filter(x=>x!=='ALL').forEach(x=>take(dpFull(x,state.metric)));
   return lo<=hi ? [lo,hi] : null;
 }
@@ -791,11 +802,12 @@ let coreBoxes=[];
 function buildLegend(){
   const host=$('#leg'); host.replaceChildren(); coreBoxes=[];
   if(isCoreMetric() && state.hdp && HD && HD.by_dp[state.hdp]) DH.cores[state.hdp].ids.forEach((id,k)=>coreBoxes.push(legendItem(host,'core '+id,coreColor(k),state.hiddenCores,drawMain)));
+  else if(isPktMetric()) pktAvail().forEach(k=>legendItem(host,k.name,k.color,state.hiddenPkt,drawMain));
   else if(!isCoreMetric()) SERIES.forEach(s=>legendItem(host,s,colors[s],state.hidden,drawMain));
 }
 function syncMetricUi(){
   const core=isCoreMetric();
-  $('#hdpwrap').style.display=core&&HDPS.length>1?'':'none';
+  $('#hdpwrap').style.display=(core||isPktMetric())&&HDPS.length>1?'':'none';
   $('#corebtns').style.display=core?'':'none';
   buildLegend();
 }

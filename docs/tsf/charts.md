@@ -58,9 +58,10 @@ into the Dataplane Throughput tab. That tab keeps the Metric selector, the serie
 (legend checkboxes), the zoomable chart, the stats table and the samples table; the
 Dataplane health tab keeps only the per-DP summary and the findings.
 
-**New Metric entries** (listed only when the data has them): Packet buffer (avg) (the
-per-minute average), Packet buffer (max), Packet descriptor (max), Packet descriptor
-on-chip (max) (per-second values), Busiest core (per-second), Busiest core (per-minute
+**New Metric entries** (listed only when the data has them): Packet buffer & descriptors
+(one chart for one DP, one line per kind that has data: Packet buffer (avg), the per-minute
+average, Packet buffer (max), Packet descriptor (max), Packet descriptor on-chip (max),
+the per-second values; internal metric key `hpkt`, `PKT_KINDS`), Busiest core (per-second), Busiest core (per-minute
 max), and CPU per core (per-second / per-minute max / per-minute avg), one series per core
 of a DP chosen in a DP selector, with All/None legend buttons. Session table utilization
 stays one entry: the per-second `session` value of the resource monitor when the capture
