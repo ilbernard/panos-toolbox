@@ -18,6 +18,13 @@ Limits (module-level, tunable; read at call time so tests can monkeypatch them)
   are most useful at their recent end.
 - MAX_TOTAL_BYTES: expanded bytes kept for the whole archive; once reached, no further
   member is read (recorded in ``Inventory.notes``).
+- LIST_ONLY_PREFIX: a selector may return ``'list:<family>'`` for a member whose content must
+  NEVER be read (e.g. core files, which can be huge). Its name and size are recorded
+  (``FamilyInventory.listed`` / ``sizes``) and a Member with empty ``data`` and
+  ``list_only=True`` is yielded; the member limits above do not apply because nothing is read.
+  For every directory entry the selector is also called with the logical path plus a trailing
+  ``/``; only a list-only answer is used (``FamilyInventory.dirs``, ``Member.is_dir=True``),
+  so an empty directory can be told from an absent one.
 - MAX_GZ_SCAN_BYTES: how much a ``.gz`` member may expand while it is scanned. Up to
   that bound the tail is kept exactly like for plain files (memory stays bounded by
   MAX_MEMBER_BYTES); past it the scan stops and the tail of what was scanned is kept,
@@ -46,6 +53,7 @@ _CHUNK = 1024 * 1024
 REASON_UNSAFE = 'unsafe path'
 REASON_LINK = 'link'
 REASON_SPECIAL = 'special file'
+LIST_ONLY_PREFIX = 'list:'
 
 # Selector: logical relative path (".gz" dropped) -> family name, or None to ignore.
 Selector = Callable[[str], 'str | None']
@@ -59,6 +67,9 @@ class Member:
     data: bytes
     truncated: bool = False   # only part of the member is in `data`
     error: str | None = None   # read error; `data` holds what was read
+    size: int | None = None    # size on disk / in the archive (list-only members)
+    list_only: bool = False    # name and size only, content never read
+    is_dir: bool = False       # list-only directory entry
 
 
 def split_safe(raw_name: str) -> str | None:
@@ -212,6 +223,29 @@ class _Reader:
             return False
         return True
 
+    def list_only(self, name: str, logical: str, tag: str, size: int, is_dir: bool = False):
+        """Records a list-only member (no content read) and returns its Member."""
+        family = tag[len(LIST_ONLY_PREFIX):]
+        fam = self.inv.family(family)
+        if is_dir:
+            fam.dirs.append(name)
+        else:
+            fam.found.append(name)
+            fam.listed.append(name)
+            fam.sizes[name] = size
+        return Member(name, logical, family, b'', size=size, list_only=True, is_dir=is_dir)
+
+    def dir_member(self, raw_name: str):
+        """Member for a directory entry when the selector lists directories, else None."""
+        name = split_safe(raw_name)
+        if name is None:
+            return None
+        logical = logical_name(name)
+        tag = self.select(logical + '/')
+        if isinstance(tag, str) and tag.startswith(LIST_ONLY_PREFIX):
+            return self.list_only(name, logical, tag, 0, True)
+        return None
+
     def make(self, name: str, logical: str, family: str, fobj, size: int):
         """Reads one selected member; returns a Member."""
         truncated, error = False, None
@@ -239,6 +273,9 @@ def iter_tar(path: str, select: Selector, inventory: Inventory) -> Iterator[Memb
             if not rd.begin():
                 return
             if m.isdir():
+                dm = rd.dir_member(m.name)
+                if dm is not None:
+                    yield dm
                 continue
             name = split_safe(m.name)
             if name is None:
@@ -253,6 +290,9 @@ def iter_tar(path: str, select: Selector, inventory: Inventory) -> Iterator[Memb
             logical = logical_name(name)
             family = select(logical)
             if family is None:
+                continue
+            if family.startswith(LIST_ONLY_PREFIX):
+                yield rd.list_only(name, logical, family, m.size)
                 continue
             inventory.family(family).found.append(name)
             if not rd.total_ok():
@@ -276,6 +316,10 @@ def iter_dir(path: str, select: Selector, inventory: Inventory) -> Iterator[Memb
                 if not rd.begin():
                     return
                 rd.skip(os.path.relpath(full, path).replace(os.sep, '/'), REASON_LINK)
+                continue
+            dm = rd.dir_member(os.path.relpath(full, path).replace(os.sep, '/'))
+            if dm is not None:
+                yield dm
         for f in sorted(files):
             if not rd.begin():
                 return
@@ -298,6 +342,9 @@ def iter_dir(path: str, select: Selector, inventory: Inventory) -> Iterator[Memb
             logical = logical_name(name)
             family = select(logical)
             if family is None:
+                continue
+            if family.startswith(LIST_ONLY_PREFIX):
+                yield rd.list_only(name, logical, family, st.st_size)
                 continue
             inventory.family(family).found.append(name)
             if not rd.total_ok():

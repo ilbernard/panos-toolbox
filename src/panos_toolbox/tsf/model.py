@@ -14,6 +14,12 @@ class FamilyInventory:
     truncated: list[str] = field(default_factory=list)   # read, but only partially
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (name, reason)
     errors: dict[str, str] = field(default_factory=dict)  # member -> read error message
+    # List-only families (archive.LIST_ONLY_PREFIX): regular files whose NAME and size were
+    # recorded without opening them, and directories seen. Such members are in `found` but
+    # never in `read`.
+    listed: list[str] = field(default_factory=list)
+    sizes: dict[str, int] = field(default_factory=dict)  # listed member -> size in bytes
+    dirs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,3 +59,5 @@ class Collected:
     dp_health: dict[str, Any] | None = None
     # mp_monitor.new_store() filled by the mp-monitor memory/processes parser, or None.
     mp_data: dict[str, Any] | None = None
+    # system_health.new_store() filled from the CLI dump and the core file names, or None.
+    sys_data: dict[str, Any] | None = None

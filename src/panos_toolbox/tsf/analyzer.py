@@ -9,7 +9,9 @@ counters (`show counter interface all`, `show interface ...`) into an "Interface
 (see interface_errors.py). The resource monitor of the same dp-monitor files (session, packet
 buffer and descriptor utilization, CPU load per core) goes into a "Dataplane health" tab (see
 dp_health.py). The memory and processes sections of the mp-monitor.* files go into a
-"Management plane" tab (see mp_monitor.py).
+"Management plane" tab (see mp_monitor.py). Four sections of the CLI dump (software status,
+configuration memory, NAT pools) and the names of the core files in the archive go into a
+"System health" tab (see system_health.py).
 
 Standard library only.
 
@@ -22,10 +24,11 @@ Usage:
 
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
 data, <name>_interfaces.html when it has only interface data, <name>_dphealth.html /
-<name>_mp.html when it has only dataplane health / management plane data, <name>_tsf.html when
-it has several kinds); with multiple inputs a summary index.html is also created. The POW and interface
+<name>_mp.html / <name>_sys.html when it has only dataplane health / management plane / system
+health data, <name>_tsf.html when it has several kinds); with multiple inputs a summary index.html is also created. The POW and interface
 anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options, the dataplane
-health ones with --dp-<name> and the management plane ones with --mp-<name> (see --help).
+health ones with --dp-<name>, the management plane ones with --mp-<name> and the system health
+ones with --sys-<name> (see --help).
 """
 import argparse
 import html
@@ -39,7 +42,7 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import archive, dp_health, if_glossary, mp_monitor, pow_glossary
+from . import archive, dp_health, if_glossary, mp_monitor, pow_glossary, system_health
 from .coverage import build_coverage
 from .dp_health import DP_THRESHOLDS, evaluate_dp_health
 from .findings import analysis_status
@@ -56,6 +59,7 @@ from .interface_errors import has_data as ifc_has_data
 from .pow_perf import POW_THRESHOLDS, evaluate, has_data, parse_pow
 from .report_help import render_section_help
 from .report_template import TEMPLATE
+from .system_health import SYS_THRESHOLDS, evaluate_system_health
 
 # --------------------------------------------------------------------------
 # Parsing
@@ -279,6 +283,8 @@ def _select_family(logical):
         return 'mp-monitor'
     if CLI_FILE_RE.search('/' + logical):
         return 'cli'
+    if system_health.core_path_kind(logical):
+        return archive.LIST_ONLY_PREFIX + 'cores'    # names and sizes only, never read
     return None
 
 
@@ -297,6 +303,8 @@ def collect(path, warnings):
     conflicts = []
     dp_store = dp_health.new_store()
     mp_store = mp_monitor.new_store()
+    sys_store = system_health.new_store()
+    core_files, core_dirs = [], []
     n_files = 0
     pow_found = []
     ifc_found = []
@@ -344,6 +352,10 @@ def collect(path, warnings):
         except (OSError, EOFError, tarfile.TarError) as exc:  # truncated archive
             warnings.append(f'{base}: CLI output read error ({exc}), skipped')
             return
+        try:
+            system_health.parse_system_health(text_lines, base, sys_store, warnings)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: system health not parsed ({exc})')
         parsed = parse_pow(text_lines, src=base)
         if has_data(parsed):
             pow_found.append((base, parsed))
@@ -366,7 +378,12 @@ def collect(path, warnings):
             if mem.truncated and not mem.error:
                 warnings.append(f'{base}: larger than the read limit, only its last '
                                 f'part was analysed')
-            if mem.family == 'dp-monitor':
+            if mem.family == 'cores':           # list-only: name and size, no content
+                if mem.is_dir:
+                    core_dirs.append(mem.name)
+                else:
+                    core_files.append((mem.name, mem.size))
+            elif mem.family == 'dp-monitor':
                 dp_members.append(mem)
             elif mem.family == 'mp-monitor':
                 mp_members.append(mem)
@@ -380,6 +397,7 @@ def collect(path, warnings):
             archive.sort_rotations([m.name for m in mp_members]))}
         for mem in sorted(mp_members, key=lambda m: mp_order[m.name]):
             handle_mp(mem.name, io.BytesIO(mem.data))
+        system_health.add_core_members(sys_store, core_files, core_dirs)
         for name, reason in inventory.skipped:
             if reason == archive.REASON_UNSAFE:
                 warnings.append(f'{name}: unsafe member path, skipped')
@@ -387,14 +405,15 @@ def collect(path, warnings):
     else:                                     # single file: POW output or log
         with open(path, 'rb') as fh:
             handle_cli(path, fh)
-        if not pow_found and not have_ifc():
+        if not pow_found and not have_ifc() and not system_health.has_data(sys_store):
             with open(path, 'rb') as fh:
                 handle_mp(path, fh)
             if not mp_monitor.has_data(mp_store):    # not an mp-monitor file: dp-monitor log
                 with open(path, 'rb') as fh:
                     handle(path, fh)
 
-    if n_files == 0 and not pow_found and not have_ifc() and not mp_monitor.has_data(mp_store):
+    if n_files == 0 and not pow_found and not have_ifc() and not mp_monitor.has_data(mp_store) \
+            and not system_health.has_data(sys_store):
         warnings.append('no dp-monitor.* file found in /var/log/pan')
     if len(pow_found) > 1:
         warnings.append(f'POW output found in {len(pow_found)} files, '
@@ -406,7 +425,8 @@ def collect(path, warnings):
     return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory, conflicts,
                      analysis_status(inventory, len(conflicts)),
                      dp_store if dp_health.has_data(dp_store) else None,
-                     mp_store if mp_monitor.has_data(mp_store) else None)
+                     mp_store if mp_monitor.has_data(mp_store) else None,
+                     sys_store if system_health.has_data(sys_store) else None)
 
 
 def add_aggregate(samples):
@@ -450,10 +470,12 @@ def utc_str(ms):
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
                   thresholds=None, ifc_view=None, if_thresholds=None, coverage=None,
-                  dph_view=None, dp_thresholds=None, mp_view=None, mp_thresholds=None):
+                  dph_view=None, dp_thresholds=None, mp_view=None, mp_thresholds=None,
+                  sys_view=None, sys_thresholds=None):
     data = {
         'name': name,
-        'kind': 'TSF analysis' if pow_view or ifc_view or dph_view or mp_view else 'Throughput',
+        'kind': 'TSF analysis' if (pow_view or ifc_view or dph_view or mp_view
+                                    or sys_view) else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
@@ -465,6 +487,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'coverage': coverage,
         'dph': dph_view,
         'mp': mp_view,
+        'sys': sys_view,
     }
     groups = []
     for smp in samples:
@@ -497,7 +520,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     out = tpl
     for key, val in render_section_help(thresholds, if_thresholds, dp_thresholds,
-                                         mp_thresholds).items():
+                                         mp_thresholds, sys_thresholds).items():
         out = out.replace(key, val)
     return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
@@ -558,6 +581,14 @@ def main(argv=None):
     for key, default in MP_THRESHOLDS.items():
         mgrp.add_argument('--mp-' + key.replace('_', '-'), dest='mp_' + key, metavar='N',
                           type=float, default=None, help=f'{key} [{default:g}]')
+    sgrp = ap.add_argument_group(
+        'System health thresholds',
+        'Tunables of the system health flags (defaults in brackets; see '
+        'system_health.SYS_THRESHOLDS and the flag reference in the report help). Percent '
+        'values are 0-100.')
+    for key, default in SYS_THRESHOLDS.items():
+        sgrp.add_argument('--sys-' + key.replace('_', '-'), dest='sys_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
     overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
                  if getattr(args, 'pow_' + k) is not None}
@@ -575,6 +606,10 @@ def main(argv=None):
                     if getattr(args, 'mp_' + k) is not None}
     if any(v < 0 for v in mp_overrides.values()):
         ap.error('management plane thresholds must be >= 0')
+    sys_overrides = {k: getattr(args, 'sys_' + k) for k in SYS_THRESHOLDS
+                     if getattr(args, 'sys_' + k) is not None}
+    if any(v < 0 for v in sys_overrides.values()):
+        ap.error('system health thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -591,7 +626,7 @@ def main(argv=None):
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
         if not samples and pow_data is None and ifc_data is None and col.dp_health is None \
-                and col.mp_data is None:
+                and col.mp_data is None and col.sys_data is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
@@ -601,13 +636,16 @@ def main(argv=None):
         ifc_view = evaluate_interfaces(ifc_data, if_overrides) if ifc_data else None
         dph_view = evaluate_dp_health(col.dp_health, dp_overrides) if col.dp_health else None
         mp_view = evaluate_mp_monitor(col.mp_data, mp_overrides) if col.mp_data else None
+        sys_view = (evaluate_system_health(col.sys_data, sys_overrides)
+                    if col.sys_data else None)
         pow_warnings = pow_data['warnings'] if pow_data else []
         ifc_warnings = ifc_view['warnings'] if ifc_view else []
         if samples:
             suffix = '_throughput.html'
         elif pow_data is None and ifc_view is None:
-            suffix = ('_tsf.html' if dph_view and mp_view
-                      else '_dphealth.html' if dph_view else '_mp.html')
+            n_kinds = sum(1 for v in (dph_view, mp_view, sys_view) if v)
+            suffix = ('_tsf.html' if n_kinds > 1 else '_dphealth.html' if dph_view
+                      else '_mp.html' if mp_view else '_sys.html')
         elif pow_data is None:
             suffix = '_interfaces.html'
         else:
@@ -617,7 +655,7 @@ def main(argv=None):
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
                                    pow_view, overrides, ifc_view, if_overrides,
                                    build_coverage(col), dph_view, dp_overrides,
-                                   mp_view, mp_overrides))
+                                   mp_view, mp_overrides, sys_view, sys_overrides))
         partial = ''
         if col.status == 'partial':
             n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())
@@ -625,8 +663,9 @@ def main(argv=None):
                        f'{n_trunc} truncated members]')
         dph_warnings = dph_view['warnings'] if dph_view else []
         mp_warnings = mp_view['warnings'] if mp_view else []
+        sys_warnings = sys_view['warnings'] if sys_view else []
         n_warn = (len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
-                  + len(mp_warnings))
+                  + len(mp_warnings) + len(sys_warnings))
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
         if samples:
@@ -643,6 +682,10 @@ def main(argv=None):
                   f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
                   f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None and not dph_view and not mp_view:
+            checks = ', '.join(f'{c["title"]} {c["status"]}' for c in sys_view['checks'])
+            print(f'[OK] {path}: system health only ({checks}), '
+                  f'{n_warn} warnings{partial} -> {out}')
         elif pow_data is None and ifc_view is None and not dph_view:
             print(f'[OK] {path}: management plane only ({mp_view["n_mem"]} memory and '
                   f'{mp_view["n_proc"]} processes samples), '
@@ -654,7 +697,11 @@ def main(argv=None):
         else:
             print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
                   f'{n_warn} warnings{partial} -> {out}')
-        for w in warnings + pow_warnings + ifc_warnings + dph_warnings + mp_warnings:
+        if sys_view:
+            print(f'     system health: {sys_view["status"]} ('
+                  + '; '.join(f'{c["title"]}: {c["status"]}' for c in sys_view['checks']) + ')')
+        for w in warnings + pow_warnings + ifc_warnings + dph_warnings + mp_warnings \
+                + sys_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)
 

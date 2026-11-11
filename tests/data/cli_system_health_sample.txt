@@ -1,0 +1,71 @@
+
+> show clock
+
+Mon Jan  5 10:00:00 UTC 2026
+
+
+> show system software status
+
+
+Slot 1, Role mp
+----------------------------------------
+
+Type     Name                           State    Info
+Group    all                            running  
+Group    base                           running  
+Process  all_task_1                     running  (pid: 1101) 
+Process  exampled                       stopped  
+Process  sampled                        running  (pid: 1102) 
+Process  trialrcvr                      starting 
+
+
+> debug dataplane show cfg-memstat statistics
+
+Policy cache usage threshold = 100%
+
+VSYS Config Allocator Usage   :   60000KB (50% of  120000KB)
+
+Current config memory usage
+Misc                          : 2048   KB (Actual 1916   KB)
+
+VSYS POLICY CACHE Allocator Usage 
+
+POLICY CACHE (ACTIVE)         :   30720KB 
+POLICY CACHE USAGE            :   28000KB ( 91% of   30688KB)
+alloc size 13452, max 13452
+pool 0 element size 16 avail list 1 full list 0
+
+ POLICY CACHE (PASSIVE)       :   30720KB 
+POLICY CACHE USAGE            :    1280KB ( 4% of   30688KB)
+alloc size 14044, max 14052
+
+> show running global-ippool 
+
+Idx  Type             From                             To              ToNum Ref. Cnt Mem Size Ratio Ready 
+---- ---------------  -------------------------------- --------------- ----- -------- -------- ----- ------
+1    Dynamic IP/Port 192.0.2.1-192.0.2.1    198.51.100.2     1     1           20344     2 k1 /p1 
+
+Usable NAT DIP/DIPP shared memory size: 1000000
+Used NAT DIP/DIPP shared memory size: 600000(60.00%)
+Dynamic IP NAT Pool: 0(0.00%)
+Dynamic IP/Port NAT Pool: 7(55.50%)
+
+
+
+> show running ippool
+
+VSYS 1 has 3 NAT rules, DIP and DIPP rules:
+Rule                             Type            Used       Available  Mem Size Ratio
+-------------------------------- --------------- ---------- ---------- -------- -----
+SNAT.example                     Dynamic IP/Port 600        400        20344     2
+SNAT. Example Rule               Dynamic IP/Port 12         1988       20344     2
+DIP.small                        Dynamic IP      1          99         100       1
+
+VSYS 2 has 1 NAT rules, DIP and DIPP rules:
+Rule                             Type            Used       Available  Mem Size Ratio Persistent Min        Max       
+-------------------------------- --------------- ---------- ---------- -------- ----- ---------- ---------- ----------
+SNAT.vsys two                    Dynamic IP/Port 5          995        20344    2     no         1          10        
+
+
+> show arp management
+

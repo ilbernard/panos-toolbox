@@ -15,7 +15,7 @@ from . import mp_monitor
 from .model import Collected
 
 # Families the analyzer knows about; listed even when no member was found ("absent").
-KNOWN_FAMILIES = ('dp-monitor', 'mp-monitor', 'cli')
+KNOWN_FAMILIES = ('dp-monitor', 'mp-monitor', 'cli', 'cores')
 MAX_CONFLICTS = 200
 
 # Family states, in the order they are reported.
@@ -25,6 +25,7 @@ ZERO_SAMPLES = 'zero_samples'  # dp-/mp-monitor members read, no sample extracte
 TRUNCATED = 'truncated'      # at least one member read only in part (tail kept)
 ERROR = 'error'              # at least one member hit a read error
 CONFLICT = 'conflict'        # dp-monitor samples with the same DP and time but other values
+LISTED = 'listed'            # list-only family (cores): names and sizes recorded, never read
 OK = 'ok'
 
 
@@ -47,6 +48,9 @@ def _family_row(name: str, fam, ranges, conflicts, mp_ranges=None) -> dict[str, 
     trunc = set(fam.truncated) if fam else set()
     errors = dict(fam.errors) if fam else {}
     skipped = dict(fam.skipped) if fam else {}
+    listed = set(fam.listed) if fam else set()
+    sizes = dict(fam.sizes) if fam else {}
+    dirs = list(fam.dirs) if fam else []
     is_dp = name == 'dp-monitor'
     is_mp = name == 'mp-monitor'
     if is_mp:
@@ -54,7 +58,10 @@ def _family_row(name: str, fam, ranges, conflicts, mp_ranges=None) -> dict[str, 
     members = []
     for m in found:
         base = os.path.basename(m)
-        if m in errors:
+        if m in listed:
+            state = 'listed'
+            detail = f'{sizes[m]:,} bytes' if m in sizes else ''
+        elif m in errors:
             state, detail = 'error', errors[m]
         elif m in skipped:
             state, detail = 'skipped:' + skipped[m], skipped[m]
@@ -85,8 +92,10 @@ def _family_row(name: str, fam, ranges, conflicts, mp_ranges=None) -> dict[str, 
             row_first = min(m['first'] for m in got)
             row_last = max(m['last'] for m in got)
     states = []
-    if not found:
+    if not found and not dirs:
         states.append(ABSENT)
+    elif listed or (dirs and not found):
+        states.append(LISTED)           # list-only: nothing is read, so no read-based state
     else:
         if n_read == 0:
             states.append(UNREAD)
@@ -103,7 +112,7 @@ def _family_row(name: str, fam, ranges, conflicts, mp_ranges=None) -> dict[str, 
     return {'family': name, 'states': states, 'found': len(found), 'read': n_read,
             'truncated': n_trunc, 'errors': n_error, 'skipped': len(skipped),
             'samples': n_samples, 'first': row_first, 'last': row_last,
-            'conflicts': n_conf, 'members': members}
+            'conflicts': n_conf, 'members': members, 'dirs': dirs}
 
 
 def build_coverage(collected: Collected) -> dict[str, Any]:
