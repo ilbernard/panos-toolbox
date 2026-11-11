@@ -72,6 +72,15 @@ table.hm{width:auto;margin:0 0 10px}
 table.hm td,table.hm th{text-align:center;min-width:36px;padding:3px 5px;cursor:default;position:static}
 table.hm th:first-child,table.hm td:first-child{text-align:left;min-width:150px}
 table.hm td.hot{outline:2px solid #1c2530;outline-offset:-2px;font-weight:700}
+.pcap{border:1px solid var(--line);border-radius:3px;margin:0 0 4px;padding:0}
+.pcap>summary{padding:4px 10px;background:#f7f9fb;font-variant-numeric:tabular-nums}
+.pcap>summary .pk.hot{color:#b42318;font-weight:700}
+.pcap[open]>summary{border-bottom:1px solid var(--line)}
+.pcwrap{padding:6px 10px;overflow:auto}
+.pcwrap h4{margin:10px 0 4px}
+.pcwrap table.hm{margin:0}
+.pcwrap table.hm td,.pcwrap table.hm th{min-width:30px;padding:2px 3px}
+.pcwrap table.hm th:first-child,.pcwrap table.hm td:first-child{min-width:150px}
 table.dphs th,table.dphs td{text-align:right}
 table.dphs th:first-child,table.dphs td:first-child{text-align:left}
 tr.anom-crit td{background:#fdecea}
@@ -157,12 +166,26 @@ TEMPLATE_BODY = r'''</style>
   <div class="sechead"><h2>Dataplane throughput</h2>__HB_chart__</div>__HP_chart__
   <div class="bar">
     <label>Metric <select id="metric"></select></label>
+    <label id="hdpwrap" style="display:none">DP <select id="hdp"></select></label>
     <div class="leg" id="leg"></div>
+    <span id="corebtns" style="display:none"><button id="call" type="button">All</button> <button id="cnone" type="button">None</button></span>
     <button id="reset" type="button">Reset zoom</button>
   </div>
   <div class="cw" id="chartwrap"><svg id="chart" role="img" aria-label="Metrics over time chart"></svg><div class="tip" id="tip"></div></div>
   <p class="hint">Drag on the chart to zoom into a range; the range also applies to the other charts and to the table.</p>
   <table class="stats" id="stats"></table>
+  <div class="sep" id="pcsec" style="display:none">
+  <div class="sechead"><h2>CPU peak per core</h2>__HB_dphcores__</div>__HP_dphcores__
+  <p class="hint" id="pcinfo"></p>
+  <div id="dphcores"></div>
+  <div class="bar" style="margin-top:8px">
+    <strong>Captures</strong>
+    <label><input type="checkbox" id="pchot"> only captures with a core at or above the limit</label>
+    <span class="hint" id="pccount"></span>
+  </div>
+  <div id="pclist"></div>
+  <p class="hint" id="pcmore"></p>
+  </div>
   <div class="sep">
   <div class="sechead"><h3>Samples table</h3>__HB_table__</div>__HP_table__
   <div class="bar">
@@ -171,6 +194,7 @@ TEMPLATE_BODY = r'''</style>
     <label>To (UTC) <input type="datetime-local" id="t1"></label>
     <label>Search <input type="search" id="q" placeholder="free text"></label>
     <label id="gcolwrap" style="display:none"><input type="checkbox" id="gcol"> CPU by group columns</label>
+    <label id="hcolwrap" style="display:none"><input type="checkbox" id="hcol"> Dataplane health columns</label>
     <button id="csv" type="button">Export CSV</button>
     <span class="hint" id="count"></span>
   </div>
@@ -199,16 +223,7 @@ TEMPLATE_BODY = r'''</style>
   <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
   <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
   <ul class="banner" id="dphbanner"></ul>
-  <div class="sep"><div class="sechead"><h2>Utilization over time</h2>__HB_dphchart__</div>__HP_dphchart__
-  <div class="bar">
-    <label>DP <select id="dphdp"></select></label>
-    <button id="dphreset" type="button">Reset zoom</button>
-    <div class="leg" id="dphleg"></div>
-  </div>
-  <div class="cw" id="dphwrap"><svg id="dphchart" role="img" aria-label="Dataplane health over time chart"></svg><div class="tip" id="dphtip"></div></div>
-  <table class="stats" id="dphstats"></table></div>
-  <div class="sep"><div class="sechead"><h2>CPU peak per core</h2>__HB_dphcores__</div>__HP_dphcores__
-  <div id="dphcores"></div></div>
+  <p class="hint">The utilization charts and the CPU per core tables are in the <b>Dataplane Throughput</b> tab (Metric selector and "CPU peak per core").</p>
 </section>
 
 <section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
@@ -380,19 +395,38 @@ const D = __DATA__;
 const $ = s => document.querySelector(s);
 const NS = 'http://www.w3.org/2000/svg';
 __GL_JS__
+// Dataplane health data (resource monitor): D.dph. HD holds the full per-capture tables (view key "detail").
+const DH = D.dph || null;
+const hasDph = !!DH;
+const HD = (hasDph && DH.detail) ? DH.detail : null;
+const HDPS = HD ? DH.dps.filter(dp=>HD.by_dp[dp]) : [];
+// h: 'dp' = one series per DP (ALL = maximum across DPs); 'core' = one series per core of the selected DP (g = which grid).
 const METRICS = {
   kbps:{label:'Throughput'},
   pps:{label:'Packet rate', unit:'pkt/s'},
   cps:{label:'New connections', unit:'cps'},
   sess:{label:'Allocated sessions', unit:''},
-  util:{label:'Session table utilization', unit:'%'}
+  util:{label:'Session table utilization', unit:'%'},
+  hpb_avg:{label:'Packet buffer (avg)', unit:'%', h:'dp'},
+  hpb_max:{label:'Packet buffer (max)', unit:'%', h:'dp'},
+  hpd_max:{label:'Packet descriptor (max)', unit:'%', h:'dp'},
+  hpdc_max:{label:'Packet descriptor on-chip (max)', unit:'%', h:'dp'},
+  hcore_s:{label:'Busiest core (per-second)', unit:'%', h:'dp'},
+  hcore_mm:{label:'Busiest core (per-minute max)', unit:'%', h:'dp'},
+  pc_s:{label:'CPU per core (per-second)', unit:'%', h:'core', g:'s'},
+  pc_mm:{label:'CPU per core (per-minute max)', unit:'%', h:'core', g:'mm'},
+  pc_ma:{label:'CPU per core (per-minute avg)', unit:'%', h:'core', g:'ma'}
 };
 const PALETTE = ['#1c2530','#1f6f8b','#c2410c','#2f855a','#7c3aed','#b7791f','#be185d','#0e7490','#4d7c0f'];
-const colors = {}; D.series.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
+const CORE_PAL = ['#1f6f8b','#c2410c','#2f855a','#7c3aed','#b7791f','#be185d','#0e7490','#4d7c0f','#1c2530','#d97706','#2563eb','#9d174d'];
+const coreColor = k => CORE_PAL[k%CORE_PAL.length];
+// Series of the DP legend: the sample series, or (a report with health data only) the DPs of the health data.
+const SERIES = D.series.length ? D.series : (hasDph ? (DH.dps.length>1 ? ['ALL'].concat(DH.dps) : DH.dps.slice()) : []);
+const colors = {}; SERIES.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
 const hasG = D.groups.length>0;
 const hasSamples = D.samples.length>0;
 const GCOL = D.groups.map((_,i)=>'hsl('+Math.round(i*360/D.groups.length)+',62%,40%)');
-const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false};
+const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false, showH:false, hdp:null, hiddenCores:new Set()};
 const gs = {dp:null, hidden:new Set()};
 const maxOf = a => a.reduce((m,v)=>v>m?v:m,-Infinity);
 const minOf = a => a.reduce((m,v)=>v<m?v:m,Infinity);
@@ -402,7 +436,7 @@ const TMIN = minOf(ALLT), TMAX = maxOf(ALLT);
 const pad = n => String(n).padStart(2,'0');
 const iso = ms => new Date(ms).toISOString().replace('T',' ').slice(0,19);
 const isoLocalInput = ms => new Date(ms).toISOString().slice(0,16);
-const hasMetric = k => D.samples.some(s=>s[k]!==null && s[k]!==undefined);
+const hasMetric = k => METRICS[k].h ? HAVAIL.includes(k) : (D.samples.some(s=>s[k]!==null && s[k]!==undefined) || (k==='util' && HAVAIL.includes('util')));
 const inRange = t => (state.range[0]===null||t>=state.range[0]) && (state.range[1]===null||t<=state.range[1]);
 
 function scaleFor(vals){
@@ -416,7 +450,7 @@ const fmt = (v,div) => (v/div).toLocaleString('en-US',{maximumFractionDigits: di
 // header
 $('#title').textContent = D.kind + ' - ' + D.name;
 $('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : (D.ifc && D.ifc.system.collected_at ? 'Collected at ' + D.ifc.system.collected_at : ''));
-$('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (D.series[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization it is the maximum value).' : '');
+$('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (SERIES[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization and the dataplane health metrics it is the maximum value).' : '');
 $('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
 
@@ -480,6 +514,90 @@ function chartRuns(d, t0, t1, plotW){
 const realPts = d => d.filter(p=>isNum(p.v));
 // CHART-HELPERS-END
 
+// DPH-HELPERS-BEGIN
+// Reconstructed timestamps and series of the dataplane health tables (see docs/tsf/charts.md). Pure functions, no DOM.
+// The section time T is when the command ran. Rows of the per-minute table are NEWEST FIRST and each is a whole wall-clock
+// minute (verified on real data): row i is the minute ending at the last minute boundary at or before T, minus i minutes.
+// The per-second table and the 15 per-second utilization values are assumed to follow the same order (inferred, not
+// verifiable): row i is the second T - i s.
+const REC_S = 1000, REC_M = 60000;
+const recSec = (t, i) => t - i*REC_S;
+const recMin = (t, i) => Math.floor(t/REC_M)*REC_M - i*REC_M;
+// Per-second grid: ts[c] = capture times (ascending), flats[c] = flat row-major array (rows x nc) or null/undefined.
+// Returns {t:[ascending ms], cols:[nc arrays aligned with t]}; a missing value is null. For an equal timestamp (windows that
+// overlap) the later capture wins.
+function secondGrid(ts, flats, nc){
+  if(!(nc>=1)) return {t:[], cols:[]};
+  const T=[], cols=Array.from({length:nc},()=>[]); let sorted=true;
+  for(let c=0;c<ts.length;c++){
+    const f=flats[c]; if(!f) continue; const n=Math.floor(f.length/nc);
+    for(let r=n-1;r>=0;r--){
+      const t=recSec(ts[c], r); if(T.length && t<=T[T.length-1]) sorted=false;
+      T.push(t); for(let k=0;k<nc;k++){ const v=f[r*nc+k]; cols[k].push(isNum(v)?v:null); }
+    }
+  }
+  if(sorted) return {t:T, cols};
+  const idx=T.map((_,i)=>i).sort((a,b)=>T[a]-T[b]||a-b), out={t:[], cols:cols.map(()=>[])};
+  idx.forEach(i=>{
+    const last=out.t.length-1;
+    if(last>=0 && out.t[last]===T[i]) cols.forEach((col,k)=>{ if(col[i]!==null) out.cols[k][last]=col[i]; });
+    else { out.t.push(T[i]); cols.forEach((col,k)=>out.cols[k].push(col[i])); }
+  });
+  return out;
+}
+// Per-minute grid with the overlapping windows merged. k0[c] = floor(T/60 s) of capture c, so the minute of row r of capture c
+// is k0[c]-r and it ends at (k0[c]-r)*60000. Captures must be in ascending time order: for the same (core, minute) the most
+// recent capture wins; a missing value never replaces a real one.
+function minuteGrid(k0, flats, nc){
+  if(!(nc>=1)) return {t:[], cols:[]};
+  const m=new Map();
+  for(let c=0;c<k0.length;c++){
+    const f=flats[c]; if(!f || !isNum(k0[c])) continue; const n=Math.floor(f.length/nc);
+    for(let r=0;r<n;r++){
+      const key=k0[c]-r; let row=m.get(key); if(!row){ row=new Array(nc).fill(null); m.set(key,row); }
+      for(let k=0;k<nc;k++){ const v=f[r*nc+k]; if(isNum(v)) row[k]=v; }
+    }
+  }
+  const keys=Array.from(m.keys()).sort((a,b)=>a-b);
+  return {t:keys.map(k=>k*REC_M), cols:Array.from({length:nc},(_,k)=>keys.map(key=>m.get(key)[k]))};
+}
+const gridCol = (g, k) => g.t.map((t,i)=>({t, v:g.cols[k][i]}));
+// The busiest core at each time of a grid (maximum over the cores; null when no core has a value).
+function gridMax(g){
+  return g.t.map((t,i)=>{ let mx=null; for(let k=0;k<g.cols.length;k++){ const v=g.cols[k][i]; if(isNum(v) && (mx===null || v>mx)) mx=v; } return {t, v:mx}; });
+}
+// Several series of {t,v} merged into one with the maximum at each timestamp (the ALL series of a percentage).
+function mergeMax(lists){
+  const m=new Map();
+  lists.forEach(d=>d.forEach(p=>{ if(!m.has(p.t)) m.set(p.t, null); if(isNum(p.v) && (m.get(p.t)===null || p.v>m.get(p.t))) m.set(p.t, p.v); }));
+  return Array.from(m.keys()).sort((a,b)=>a-b).map(t=>({t, v:m.get(t)}));
+}
+const hasReal = a => !!a && a.some(isNum);
+// Session table utilization of one DP: the per-second resource values where the capture has them, else the target-dp reading
+// (fb[c], one point at the capture time).
+function sessionSeries(ts, arrs, fb){
+  const g=secondGrid(ts, arrs.map(a=>hasReal(a)?a:null), 1), d=gridCol(g, 0);
+  for(let c=0;c<ts.length;c++) if(!hasReal(arrs[c]) && isNum(fb[c])) d.push({t:ts[c], v:fb[c]});
+  return d.sort((a,b)=>a.t-b.t);
+}
+// The metric keys present in the health detail ({by_dp}); absent metrics are not listed.
+function dphAvail(detail, dps){
+  const any = fn => dps.some(dp=>{ const d=detail.by_dp[dp]; return !!d && fn(d); });
+  const has = arr => !!arr && arr.some(x=>hasReal(Array.isArray(x)?x:[x]));
+  const out=[];
+  if(any(d=>d.us && has(d.us.sess))) out.push('util');
+  if(any(d=>d.um && has(d.um.pb_avg))) out.push('hpb_avg');
+  if(any(d=>d.us && has(d.us.pb))) out.push('hpb_max');
+  if(any(d=>d.us && has(d.us.pd))) out.push('hpd_max');
+  if(any(d=>d.us && has(d.us.pdc))) out.push('hpdc_max');
+  if(any(d=>has(d.cs))) out.push('hcore_s', 'pc_s');
+  if(any(d=>has(d.cmm))) out.push('hcore_mm', 'pc_mm');
+  if(any(d=>has(d.cma))) out.push('pc_ma');
+  return out;
+}
+// DPH-HELPERS-END
+const HAVAIL = HD ? dphAvail(HD, HDPS) : [];
+
 // reusable chart
 // Chart height follows the window height: 360px (the 1080p size) up to 720px on 4K.
 // The width comes from the container, so the viewBox ratio gives the drawn height.
@@ -539,7 +657,9 @@ function makeChart(svg, tip, wrap){
       series.forEach(s=>s.d.forEach(p=>{if(!isNum(p.v)) return; const d=Math.abs(p.t-t); if(d<bd){bd=d;best=p.t;}}));
       if(best===null){tip.style.display='none'; return;}
       const cx=view.X(best); view.cur.setAttribute('x1',cx); view.cur.setAttribute('x2',cx); view.cur.setAttribute('display','');
-      const rows=series.map(s=>{const p=s.d.find(z=>z.t===best&&isNum(z.v)); return p?'<div><span class="sw" style="background:'+s.color+'"></span> '+s.name+': '+fmt(p.v,view.u.div)+' '+view.u.unit+'</div>':'';}).join('');
+      const ents=[]; series.forEach(s=>{const p=s.d.find(z=>z.t===best&&isNum(z.v)); if(p) ents.push({s,p});});
+      const shown=ents.length>12?ents.slice().sort((a,b)=>b.p.v-a.p.v).slice(0,12):ents;   // many series (cores): the 12 highest
+      const rows=shown.map(e=>'<div><span class="sw" style="background:'+e.s.color+'"></span> '+e.s.name+': '+fmt(e.p.v,view.u.div)+' '+view.u.unit+'</div>').join('')+(ents.length>shown.length?'<div>+'+(ents.length-shown.length)+' more (lower values)</div>':'');
       tip.innerHTML='<div>'+iso(best)+' UTC</div>'+rows; tip.style.display='block';
       const r=svg.getBoundingClientRect(); let left=(cx/view.W)*r.width+12; if(left>r.width-190) left-=210;
       tip.style.left=left+'px'; tip.style.top='12px';
@@ -567,8 +687,52 @@ function statsTable(t, series, u){
 }
 
 // grafico principale
-const visibleSeries=()=>D.series.filter(s=>!state.hidden.has(s));
+const visibleSeries=()=>SERIES.filter(s=>!state.hidden.has(s));
+const isCoreMetric=()=>METRICS[state.metric].h==='core';
+const usesHealth=()=>!!METRICS[state.metric].h || (state.metric==='util' && HAVAIL.includes('util'));
+// Health grids and series are built once per DP and kept (a metric switch only filters them by the zoom range).
+const gridMemo={}, dpMemo={};
+function coreGrid(dp, g){
+  const key=dp+'#'+g; if(gridMemo[key]) return gridMemo[key];
+  const d=HD.by_dp[dp], ts=DH.series[dp].t, nc=DH.cores[dp].ids.length;
+  return gridMemo[key]=(g==='s' ? secondGrid(ts, d.cs, nc) : minuteGrid(d.k0, g==='mm'?d.cmm:d.cma, nc));
+}
+function dpMetric(dp, m){
+  const d=HD.by_dp[dp], ts=DH.series[dp].t, S=DH.series[dp], one=g=>gridCol(g,0), us=d.us||{}, um=d.um||{};
+  switch(m){
+    case 'util': return sessionSeries(ts, us.sess||ts.map(()=>null), S.sess.map((v,i)=>S.sess_src[i]==='tdp'?v:null));
+    case 'hpb_avg': return one(minuteGrid(d.k0, um.pb_avg||[], 1));
+    case 'hpb_max': return one(secondGrid(ts, us.pb||[], 1));
+    case 'hpd_max': return one(secondGrid(ts, us.pd||[], 1));
+    case 'hpdc_max': return one(secondGrid(ts, us.pdc||[], 1));
+    case 'hcore_s': return gridMax(coreGrid(dp,'s'));
+    case 'hcore_mm': return gridMax(coreGrid(dp,'mm'));
+  }
+  return [];
+}
+// Whole-period points of one DP series (or ALL = maximum across the DPs) of a health metric, not filtered by the zoom.
+function dpFull(name, m){
+  const key=name+'|'+m; if(dpMemo[key]) return dpMemo[key];
+  let d;
+  if(name==='ALL') d=mergeMax(SERIES.filter(x=>x!=='ALL').map(x=>dpFull(x,m)));
+  else if(HD && HD.by_dp[name]) d=dpMetric(name, m);
+  else if(m==='util') d=D.samples.filter(x=>x.dp===name).map(x=>({t:x.t, v:isNum(x.util)?x.util:null}));
+  else d=[];
+  return dpMemo[key]=d;
+}
+function coreSeriesList(){
+  const dp=state.hdp; if(!dp || !HD || !HD.by_dp[dp]) return [];
+  const ids=DH.cores[dp].ids, g=coreGrid(dp, METRICS[state.metric].g), out=[];
+  ids.forEach((id,k)=>{
+    const name='core '+id; if(state.hiddenCores.has(name)) return;
+    const d=[]; for(let i=0;i<g.t.length;i++){ const t=g.t[i]; if(inRange(t)) d.push({t, v:g.cols[k][i]}); }
+    out.push({name, color:coreColor(k), w:1.2, d});
+  });
+  return out;
+}
 function mainSeries(){
+  if(isCoreMetric()) return coreSeriesList();
+  if(usesHealth()) return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,d:dpFull(s,state.metric).filter(p=>inRange(p.t))}));
   return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,
     d:D.samples.filter(x=>x.dp===s&&inRange(x.t)).map(x=>({t:x.t,v:isNum(x[state.metric])?x[state.metric]:null}))}));   // a missing value stays in d as null (breaks the line)
 }
@@ -576,7 +740,19 @@ function mainUnit(ser){
   const vals=ser.flatMap(s=>realPts(s.d).map(p=>p.v));
   return state.metric==='kbps'?scaleFor(vals):{div:1,unit:METRICS[state.metric].unit};
 }
-function drawMain(){ const ser=mainSeries(), u=mainUnit(ser); chart.draw(ser,{label:METRICS[state.metric].label,u}); statsTable($('#stats'),ser,u); }
+// Time extent of a health metric over the whole period (the reconstructed times reach back before the first capture).
+function healthExtent(){
+  let lo=Infinity, hi=-Infinity;
+  const take = d => { if(d.length){ lo=Math.min(lo,d[0].t); hi=Math.max(hi,d[d.length-1].t); } };
+  if(isCoreMetric()){ const dp=state.hdp; if(dp && HD && HD.by_dp[dp]) take(coreGrid(dp, METRICS[state.metric].g).t.map(t=>({t}))); }
+  else SERIES.filter(x=>x!=='ALL').forEach(x=>take(dpFull(x,state.metric)));
+  return lo<=hi ? [lo,hi] : null;
+}
+function drawMain(){
+  const ser=mainSeries(), u=mainUnit(ser), o={label:METRICS[state.metric].label,u};
+  if(usesHealth()){ o.cap=100; const e=healthExtent(); if(e){ o.t0=e[0]; o.t1=e[1]; } }
+  chart.draw(ser,o); statsTable($('#stats'),ser,u);
+}
 
 // CPU by group chart
 function groupSeries(){
@@ -590,7 +766,7 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='sys' && hasSys) renderSys(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); renderCoreTable(); } else if(activeTab==='cpu') drawGroups();  else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='sys' && hasSys) renderSys(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
   ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
@@ -606,17 +782,37 @@ function setRange(a,b,fromInput){
 // controlli
 const msel=$('#metric');
 Object.keys(METRICS).filter(hasMetric).forEach(k=>{const o=document.createElement('option'); o.value=k; o.textContent=METRICS[k].label; msel.appendChild(o);});
-msel.onchange=()=>{state.metric=msel.value; drawMain();};
+if(msel.options.length && !hasMetric(state.metric)) state.metric=msel.options[0].value;
+msel.value=state.metric;
+HDPS.forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v; $('#hdp').appendChild(o);});
+state.hdp=HDPS[0]||null;
+// Legend: one entry per DP series, or (CPU per core metrics) one per core of the selected DP with All/None.
+let coreBoxes=[];
+function buildLegend(){
+  const host=$('#leg'); host.replaceChildren(); coreBoxes=[];
+  if(isCoreMetric() && state.hdp && HD && HD.by_dp[state.hdp]) DH.cores[state.hdp].ids.forEach((id,k)=>coreBoxes.push(legendItem(host,'core '+id,coreColor(k),state.hiddenCores,drawMain)));
+  else if(!isCoreMetric()) SERIES.forEach(s=>legendItem(host,s,colors[s],state.hidden,drawMain));
+}
+function syncMetricUi(){
+  const core=isCoreMetric();
+  $('#hdpwrap').style.display=core&&HDPS.length>1?'':'none';
+  $('#corebtns').style.display=core?'':'none';
+  buildLegend();
+}
+msel.onchange=()=>{state.metric=msel.value; syncMetricUi(); drawMain();};
+$('#hdp').onchange=()=>{state.hdp=$('#hdp').value; buildLegend(); drawMain();};
+$('#call').onclick=()=>{state.hiddenCores.clear(); coreBoxes.forEach(b=>b.checked=true); drawMain();};
+$('#cnone').onclick=()=>{ if(state.hdp&&HD) DH.cores[state.hdp].ids.forEach(id=>state.hiddenCores.add('core '+id)); coreBoxes.forEach(b=>b.checked=false); drawMain();};
 const fdp=$('#fdp');
-[''].concat(D.series).forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v||'All'; fdp.appendChild(o);});
-fdp.onchange=()=>{state.dp=fdp.value; renderTable();};
+[''].concat(SERIES).forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v||'All'; fdp.appendChild(o);});
+fdp.onchange=()=>{state.dp=fdp.value; renderTable(); renderCoreTable();};
 function legendItem(host,name,color,hiddenSet,onchange){
   const l=document.createElement('label'), c=document.createElement('input'); c.type='checkbox'; c.checked=!hiddenSet.has(name);
   c.onchange=()=>{c.checked?hiddenSet.delete(name):hiddenSet.add(name); onchange();};
   const sw=document.createElement('span'); sw.className='sw'; sw.style.background=color;
   l.append(c,sw,GL.names[name]?glName(name):document.createTextNode(name)); host.appendChild(l); return c;
 }
-D.series.forEach(s=>legendItem($('#leg'),s,colors[s],state.hidden,drawMain));
+syncMetricUi();
 $('#reset').onclick=()=>setRange(null,null);
 $('#q').oninput=e=>{state.q=e.target.value.toLowerCase(); renderTable();};
 $('#t0').onchange=()=>{const v=$('#t0').value; setRange(v?Date.parse(v+':00Z'):null,state.range[1],true);};
@@ -632,8 +828,19 @@ if(hasG){
   $('#gnone').onclick=()=>{D.groups.forEach(n=>gs.hidden.add(n)); boxes.forEach(b=>b.checked=false); drawGroups();};
   $('#gcol').onchange=()=>{state.showG=$('#gcol').checked; renderTable();};
 }
+if(hasDph){ $('#hcolwrap').style.display=''; $('#hcol').onchange=()=>{state.showH=$('#hcol').checked; renderTable();}; }
 
 // table
+// Rows: the dp-monitor samples, plus one row per health capture that has no sample. Health columns are looked up by (DP, time).
+const HIDX={};
+const ROWS=D.samples.slice();
+if(hasDph){
+  DH.dps.forEach(dp=>{ const m=new Map(); DH.series[dp].t.forEach((t,i)=>m.set(t,i)); HIDX[dp]=m; });
+  const have=new Set(D.samples.map(s=>s.dp+'|'+s.t));
+  DH.dps.forEach(dp=>DH.series[dp].t.forEach(t=>{ if(!have.has(dp+'|'+t)) ROWS.push({t, dp, kbps:null, pps:null, cps:null, sess:null, util:null, src:'', g:null}); }));
+}
+const HCOLS=[['pb_avg','Packet buffer avg (%)','packet_buffer_avg_pct'],['pb_max','Packet buffer max (%)','packet_buffer_max_pct'],['pd_max','Packet descriptor max (%)','packet_descriptor_max_pct'],['core_max','Busiest core per-second (%)','busiest_core_per_second_pct'],['core_m_max','Busiest core per-minute max (%)','busiest_core_per_minute_max_pct']];
+function hVal(s,key){ const m=HIDX[s.dp]; if(!m) return null; const i=m.get(s.t); if(i===undefined) return null; const v=DH.series[s.dp][key][i]; return isNum(v)?v:null; }
 const num=v=>v===null||v===undefined?'':v.toLocaleString('en-US');
 function cols(){
   const c=[
@@ -647,11 +854,12 @@ function cols(){
     {k:'util',l:'Session utilization (%)',get:s=>s.util,f:s=>s.util===null?'':s.util}
   ];
   if(state.showG) D.groups.forEach((n,i)=>c.push({k:'g'+i,l:n+' (%)',get:s=>s.g?s.g[i]:null,f:s=>s.g&&s.g[i]!==null?s.g[i]:''}));
+  if(state.showH) HCOLS.forEach(h=>c.push({k:'h_'+h[0],l:h[1],get:s=>hVal(s,h[0]),f:s=>{const v=hVal(s,h[0]); return v===null?'':v;}}));
   c.push({k:'src',l:'Source file',get:s=>s.src,f:s=>s.src});
   return c;
 }
 function filtered(){
-  const rows=D.samples.filter(s=>inRange(s.t)&&(!state.dp||s.dp===state.dp)&&(!state.q||(iso(s.t)+' '+s.dp+' '+s.src+' '+s.kbps).toLowerCase().includes(state.q)));
+  const rows=ROWS.filter(s=>inRange(s.t)&&(!state.dp||s.dp===state.dp)&&(!state.q||(iso(s.t)+' '+s.dp+' '+s.src+' '+s.kbps).toLowerCase().includes(state.q)));
   const c=cols().find(x=>x.k===state.sort.k)||cols()[0], d=state.sort.dir;
   return rows.sort((a,b)=>{const x=c.get(a),y=c.get(b); if(x===y) return a.t-b.t; if(x===null||x===undefined) return 1; if(y===null||y===undefined) return -1; return (x<y?-1:1)*d;});
 }
@@ -669,10 +877,14 @@ function renderTable(){
   if(rows.length>lim){ m.textContent='Showing the first '+lim+' rows. '; const b=document.createElement('button'); b.type='button'; b.textContent='Show all'; b.onclick=()=>{state.all=true; renderTable();}; m.appendChild(b); }
 }
 $('#csv').onclick=()=>{
+  // The exported columns follow the visible ones: the optional CPU by group and dataplane health columns only when shown.
   const rows=filtered(), q=v=>'"'+String(v).replace(/"/g,'""')+'"', nz=v=>v===null||v===undefined?'':v;
-  const lines=[['datetime_utc','dp','throughput_kbps','packet_rate_pps','cps','allocated_sessions','session_utilization_pct'].concat(D.groups.map(n=>'cpu_'+n),['source_file']).join(',')];
-  rows.forEach(s=>lines.push([q(iso(s.t)),q(s.dp),nz(s.kbps),nz(s.pps),nz(s.cps),nz(s.sess),nz(s.util)].concat(D.groups.map((n,i)=>s.g?nz(s.g[i]):''),[q(s.src)]).join(',')));
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
+  const head=['datetime_utc','dp','throughput_kbps','packet_rate_pps','cps','allocated_sessions','session_utilization_pct']
+    .concat(state.showG?D.groups.map(n=>'cpu_'+n):[], state.showH?HCOLS.map(h=>h[2]):[], ['source_file']);
+  const lines=[head.join(',')];
+  rows.forEach(s=>lines.push([q(iso(s.t)),q(s.dp),nz(s.kbps),nz(s.pps),nz(s.cps),nz(s.sess),nz(s.util)]
+    .concat(state.showG?D.groups.map((n,i)=>s.g?nz(s.g[i]):''):[], state.showH?HCOLS.map(h=>nz(hVal(s,h[0]))):[], [q(s.src)]).join(',')));
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
   a.download=D.name+'_throughput.csv'; a.click(); URL.revokeObjectURL(a.href);
 };
 
@@ -1059,30 +1271,15 @@ if(hasIfc){
 '''
 
 # Dataplane health tab (resource monitor of the panio sections: sessions, packet buffer, cores)
-JS_DPH = r'''// Dataplane health tab (session / packet buffer / packet descriptor utilization, CPU per core)
-const DH = D.dph || null;
-const hasDph = !!DH;
-const dphState = {dp:null, hidden:new Set()};
-const DPH_SERIES = [
-  {k:'sess', name:'Session utilization', color:'#1f6f8b', w:1.8},
-  {k:'pb_avg', name:'Packet buffer (avg)', color:'#2f855a', w:1.4},
-  {k:'pb_max', name:'Packet buffer (max)', color:'#c2410c', w:1.4},
-  {k:'core_max', name:'Busiest core (per-second)', color:'#7c3aed', w:1.4},
-  {k:'core_m_max', name:'Busiest core (per-minute max)', color:'#0e7490', w:1.4}
-];
-const dphChart = hasDph ? makeChart($('#dphchart'), $('#dphtip'), $('#dphwrap')) : null;
-let DPH_T0 = 0, DPH_T1 = 0;
-const dphPct = v => v===null||v===undefined ? '' : v+'%';
-const dphAt = (v, t) => v===null||v===undefined ? '' : v+'% @ '+iso(t);
+JS_DPH = r'''// Dataplane health tab (summary per DP and findings). The charts and the CPU per core tables are in the throughput tab.
 function dphWorst(dp){
   const fl = DH.findings.filter(f=>f.dp===dp);
   return fl.some(f=>f.level==='crit') ? 'crit' : (fl.some(f=>f.level==='warn') ? 'warn' : '');
 }
 function renderDphStatic(){
   const all = DH.dps.flatMap(d=>DH.series[d].t);
-  DPH_T0 = minOf(all); DPH_T1 = maxOf(all);
   if(!hasSamples){
-    $('#sub').textContent = 'Period '+iso(DPH_T0)+' - '+iso(DPH_T1)+' UTC | dp-monitor files read: '+D.files+' | generated '+D.generated+' UTC';
+    $('#sub').textContent = 'Period '+iso(minOf(all))+' - '+iso(maxOf(all))+' UTC | dp-monitor files read: '+D.files+' | generated '+D.generated+' UTC';
     $('#utc').style.display = '';
   }
   const dsc = DH.discarded;
@@ -1117,47 +1314,131 @@ function renderDphStatic(){
     const b = document.createElement('span'); b.className = 'badge b-'+f.level; b.textContent = f.code;
     li.append(b, document.createTextNode(f.text)); ul.appendChild(li);
   });
-  DH.dps.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; $('#dphdp').appendChild(o); });
-  dphState.dp = DH.dps[0];
-  $('#dphdp').onchange = ()=>{ dphState.dp = $('#dphdp').value; renderDph(); };
-  $('#dphreset').onclick = ()=>setRange(null,null);
-  DPH_SERIES.forEach(s=>legendItem($('#dphleg'), s.name, s.color, dphState.hidden, renderDph));
 }
-function dphHeat(v){ return v===null||v===undefined ? '' : 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')'; }
-function renderDphCores(){
-  const host = $('#dphcores'); host.replaceChildren();
-  const C = DH.cores[dphState.dp];
-  if(!C.ids.length){ const p=document.createElement('p'); p.className='hint'; p.textContent='No CPU load per core was found for this DP.'; host.appendChild(p); return; }
-  const rows = [['Peak, per-second table', C.peak, true, DH.thresholds.core_peak_warn], ['Peak, per-minute max', C.peak_m, false, DH.thresholds.core_peak_minute_warn]];
-  for(let i=0;i<C.ids.length;i+=16){
+function renderDph(){}
+if(hasDph) renderDphStatic();
+
+'''
+
+# CPU peak per core (throughput tab): compact peak blocks and one lazily expanded row per capture.
+JS_PERCORE = r'''// CPU peak per core (throughput tab): compact peak blocks and one collapsible row per capture
+const pcState = {hot:false, all:false, open:new Set()};
+const dphHeat = v => isNum(v) ? 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')' : '';
+const pcDps = () => HD ? ((state.dp && state.dp!=='ALL') ? HDPS.filter(d=>d===state.dp) : HDPS).filter(d=>DH.cores[d].ids.length) : [];
+function heatTd(td, v, hot){
+  if(isNum(v)){ td.textContent = v; td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff'; if(hot) td.classList.add('hot'); }
+  else { td.textContent = '–'; td.title = 'Missing measurement (*)'; }
+}
+// Peak per core over the captures in the zoom range, with the reconstructed time of the peak and the last value.
+function corePeaks(dp){
+  const d = HD.by_dp[dp], ts = DH.series[dp].t, nc = DH.cores[dp].ids.length;
+  const mk = () => ({v:new Array(nc).fill(null), t:new Array(nc).fill(null), last:new Array(nc).fill(null)});
+  const S = mk(), M = mk();
+  const scan = (R, flat, tc, rt) => {
+    if(!flat) return; const n = Math.floor(flat.length/nc);
+    for(let r=n-1;r>=0;r--) for(let k=0;k<nc;k++){
+      const v = flat[r*nc+k]; if(!isNum(v)) continue;
+      const t = rt(tc, r); R.last[k] = v;
+      if(R.v[k]===null || v>R.v[k]){ R.v[k] = v; R.t[k] = t; }
+    }
+  };
+  for(let c=0;c<ts.length;c++){ if(!inRange(ts[c])) continue; scan(S, d.cs[c], ts[c], recSec); scan(M, d.cmm[c], ts[c], recMin); }
+  return {S, M};
+}
+function renderCorePeaks(host, dp, label){
+  const ids = DH.cores[dp].ids, P = corePeaks(dp), th = DH.thresholds;
+  if(label){ const h = document.createElement('h4'); h.textContent = label; host.appendChild(h); }
+  const rows = [['Peak, per-second table', P.S, true, th.core_peak_warn], ['Peak, per-minute max', P.M, false, th.core_peak_minute_warn]];
+  for(let i=0;i<ids.length;i+=16){
     const t = document.createElement('table'); t.className = 'hm';
     const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = i===0 ? 'Core' : 'Core (cont.)';
-    C.ids.slice(i,i+16).forEach(c=>{ const th=document.createElement('th'); th.textContent=c; hr.appendChild(th); });
+    ids.slice(i,i+16).forEach(c=>{ const th=document.createElement('th'); th.textContent=c; hr.appendChild(th); });
     const tb = t.createTBody();
     rows.forEach(rw=>{
       const r = tb.insertRow(); r.insertCell().textContent = rw[0];
-      rw[1].slice(i,i+16).forEach((v,j)=>{
-        const td = r.insertCell(); td.textContent = v===null||v===undefined ? '' : v;
-        if(v!==null&&v!==undefined){
-          td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff';
-          if(v>=rw[3]) td.classList.add('hot');
-          if(rw[2]) td.title = 'Core '+C.ids[i+j]+': peak '+v+'% at '+iso(C.peak_t[i+j])+' UTC; last '+C.last[i+j]+'%';
-          else td.title = 'Core '+C.ids[i+j]+': highest per-minute maximum '+v+'% in the 15 minutes before '+iso(C.peak_m_t[i+j])+' UTC; last '+C.last_m[i+j]+'%';
-        }
-      });
+      for(let j=i;j<Math.min(i+16,ids.length);j++){
+        const v = rw[1].v[j], td = r.insertCell();
+        heatTd(td, v, isNum(v) && v>=rw[3]);
+        td.title = !isNum(v) ? 'Core '+ids[j]+': no value in the selected range'
+          : (rw[2] ? 'Core '+ids[j]+': peak '+v+'% at '+iso(rw[1].t[j])+' UTC; last '+rw[1].last[j]+'%'
+                   : 'Core '+ids[j]+': highest per-minute maximum '+v+'% in the minute ending '+iso(rw[1].t[j])+' UTC; last '+rw[1].last[j]+'%');
+      }
     });
     host.appendChild(t);
   }
 }
-function renderDph(){
-  const S = DH.series[dphState.dp], u = {div:1, unit:'%'};
-  const ser = DPH_SERIES.filter(s=>!dphState.hidden.has(s.name)).map(s=>({name:s.name, color:s.color, w:s.w,
-    d:S.t.map((t,i)=>({t:t, v:isNum(S[s.k][i])?S[s.k][i]:null})).filter(p=>inRange(p.t))}));
-  dphChart.draw(ser, {label:'Utilization', u, cap:100, t0:DPH_T0, t1:DPH_T1});
-  statsTable($('#dphstats'), ser, u);
-  renderDphCores();
+// Peak value and core of one flat table (the first core, by number, on a tie).
+function flatPeak(flat, ids){
+  if(!flat) return null; const nc = ids.length; let bv = null, bk = -1;
+  for(let i=0;i<flat.length;i++){ const v = flat[i]; if(isNum(v) && (bv===null || v>bv || (v===bv && i%nc<bk))){ bv = v; bk = i%nc; } }
+  return bv===null ? null : [ids[bk], bv];
 }
-if(hasDph) renderDphStatic();
+function capTable(host, title, note, flat, ids, tc, perSecond, thr){
+  const h = document.createElement('h4'); h.textContent = title; host.appendChild(h);
+  const p = document.createElement('p'); p.className = 'hint'; p.textContent = note; host.appendChild(p);
+  if(!flat){ const q = document.createElement('p'); q.className = 'hint'; q.textContent = 'This table is not present in the capture.'; host.appendChild(q); return; }
+  const nc = ids.length, n = Math.floor(flat.length/nc), box = document.createElement('div'); box.className = 'scroll'; box.style.maxHeight = 'none';
+  const t = document.createElement('table'); t.className = 'hm';
+  const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = perSecond ? 'Time (UTC)' : 'Minute ending (UTC)';
+  ids.forEach(c=>{ const th = document.createElement('th'); th.textContent = c; hr.appendChild(th); });
+  const tb = t.createTBody();
+  for(let r=n-1;r>=0;r--){          // oldest first; row r of the source table is the time T - r
+    const tr = tb.insertRow(); tr.insertCell().textContent = iso(perSecond ? recSec(tc, r) : recMin(tc, r));
+    for(let k=0;k<nc;k++){ const v = flat[r*nc+k]; heatTd(tr.insertCell(), v, thr!==null && isNum(v) && v>=thr); }
+  }
+  box.appendChild(t); host.appendChild(box);
+}
+function buildCap(host, dp, c){
+  const d = HD.by_dp[dp], ids = DH.cores[dp].ids, tc = DH.series[dp].t[c], th = DH.thresholds;
+  host.className = 'pcwrap';
+  const nS = 'Rows are listed oldest first. Row i of the source table is the second T - i s, where T is the capture time (inferred from the per-minute table, not verifiable).';
+  const nM = 'Rows are listed oldest first. Row i of the source table is the whole minute ending i minutes before the last minute boundary at or before the capture time T (verified on real data).';
+  capTable(host, 'Per-second CPU load (%)', nS, d.cs[c], ids, tc, true, th.core_peak_warn);
+  capTable(host, 'Per-minute CPU maximum (%)', nM, d.cmm[c], ids, tc, false, th.core_peak_minute_warn);
+  capTable(host, 'Per-minute CPU average (%)', nM, d.cma[c], ids, tc, false, null);
+}
+function renderCoreTable(){
+  const sec = $('#pcsec'), dps = pcDps();
+  sec.style.display = dps.length ? '' : 'none';
+  if(!dps.length) return;
+  const host = $('#dphcores'); host.replaceChildren();
+  dps.forEach(dp=>renderCorePeaks(host, dp, dps.length>1 ? 'DP '+dp : ''));
+  const th = DH.thresholds, items = [];
+  dps.forEach(dp=>{
+    const d = HD.by_dp[dp], ids = DH.cores[dp].ids, ts = DH.series[dp].t;
+    ts.forEach((t,c)=>{
+      if(!inRange(t) || !(d.cs[c] || d.cmm[c] || d.cma[c])) return;
+      const ps = flatPeak(d.cs[c], ids), pm = flatPeak(d.cmm[c], ids);
+      const hot = (ps && ps[1]>=th.core_peak_warn) || (pm && pm[1]>=th.core_peak_minute_warn);
+      if(pcState.hot && !hot) return;
+      items.push({dp, c, t, ps, pm, hot});
+    });
+  });
+  items.sort((a,b)=>a.t-b.t || (a.dp<b.dp?-1:1));
+  $('#pcinfo').textContent = 'Peak over the captures in the selected range and DP. Times of the peaks are reconstructed from the capture time (see Help).';
+  $('#pccount').textContent = items.length+' capture(s)';
+  const list = $('#pclist'); list.replaceChildren();
+  const lim = pcState.all ? items.length : 300;
+  const cell = (pr, what) => pr ? what+': core '+pr[0]+' '+pr[1]+'%' : what+': –';
+  items.slice(0, lim).forEach(it=>{
+    const key = it.dp+'|'+it.c, det = document.createElement('details'); det.className = 'pcap';
+    const sm = document.createElement('summary');
+    sm.append(document.createTextNode(iso(it.t)+' UTC | '+it.dp+' | '));
+    const a = document.createElement('span'); a.className = 'pk'+(it.ps && it.ps[1]>=th.core_peak_warn ? ' hot' : ''); a.textContent = cell(it.ps, 'per-second peak');
+    const b = document.createElement('span'); b.className = 'pk'+(it.pm && it.pm[1]>=th.core_peak_minute_warn ? ' hot' : ''); b.textContent = cell(it.pm, 'per-minute max peak');
+    sm.append(a, document.createTextNode(' | '), b); det.appendChild(sm);
+    const body = document.createElement('div'); det.appendChild(body);
+    det.addEventListener('toggle', ()=>{
+      if(det.open){ pcState.open.add(key); if(!body.hasChildNodes()) buildCap(body, it.dp, it.c); }   // built on first expand
+      else pcState.open.delete(key);
+    });
+    list.appendChild(det);
+    if(pcState.open.has(key)) det.open = true;
+  });
+  const m = $('#pcmore'); m.textContent = '';
+  if(items.length>lim){ m.textContent = 'Showing the first '+lim+' captures. '; const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = 'Show all'; bt.onclick = ()=>{ pcState.all = true; renderCoreTable(); }; m.appendChild(bt); }
+}
+$('#pchot').onchange = ()=>{ pcState.hot = $('#pchot').checked; pcState.all = false; renderCoreTable(); };
 
 '''
 
@@ -1243,7 +1524,7 @@ if(hasMp) renderMpStatic();
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+JS_TABS = r'''const TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
 ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
@@ -1524,6 +1805,7 @@ TEMPLATE = (TEMPLATE_HEAD +
             TEMPLATE_CSS +
             TEMPLATE_BODY +
             JS_CORE +
+            JS_PERCORE +
             JS_POW +
             JS_IFC +
             JS_DPH +

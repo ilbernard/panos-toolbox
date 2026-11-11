@@ -39,6 +39,26 @@ per-second core value. Per-minute rows have no timestamp of their own, so the se
 used and the text says "in the 15 minutes before <UTC time>".
 Samples seen in several rotated files are kept once (the first wins, as in parse_lines).
 
+Full per-capture tables and reconstructed timestamps (view key ``detail``). Besides the
+aggregates above, the view keeps every value of the per-second and per-minute tables of every
+capture, so that the report can chart each core and list all values. The section header time T
+is when the command ran. The rows of the per-minute table are NEWEST FIRST and each row is a
+WHOLE wall-clock minute: row i (0-based) is the minute that ends at the last whole-minute
+boundary at or before T, minus i minutes (``row_time_m``). Verified on real data (two TSFs):
+between two captures 10 minutes apart the rows shift by exactly 10, and row 0 does not contain
+the last seconds before T (a spike of the per-second table of one capture shows up in row 9 of
+the capture 10 minutes later, 84 of 84 cases on an 8-core device, but not in row 0 of its own
+capture). A reading "row i ends at T - i minutes" does not fit (it is off by the seconds of T).
+The per-second table comes from the same command; the same newest-first order is assumed
+(INFERRED from the per-minute table, not verifiable): row i is the second T - i seconds
+(``row_time_s``), and so is value i of the 15 per-second utilization values. The per-minute
+windows of consecutive captures overlap (15 minutes every ~10 minutes): the report keeps, for
+each (DP, core, minute), the value of the most recent capture (a missing ``*`` never replaces
+a real value). Each capture carries ``k0`` = the whole-minute index of its row 0 and the minute
+of row i is ``k0 - i`` (its end time is ``(k0 - i) * 60 s``), so the same minute of two
+captures is the same key whatever the seconds of T. The flags and the summary do not use any
+of this.
+
 Tune DP_THRESHOLDS in code with ``evaluate_dp_health(store, thresholds={...})`` or on the
 command line with the ``--dp-<name>`` options. Unknown keys raise ValueError.
 """
@@ -71,6 +91,11 @@ AVGMAX_RE = re.compile(r'^(?:avg\s+max\s*)+$')
 ROW_RE = re.compile(r'^[\d*]+(?:\s+[\d*]+)*$')
 LABEL_RE = re.compile(r'^([A-Za-z][\w ()-]*?)(?: \((average|maximum)\))?:$')
 DP_HDR_RE = re.compile(r'^DP\s+([\w.*-]+?)\s*:$')
+
+ROW_MS_S = 1000      # per-second table: row i is the second T - i * ROW_MS_S (inferred)
+ROW_MS_M = 60000     # per-minute table: row i is the whole minute ending at floor(T) - i minutes (verified)
+UTIL_S_KEYS = (('sess', 'session'), ('pb', 'packet buffer'), ('pd', 'packet descriptor'),
+               ('pdc', 'packet descriptor (on-chip)'))
 
 COUNTERS = ('asterisks', 'out_of_range', 'bad_rows', 'samples_parsed', 'blocks')
 
@@ -129,7 +154,7 @@ def _sample_from_block(b, t, dp, src):
     rec = {'t': t, 'dp': dp, 'src': src, 'util_tdp': None, 'sess': None, 'sess_avg': None,
            'pb_avg': None, 'pb_max': None, 'pd_avg': None, 'pd_max': None,
            'pdc_avg': None, 'pdc_max': None, 'sess_m': None, 'pb_m': None,
-           'core_s': {}, 'core_m': {}}
+           'core_s': {}, 'core_m': {}, 'tab_s': {}, 'tab_m': {}, 'us': {}, 'um_pb_avg': None}
     rs, rm = b['res_s'], b['res_m']
     if 'session' in rs:
         rec['sess'], rec['sess_avg'] = _mx(rs['session']), _avg(rs['session'])
@@ -139,6 +164,13 @@ def _sample_from_block(b, t, dp, src):
             rec[key + '_avg'], rec[key + '_max'] = _avg(rs[name]), _mx(rs[name])
     rec['sess_m'] = _mx(rm.get(('session', 'maximum'), []))
     rec['pb_m'] = _mx(rm.get(('packet buffer', 'maximum'), []))
+    for key, name in UTIL_S_KEYS:
+        if name in rs:
+            rec['us'][key] = list(rs[name])
+    if ('packet buffer', 'average') in rm:
+        rec['um_pb_avg'] = list(rm[('packet buffer', 'average')])
+    rec['tab_s'] = {core: list(vals) for core, vals in b['cpu_s'].items()}
+    rec['tab_m'] = {core: list(pairs) for core, pairs in b['cpu_m'].items()}
     for core, vals in b['cpu_s'].items():
         m = _mx(vals)
         if m is not None:
@@ -222,11 +254,17 @@ def parse_dp_health(lines, src, store, warnings) -> int:
     def table_row(tok_line):
         tb = sec['table']
         toks = tok_line.split()
-        if tb['dead'] or len(toks) != tb['width']:
-            cnt['bad_rows'] += 1
-            return
         blk = sec['cur']
         cols = tb['cols']
+        if tb['dead'] or len(toks) != tb['width']:
+            cnt['bad_rows'] += 1
+            if not tb['dead']:           # keep the row index: a discarded row is a gap, not a shift
+                for core in cols:
+                    if tb['kind'] == 's':
+                        blk['cpu_s'].setdefault(core, []).append(None)
+                    else:
+                        blk['cpu_m'].setdefault(core, []).append((None, None))
+            return
         if tb['kind'] == 's':
             for core, tok in zip(cols, toks):
                 blk['cpu_s'].setdefault(core, []).append(_cell(tok, cnt))
@@ -371,6 +409,80 @@ def _level_flag(dp, code, label, summ, warn, crit):
     return _flag(dp, code, level, f'DP {dp}: {text}')
 
 
+def row_time_s(t, i):
+    """Reconstructed time (ms) of row i of the per-second table captured at t: t - i s.
+
+    Rows are newest first (inferred from the per-minute table, not verifiable). The same
+    holds for the 15 per-second utilization values.
+    """
+    return t - i * ROW_MS_S
+
+
+def minute_index(t):
+    """Whole-minute index (minutes since the epoch) of the last minute boundary at or before t."""
+    return t // ROW_MS_M
+
+
+def row_time_m(t, i):
+    """End time (ms) of row i of the per-minute table captured at t.
+
+    Rows are newest first and each is a whole wall-clock minute: row 0 ends at the last
+    minute boundary at or before t, row i at that boundary minus i minutes (verified).
+    """
+    return (minute_index(t) - i) * ROW_MS_M
+
+
+def _flat(tab, ids, pick=None):
+    """Row-major flat list (row, then core in `ids` order) of a {core: [value]} table.
+
+    `pick` extracts the value from a per-minute (avg, max) pair. A core without that row is
+    None; the number of rows is the longest column. Returns None when there is no row.
+    """
+    n = max((len(v) for v in tab.values()), default=0)
+    if not n:
+        return None
+    out = []
+    for r in range(n):
+        for c in ids:
+            col = tab.get(c)
+            v = col[r] if col is not None and r < len(col) else None
+            out.append(pick(v) if (pick is not None and v is not None) else v)
+    return out
+
+
+def _detail(recs_by_dp, cores_by_dp):
+    """The 'detail' key of the view: full per-capture tables, aligned with series['t'].
+
+    {'by_dp': {dp: {...}}}. Per DP, every list has one entry per capture (same order as
+    series['t']), None when the capture has no such table:
+      k0   whole-minute index of row 0 of the per-minute tables, minute_index(t);
+      cs   per-second CPU, flat row-major (rows x cores of view['cores'][dp]['ids']);
+      cma  per-minute CPU average, same layout;  cmm  per-minute CPU maximum, same layout;
+      us   {'sess'|'pb'|'pd'|'pdc': per capture the list of per-second utilization values}
+           (only the keys that exist);
+      um   {'pb_avg': per capture the per-minute packet buffer average values} (if it exists).
+    Missing ('*') and discarded values are None. Rows are newest first (see row_time_s and
+    row_time_m).
+    """
+    by_dp = {}
+    for dp, recs in recs_by_dp.items():
+        ids = cores_by_dp[dp]
+        d = {'k0': [minute_index(r['t']) for r in recs],
+             'cs': [_flat(r['tab_s'], ids) for r in recs],
+             'cma': [_flat(r['tab_m'], ids, lambda p: p[0]) for r in recs],
+             'cmm': [_flat(r['tab_m'], ids, lambda p: p[1]) for r in recs]}
+        us = {}
+        for key, _name in UTIL_S_KEYS:
+            lst = [r['us'].get(key) for r in recs]
+            if any(x is not None for x in lst):
+                us[key] = lst
+        d['us'] = us
+        pb = [r['um_pb_avg'] for r in recs]
+        d['um'] = {'pb_avg': pb} if any(x is not None for x in pb) else {}
+        by_dp[dp] = d
+    return {'by_dp': by_dp}
+
+
 def _core_value(tab):
     """(value, core) of the busiest core of a {core: value} table, or (None, None)."""
     if not tab:
@@ -384,7 +496,7 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
 
     Keys: 'thresholds', 'dps' (names), 'series' (per DP, columnar lists aligned with 't'),
     'summary' (per DP: last/peak per metric), 'cores' (per DP: per-core peak table),
-    'findings' (flag dicts {code, level, text, dp}, same structure as pow_perf and
+    'detail' (full per-capture tables, see _detail), 'findings' (flag dicts {code, level, text, dp}, same structure as pow_perf and
     interface_errors flags, so findings.from_flags works), 'discarded' (counters),
     'warnings' and 'n_samples'. The store is not modified.
     """
@@ -398,11 +510,13 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
         by_dp.setdefault(dp, []).append(rec)
     out: dict[str, Any] = {
         'thresholds': th, 'dps': sorted(by_dp), 'series': {}, 'summary': {}, 'cores': {},
+        'detail': {'by_dp': {}},
         'findings': [], 'warnings': [], 'n_samples': 0,
         'discarded': dict((store or {}).get('counters', dict.fromkeys(COUNTERS, 0))),
     }
+    recs_sorted = {dp: sorted(by_dp[dp], key=lambda r: r['t']) for dp in out['dps']}
     for dp in out['dps']:
-        recs = sorted(by_dp[dp], key=lambda r: r['t'])
+        recs = recs_sorted[dp]
         out['n_samples'] += len(recs)
         ts = [r['t'] for r in recs]
         sess = [r['sess'] if r['sess'] is not None else r['util_tdp'] for r in recs]
@@ -513,6 +627,7 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
             out['warnings'].append(f'DP {dp}: no per-second CPU load per core was found.')
         if len(recs) and not any(v is not None for v in ser['core_m_max']):
             out['warnings'].append(f'DP {dp}: no per-minute CPU load per core was found.')
+    out['detail'] = _detail(recs_sorted, {dp: out['cores'][dp]['ids'] for dp in out['dps']})
     d = out['discarded']
     if d.get('bad_rows') or d.get('out_of_range'):
         out['warnings'].append(

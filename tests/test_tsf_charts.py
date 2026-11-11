@@ -16,11 +16,13 @@ pytestmark = pytest.mark.skipif(shutil.which('node') is None, reason='node not a
 
 SRC = report_template.JS_CORE
 BEGIN, END = '// CHART-HELPERS-BEGIN', '// CHART-HELPERS-END'
+DBEGIN, DEND = '// DPH-HELPERS-BEGIN', '// DPH-HELPERS-END'
 
 
 def helpers():
-    assert BEGIN in SRC and END in SRC
-    return SRC[SRC.index(BEGIN):SRC.index(END)]
+    """The chart helpers and the dataplane health helpers (both are pure functions)."""
+    assert BEGIN in SRC and END in SRC and DBEGIN in SRC and DEND in SRC
+    return SRC[SRC.index(BEGIN):SRC.index(END)] + SRC[SRC.index(DBEGIN):SRC.index(DEND)]
 
 
 def js(expr):
@@ -93,6 +95,103 @@ def test_missing_value_breaks_the_line_and_is_not_zero():
 
 
 def test_chart_help_entries_mention_the_behaviour():
-    for key in ('chart', 'cpu', 'dphchart', 'mpchart'):
+    for key in ('chart', 'cpu', 'mpchart'):
         txt = SECTION_HELP[key]
         assert '3 times the median' in txt and '6 hours' in txt, key
+
+
+# --------------------------------------------------------------------------
+# Dataplane health helpers (reconstructed timestamps, per-core grids, dedup)
+# --------------------------------------------------------------------------
+MIN = 60000
+
+
+def test_row_time_rules():
+    # per-second: row i is T - i s; per-minute: the whole minute ending i minutes before the last boundary at or before T
+    assert js('[recSec(1000000,0), recSec(1000000,4), recSec(1000000,14)]') == [1000000, 996000, 986000]
+    t = 7 * MIN + 20485                      # 00:07:20.485
+    assert js(f'[recMin({t},0), recMin({t},1), recMin({t},14)]') == [7 * MIN, 6 * MIN, -7 * MIN]
+
+
+def test_second_grid_row_i_is_t_minus_i_seconds_oldest_first_in_the_grid():
+    # one capture at T, 3 rows x 2 cores, row-major, newest row first
+    out = js('secondGrid([100000],[[1,10, 2,20, 3,30]],2)')
+    assert out['t'] == [98000, 99000, 100000]
+    assert out['cols'] == [[3, 2, 1], [30, 20, 10]]
+
+
+def test_second_grid_missing_is_null_and_windows_do_not_overlap():
+    out = js('secondGrid([100000, 700000],[[1,null, 2,5],[7,8, 9,null]],2)')
+    assert out['t'] == [99000, 100000, 699000, 700000]
+    assert out['cols'][1] == [5, None, None, 8]
+    assert out['t'] == sorted(set(out['t']))
+    # a capture without a table is skipped, not zero-filled
+    out = js('secondGrid([100000, 700000],[null,[4,5]],1)')
+    assert out['t'] == [699000, 700000] and out['cols'] == [[5, 4]]
+
+
+def test_second_grid_equal_timestamps_newest_capture_wins():
+    out = js('secondGrid([100000, 101000],[[1,2],[8,9]],1)')   # windows overlap: 99,100 and 100,101
+    assert out['t'] == [99000, 100000, 101000]
+    assert out['cols'][0] == [2, 9, 8]                        # second 100: A row 0 = 2, B row 1 = 9: B is newer
+
+
+def test_minute_grid_dedups_overlapping_windows_newest_capture_wins():
+    # capture A at minute 100: rows (newest first) 1..15 for minutes 100,99,...,86
+    a = list(range(1, 16))
+    # capture B 10 minutes later (minute 110): rows 10..14 are the same minutes as A rows 0..4 but with other values
+    b = [50 + r for r in range(10)] + [900, 901, 902, 903, 904]
+    out = js(f'minuteGrid([100,110],[{a},{b}],1)')
+    keys = [t // MIN for t in out['t']]
+    assert keys == list(range(86, 111))                       # 25 distinct minutes, ascending
+    assert len(out['t']) == len(set(out['t']))                # no duplicate timestamps
+    col = dict(zip(keys, out['cols'][0]))
+    # B row r is minute 110 - r: rows 10..14 are minutes 100..96 and carry the newer capture's values
+    assert [col[100], col[99], col[98], col[97], col[96]] == [900, 901, 902, 903, 904]
+    assert col[95] == 6 and col[86] == 15                     # minutes only the older capture has
+    assert col[110] == 50 and col[101] == 59                  # minutes only the newer capture has
+    assert out['t'][0] == 86 * MIN                            # whole-minute end times
+
+
+def test_minute_grid_missing_never_replaces_a_real_value():
+    out = js('minuteGrid([100,101],[[5,6],[null,7]],1)')
+    col = dict(zip([t // MIN for t in out['t']], out['cols'][0]))
+    # row 0 of B (minute 101) is null and nothing else knows it: stays null; B row 1 (minute 100) = 7 wins over A row 0 = 5
+    assert col[100] == 7 and col[101] is None and col[99] == 6
+
+
+def test_minute_grid_jitter_free_keys_for_real_cadence():
+    # 20 captures every 10 minutes with 15 rows each: every minute once, no duplicate time
+    out = js('(()=>{const k0=Array.from({length:20},(_,i)=>1000+10*i); const f=k0.map((k,c)=>Array.from({length:15},(_,r)=>k-r));'
+             'return minuteGrid(k0,f,1);})()')
+    assert len(out['t']) == len(set(out['t'])) == 19 * 10 + 15
+    assert out['cols'][0] == [t // MIN for t in out['t']]    # each minute carries the value of its own key
+
+
+def test_grid_max_merge_max_and_session_series():
+    assert js('gridMax({t:[1,2,3],cols:[[1,null,null],[5,2,null]]})') == [
+        {'t': 1, 'v': 5}, {'t': 2, 'v': 2}, {'t': 3, 'v': None}]
+    assert js('mergeMax([[{t:1,v:3},{t:2,v:null}],[{t:1,v:9},{t:2,v:4},{t:3,v:1}]])') == [
+        {'t': 1, 'v': 9}, {'t': 2, 'v': 4}, {'t': 3, 'v': 1}]
+    # session: per-second values where the capture has them, the target-dp reading (fb) where it has not
+    out = js('sessionSeries([100000,700000,1300000],[[1,2],null,[null,null]],[null,40,50])')
+    assert out == [{'t': 99000, 'v': 2}, {'t': 100000, 'v': 1}, {'t': 700000, 'v': 40}, {'t': 1300000, 'v': 50}]
+
+
+def test_metric_list_contains_only_present_metrics():
+    full = ('{by_dp:{dp0:{us:{sess:[[1]],pb:[[1]],pd:[[1]],pdc:[[1]]},um:{pb_avg:[[1]]},cs:[[1]],cma:[[1]],cmm:[[1]]}}}')
+    assert js(f'dphAvail({full},["dp0"])') == [
+        'util', 'hpb_avg', 'hpb_max', 'hpd_max', 'hpdc_max', 'hcore_s', 'pc_s', 'hcore_mm', 'pc_mm', 'pc_ma']
+    # no on-chip descriptors, no per-minute average, no per-second CPU table
+    part = '{by_dp:{dp0:{us:{sess:[[1]],pb:[[1]],pd:[[1]]},um:{},cs:[null],cma:[null],cmm:[[1]]}}}'
+    assert js(f'dphAvail({part},["dp0"])') == ['util', 'hpb_max', 'hpd_max', 'hcore_mm', 'pc_mm']
+    # all-missing values do not count as present
+    assert js('dphAvail({by_dp:{dp0:{us:{pb:[[null,null]]},um:{},cs:[[null]],cma:[],cmm:[]}}},["dp0"])') == []
+    assert js('dphAvail({by_dp:{}},["dp0"])') == []
+
+
+def test_chart_help_mentions_the_reconstruction_and_the_new_metrics():
+    txt = SECTION_HELP['chart']
+    for needle in ('Reconstructed timestamps', 'newest first', 'inferred', 'most recent capture',
+                   'per-minute avg', 'Busiest core (per-second)'):
+        assert needle in txt, needle
