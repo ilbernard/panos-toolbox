@@ -74,7 +74,7 @@ def test_every_flag_code_in_pow_perf_is_documented():
 def test_every_flag_code_in_dp_health_is_documented():
     codes = set(re.findall(r"_flag\(\s*r?\w*,\s*'([A-Z_]+)'", DPH_SRC))
     codes |= set(re.findall(r"'code':\s*'([A-Z_]+)'", DPH_SRC))
-    assert {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK'} <= codes
+    assert {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK', 'CORE_PEAK_MINUTE'} <= codes
     assert codes <= set(dp_health.FLAG_CODES)
     out = render_help()
     missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
@@ -84,6 +84,8 @@ def test_every_flag_code_in_dp_health_is_documented():
 def test_render_help_shows_live_dp_thresholds():
     out = ''.join(render_section_help(None, None, {'pkt_buffer_warn': 33.5}).values())
     assert 'pkt_buffer_warn = 33.5%' in out and 'pkt_buffer_warn = 50%' not in out
+    out = ''.join(render_section_help(None, None, {'core_peak_minute_warn': 77}).values())
+    assert 'core_peak_minute_warn = 77%' in out
     with pytest.raises(ValueError):
         render_section_help(None, None, {'no_such_key': 1})
 

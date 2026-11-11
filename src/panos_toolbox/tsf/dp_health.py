@@ -32,6 +32,11 @@ history, so the level of a flag is based on the PEAK over the whole period; the 
 peak (value and UTC time), the last value and how many samples were at or above the
 threshold. The value of a sample is the maximum of its 15 per-second values (so a spike inside
 the 15-second window is not averaged away). "Last" is the value of the last sample in time.
+CORE_PEAK uses the per-second CPU table only (15 s every ~10 min); CORE_PEAK_MINUTE uses the
+``max`` column of the per-minute table, which covers the 15 minutes before each section (almost
+the whole period). The two are never mixed: a sample without a per-second table simply has no
+per-second core value. Per-minute rows have no timestamp of their own, so the section time is
+used and the text says "in the 15 minutes before <UTC time>".
 Samples seen in several rotated files are kept once (the first wins, as in parse_lines).
 
 Tune DP_THRESHOLDS in code with ``evaluate_dp_health(store, thresholds={...})`` or on the
@@ -50,9 +55,10 @@ DP_THRESHOLDS = {
     'pkt_buffer_warn': 50,        # packet buffer utilization peak (warn)
     'pkt_buffer_crit': 80,        # packet buffer utilization peak (crit)
     'core_peak_warn': 90,         # per-second CPU load of any core (warn, no crit)
+    'core_peak_minute_warn': 90,  # per-minute max CPU load of any core (warn, no crit)
 }
 
-FLAG_CODES = ('SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK')
+FLAG_CODES = ('SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK', 'CORE_PEAK_MINUTE')
 MAX_CORES_LISTED = 10
 
 SECTION = 'panio'
@@ -365,9 +371,8 @@ def _level_flag(dp, code, label, summ, warn, crit):
     return _flag(dp, code, level, f'DP {dp}: {text}')
 
 
-def _core_value(rec):
-    """(value, core) of the busiest core of a sample: per-second table, else per-minute max."""
-    tab = rec['core_s'] or rec['core_m']
+def _core_value(tab):
+    """(value, core) of the busiest core of a {core: value} table, or (None, None)."""
     if not tab:
         return None, None
     core = min(tab, key=lambda c: (-tab[c], c))
@@ -402,7 +407,8 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
         ts = [r['t'] for r in recs]
         sess = [r['sess'] if r['sess'] is not None else r['util_tdp'] for r in recs]
         n_fallback = sum(1 for r in recs if r['sess'] is None and r['util_tdp'] is not None)
-        core_best = [_core_value(r) for r in recs]
+        core_best = [_core_value(r['core_s']) for r in recs]
+        core_m_best = [_core_value(r['core_m']) for r in recs]
         ser = {
             't': ts, 'sess': sess,
             'sess_src': ['res' if r['sess'] is not None else 'tdp' for r in recs],
@@ -412,13 +418,14 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
             'pd_avg': [r['pd_avg'] for r in recs], 'pd_max': [r['pd_max'] for r in recs],
             'pdc_avg': [r['pdc_avg'] for r in recs], 'pdc_max': [r['pdc_max'] for r in recs],
             'core_max': [c[0] for c in core_best], 'core_id': [c[1] for c in core_best],
-            'core_m_max': [max(r['core_m'].values()) if r['core_m'] else None for r in recs],
+            'core_m_max': [c[0] for c in core_m_best], 'core_m_id': [c[1] for c in core_m_best],
         }
         out['series'][dp] = ser
         summ = {
             'session': _summary(ts, sess), 'pkt_buffer': _summary(ts, ser['pb_max']),
             'pkt_desc': _summary(ts, ser['pd_max']), 'pkt_desc_onchip': _summary(ts, ser['pdc_max']),
             'core': _summary(ts, ser['core_max']),
+            'core_minute': _summary(ts, ser['core_m_max']),
         }
         for key, (w, c) in {'session': ('session_util_warn', 'session_util_crit'),
                             'pkt_buffer': ('pkt_buffer_warn', 'pkt_buffer_crit')}.items():
@@ -427,11 +434,12 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
                                  'crit': sum(1 for v in vals if v is not None and v >= th[c])}
         # Core table: per core peak (and when), last value and per-minute max peak.
         ids = sorted({c for r in recs for c in list(r['core_s']) + list(r['core_m'])})
-        peak, peak_t, last, peak_m = [], [], [], []
+        peak, peak_t, last, peak_m, peak_m_t, last_m = [], [], [], [], [], []
         for c in ids:
-            pts = [(r['t'], (r['core_s'] or r['core_m']).get(c)) for r in recs]
+            pts = [(r['t'], r['core_s'].get(c)) for r in recs]
             pts = [(t, v) for t, v in pts if v is not None]
-            pm = [v for r in recs for v in [r['core_m'].get(c)] if v is not None]
+            pms = [(r['t'], r['core_m'].get(c)) for r in recs]
+            pms = [(t, v) for t, v in pms if v is not None]
             if pts:
                 pk = max(v for _t, v in pts)
                 peak.append(pk)
@@ -439,14 +447,26 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
                 last.append(pts[-1][1])
             else:
                 peak.append(None); peak_t.append(None); last.append(None)
-            peak_m.append(max(pm) if pm else None)
+            if pms:
+                pk = max(v for _t, v in pms)
+                peak_m.append(pk)
+                peak_m_t.append(next(t for t, v in pms if v == pk))
+                last_m.append(pms[-1][1])
+            else:
+                peak_m.append(None); peak_m_t.append(None); last_m.append(None)
         out['cores'][dp] = {'ids': ids, 'peak': peak, 'peak_t': peak_t, 'last': last,
-                            'peak_m': peak_m}
+                            'peak_m': peak_m, 'peak_m_t': peak_m_t, 'last_m': last_m}
         cs = summ['core']
         cs['over'] = sum(1 for v in ser['core_max'] if v is not None and v >= th['core_peak_warn'])
         cs['peak_core'] = next((c for c, v in zip(ids, peak) if v == cs['peak']), None) \
             if cs['peak'] is not None else None
         cs['last_core'] = next((c[1] for c in reversed(core_best) if c[0] is not None), None)
+        cm = summ['core_minute']
+        cm['over'] = sum(1 for v in ser['core_m_max']
+                         if v is not None and v >= th['core_peak_minute_warn'])
+        cm['peak_core'] = next((c for c, v in zip(ids, peak_m) if v == cm['peak']), None) \
+            if cm['peak'] is not None else None
+        cm['last_core'] = next((c[1] for c in reversed(core_m_best) if c[0] is not None), None)
         out['summary'][dp] = summ
         # Flags
         flags = out['findings']
@@ -470,13 +490,29 @@ def evaluate_dp_health(store, thresholds=None) -> dict[str, Any]:
                 f'busiest core in the last sample: {cs["last_core"]} at {cs["last"]}% '
                 f'({_utc(cs["last_t"])}); {cs["over"]} of {cs["n"]} samples had a core at or '
                 f'above {th["core_peak_warn"]}%. Cores at or above the limit: {names}.'))
+        hot_m = [(c, v) for c, v in zip(ids, peak_m)
+                 if v is not None and v >= th['core_peak_minute_warn']]
+        if hot_m:
+            hot_m.sort(key=lambda cv: (-cv[1], cv[0]))
+            names = ', '.join(f'{c} ({v}%)' for c, v in hot_m[:MAX_CORES_LISTED])
+            if len(hot_m) > MAX_CORES_LISTED:
+                names += f' (+{len(hot_m) - MAX_CORES_LISTED} more)'
+            flags.append(_flag(
+                dp, 'CORE_PEAK_MINUTE', 'warn',
+                f'DP {dp}: core {hot_m[0][0]} reached a per-minute maximum of {cm["peak"]}% '
+                f'in the 15 minutes before {_utc(cm["peak_t"])}; busiest core in the last '
+                f'sample: {cm["last_core"]} at {cm["last"]}% (15 minutes before '
+                f'{_utc(cm["last_t"])}); {cm["over"]} of {cm["n"]} samples had a core at or '
+                f'above {th["core_peak_minute_warn"]}%. Cores at or above the limit: {names}.'))
         if n_fallback:
             out['warnings'].append(
                 f'DP {dp}: {n_fallback} of {len(recs)} samples have no per-second resource '
                 f'block; their session utilization is the "Session table utilization" line '
                 f'(a single integer reading).')
         if len(recs) and not any(v is not None for v in ser['core_max']):
-            out['warnings'].append(f'DP {dp}: no CPU load per core was found.')
+            out['warnings'].append(f'DP {dp}: no per-second CPU load per core was found.')
+        if len(recs) and not any(v is not None for v in ser['core_m_max']):
+            out['warnings'].append(f'DP {dp}: no per-minute CPU load per core was found.')
     d = out['discarded']
     if d.get('bad_rows') or d.get('out_of_range'):
         out['warnings'].append(
