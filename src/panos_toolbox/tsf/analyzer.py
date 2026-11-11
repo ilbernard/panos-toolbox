@@ -26,7 +26,8 @@ Usage:
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
 data, <name>_interfaces.html when it has only interface data, <name>_dphealth.html /
 <name>_mp.html / <name>_sys.html when it has only dataplane health / management plane / system
-health data, <name>_tsf.html when it has several kinds); with multiple inputs a summary index.html is also created. The POW and interface
+health data, <name>_tsf.html when it has several kinds); with multiple inputs a TSF summary index.html is also created (analysis status, module
+badges and finding counts per TSF). The POW and interface
 anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options, the dataplane
 health ones with --dp-<name>, the management plane ones with --mp-<name> and the system health
 ones with --sys-<name> (see --help).
@@ -46,7 +47,7 @@ from datetime import datetime, timedelta, timezone
 from . import archive, correlations, dp_health, if_glossary, log_events, mp_monitor, pow_glossary, system_health
 from .coverage import build_coverage
 from .dp_health import DP_THRESHOLDS, evaluate_dp_health
-from .findings import analysis_status
+from .findings import analysis_status, from_flags, module_status
 from .model import Collected, Inventory
 from .mp_monitor import MP_THRESHOLDS, evaluate_mp_monitor
 from .interface_errors import (
@@ -568,20 +569,98 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
                .replace('__TITLE__', html.escape(name)))
 
 
+# Status order for the TSF summary: worst first.
+_STATUS_RANK = {'critical': 0, 'warning': 1, 'ok': 2, 'no_data': 3}
+_STATUS_LABEL = {'critical': 'critical', 'warning': 'warning', 'ok': 'ok', 'no_data': 'no data'}
+_MODULE_ORDER = ('DP health', 'MP', 'System', 'POW', 'Interfaces')
+
+INDEX_CSS = (
+    'body{font:15px system-ui,sans-serif;margin:2rem;color:#1c2530}'
+    'table{border-collapse:collapse}td,th{padding:.4rem .8rem;border-bottom:'
+    '1px solid #d8dde3;text-align:left;vertical-align:top}'
+    '.b{display:inline-block;margin:0 .25rem .2rem 0;padding:1px 7px;border-radius:9px;'
+    'color:#fff;font-size:12px;white-space:nowrap}'
+    '.b-critical{background:#b42318}.b-warning{background:#b7791f}.b-ok{background:#2f855a}'
+    '.b-no_data{background:#5d6b7a}.b-partial{background:#b7791f}.b-complete{background:#2f855a}'
+    '.n{display:inline-block;min-width:1.6em;text-align:center;margin-right:.25rem;'
+    'padding:0 5px;border-radius:4px;font-size:13px}'
+    '.n-crit{background:#fbe3e0;color:#b42318}.n-warn{background:#fff4d6;color:#8a5a00}'
+    '.n-info{background:#e6edf3;color:#44515f}.n.z{background:#eef1f4;color:#8a96a3}')
+
+
+def summarize_views(pow_view, ifc_view, dph_view, mp_view, sys_view):
+    """Compact per-module status and finding counts of one TSF, from the evaluated views.
+
+    Returns (modules, counts): `modules` is a list of (label, status) for the modules present
+    (status: ok / warning / critical / no_data), `counts` is {'crit', 'warn', 'info'} over the
+    flags of all modules. Nothing is re-parsed: it reads the flag lists of the views.
+    """
+    groups = []
+    if dph_view:
+        groups.append(('DP health', dph_view['findings']))
+    if mp_view:
+        groups.append(('MP', mp_view['findings']))
+    if sys_view:
+        groups.append(('System', sys_view['findings']))
+    if pow_view:
+        fl = []
+        for view in [pow_view['global'], *pow_view['cores'].values()]:
+            for r in [*view['groups'], *view['funcs'], *view.get('hist', ())]:
+                fl.extend(r['flags'])
+        for cf in pow_view['core_summary']['flags'].values():
+            fl.extend(cf)
+        groups.append(('POW', fl))
+    if ifc_view:
+        groups.append(('Interfaces', [f for r in ifc_view['rows'] for f in r['flags']]))
+    groups.sort(key=lambda g: _MODULE_ORDER.index(g[0]))
+    counts = {'crit': 0, 'warn': 0, 'info': 0}
+    modules = []
+    for label, flags in groups:
+        found = from_flags(flags)
+        for f in found:
+            counts[{'critical': 'crit', 'warning': 'warn', 'info': 'info'}[f.level]] += 1
+        status = sys_view['status'] if label == 'System' else module_status(found, True)
+        modules.append((label, status))
+    return modules, counts
+
+
+def _row_status(r):
+    sts = [s for _l, s in r.get('modules', ())]
+    return min(sts, key=lambda s: _STATUS_RANK.get(s, 3)) if sts else 'no_data'
+
+
 def render_index(rows):
-    body = ''.join(
-        '<tr><td><a href="{f}">{n}</a></td><td>{s}</td><td>{a}</td><td>{b}</td>'
-        '<td>{p}</td><td>{w}</td></tr>'.format(
-            f=html.escape(r['file']), n=html.escape(r['name']), s=r['samples'],
-            a=r['start'], b=r['end'], p=r['peak'], w=r['warnings'])
-        for r in rows)
-    return ('<!doctype html><meta charset="utf-8"><title>Throughput summary</title>'
-            '<style>body{font:15px system-ui,sans-serif;margin:2rem;color:#1c2530}'
-            'table{border-collapse:collapse}td,th{padding:.4rem .8rem;border-bottom:'
-            '1px solid #d8dde3;text-align:left}</style>'
-            '<h1>Throughput summary</h1><p>Times in UTC.</p>'
-            '<table><tr><th>TSF</th><th>Samples</th><th>Start</th><th>End</th>'
-            f'<th>Peak</th><th>Warnings</th></tr>{body}</table>')
+    """TSF summary page: one row per TSF, worst module status first, then by name."""
+    def badge(cls, text, title=''):
+        t = f' title="{html.escape(title, quote=True)}"' if title else ''
+        return f'<span class="b b-{html.escape(cls, quote=True)}"{t}>{html.escape(text)}</span>'
+
+    ordered = sorted(rows, key=lambda r: (_STATUS_RANK.get(_row_status(r), 3), r['name']))
+    out = []
+    for r in ordered:
+        analysis = r.get('analysis', 'complete')
+        mods = ''.join(badge(s, f'{lbl}: {_STATUS_LABEL.get(s, s)}')
+                       for lbl, s in r.get('modules', ())) or '-'
+        c = r.get('counts') or {}
+        cnt = ''.join(
+            f'<span class="n n-{k}{"" if c.get(k) else " z"}" title="{k}">{int(c.get(k, 0))}</span>'
+            for k in ('crit', 'warn', 'info'))
+        out.append(
+            '<tr><td><a href="{f}">{n}</a></td><td>{an}</td><td>{m}</td><td>{c}</td>'
+            '<td>{s}</td><td>{a}</td><td>{b}</td><td>{p}</td><td>{w}</td></tr>'.format(
+                f=html.escape(r['file'], quote=True), n=html.escape(r['name']),
+                an=badge(analysis, analysis, r.get('analysis_reason', '')), m=mods, c=cnt,
+                s=html.escape(str(r.get('samples', 0))),
+                a=html.escape(str(r.get('start') or '-')), b=html.escape(str(r.get('end') or '-')),
+                p=html.escape(str(r.get('peak') or '-')),
+                w=html.escape(str(r.get('warnings', 0)))))
+    return ('<!doctype html><meta charset="utf-8"><title>TSF summary</title>'
+            f'<style>{INDEX_CSS}</style>'
+            '<h1>TSF summary</h1><p>Times in UTC. Rows are sorted by worst module status. '
+            'Findings: critical / warning / info across all modules.</p>'
+            '<table><tr><th>TSF</th><th>Analysis</th><th>Modules</th><th>Findings</th>'
+            '<th>Samples</th><th>Start</th><th>End</th><th>Peak</th><th>Warnings</th></tr>'
+            f'{"".join(out)}</table>')
 
 
 def main(argv=None):
@@ -700,10 +779,11 @@ def main(argv=None):
         else:
             suffix = '_tsf.html' if ifc_view else '_pow.html'
         out = os.path.join(args.outdir, f'{name}{suffix}')
+        coverage = build_coverage(col)
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
                                    pow_view, overrides, ifc_view, if_overrides,
-                                   build_coverage(col), dph_view, dp_overrides,
+                                   coverage, dph_view, dp_overrides,
                                    mp_view, mp_overrides, sys_view,
                                    {**sys_overrides, **log_overrides}))
         partial = ''
@@ -716,8 +796,11 @@ def main(argv=None):
         sys_warnings = sys_view['warnings'] if sys_view else []
         n_warn = (len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
                   + len(mp_warnings) + len(sys_warnings))
+        modules, counts = summarize_views(pow_view, ifc_view, dph_view, mp_view, sys_view)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
-               'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
+               'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn,
+               'analysis': col.status, 'analysis_reason': '; '.join(coverage['summary']),
+               'modules': modules, 'counts': counts}
         if samples:
             base = [s for s in samples if s['dp'] == series[0]]
             peak = max(base, key=lambda s: s['kbps'])
