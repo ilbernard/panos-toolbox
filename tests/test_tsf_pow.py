@@ -359,7 +359,7 @@ def test_main_tgz_with_pow_and_dp_monitor(tmp_path):
     analyzer.main([str(tsf), '-o', str(outdir)])
     content = (outdir / 'tsf_throughput.html').read_text(encoding='utf-8')
     assert 'POW performance' in content
-    assert 'Dataplane Throughput' in content
+    assert '>Dataplane<' in content
     assert '"pow":{' in content and '"samples":[{' in content
 
 
@@ -374,7 +374,7 @@ def test_main_tgz_dp_monitor_only_has_no_pow(tmp_path):
     analyzer.main([str(tsf), '-o', str(outdir)])
     content = (outdir / 'dp-only_throughput.html').read_text(encoding='utf-8')
     assert '"pow":null' in content
-    assert 'Dataplane Throughput' in content
+    assert '>Dataplane<' in content
 
 
 def test_main_tgz_with_cli_file_without_pow_writes_nothing(tmp_path):

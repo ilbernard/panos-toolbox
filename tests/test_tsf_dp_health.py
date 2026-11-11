@@ -1,4 +1,4 @@
-"""Tests for tsf/dp_health.py and the Dataplane health tab of the report.
+"""Tests for tsf/dp_health.py and the Dataplane health block of the Dataplane tab of the report.
 
 Synthetic data only (no real TSF content); no device is contacted.
 """
@@ -523,7 +523,9 @@ def report_data(html_text):
 
 def test_render_report_contains_the_tab_and_help(tmp_path):
     out = run_main(tmp_path)
-    assert 'id="tab-dph"' in out and 'id="p-dph"' in out and '>Dataplane health<' in out
+    assert 'id="tab-dph"' not in out and 'id="p-dph"' not in out
+    assert 'id="tab-chart"' in out and '>Dataplane</button>' in out and 'Dataplane Throughput' not in out
+    assert 'id="dphblock"' in tab_html(out, 'chart')
     for sid in ('dph', 'dphflags', 'dphcores'):
         assert f'id="help-{sid}" hidden' in out
     assert 'id="help-dphchart"' not in out
@@ -728,21 +730,25 @@ def tab_html(out, tab_id):
     return m.group(0)
 
 
-def test_charts_and_core_tables_moved_to_the_throughput_tab(tmp_path):
+def test_health_block_is_at_the_top_of_the_dataplane_tab(tmp_path):
     out = run_main(tmp_path)
-    chart_tab, dph_tab = tab_html(out, 'chart'), tab_html(out, 'dph')
-    # moved into the throughput tab
+    chart_tab = tab_html(out, 'chart')
+    dph_tab = chart_tab[chart_tab.index('id="dphblock"'):chart_tab.index('id="tpsec"')]
+    # in the Dataplane tab
     for needle in ('id="pcsec"', 'id="dphcores"', 'id="help-dphcores"', 'CPU per core (heatmap)', 'id="hmsrc"',
                    'id="pcraw"', 'Raw tables per capture', 'id="metric"',
                    'id="hdp"', 'id="hcol"', 'Dataplane health columns'):
         assert needle in chart_tab, needle
-    # gone from the Dataplane health tab, which keeps the summary and the findings
+    # the health block keeps the summary and the findings; the charts and core tables are below it
     for needle in ('<h2>Utilization over time</h2>', '<h2>CPU per core (heatmap)</h2>', 'id="dphchart"', 'id="dphstats"', 'id="dphdp"',
                    'id="dphcores"', 'id="dphleg"'):
         assert needle not in dph_tab, needle
     for needle in ('id="dphsum"', 'id="dphbanner"', 'id="help-dphflags"', 'id="help-dph"'):
         assert needle in dph_tab, needle
     assert 'id="help-dphchart"' not in out
+    # health block first, then the throughput chart
+    assert chart_tab.index('id="dphblock"') < chart_tab.index('id="dphsum"') < chart_tab.index('id="dphbanner"') < chart_tab.index('id="metric"')
+    assert 'Dataplane Throughput' not in chart_tab
     data = report_data(out)
     assert set(data['dph']['detail']['by_dp']) == {'dp0'}
     for code in dp_health.FLAG_CODES:
@@ -763,4 +769,4 @@ def test_help_describes_the_merge_and_the_reconstruction(tmp_path):
     for needle in ('Heatmap', 'Per-minute max', 'Per-second', 'no data', 'Raw tables per capture', 'peak</b> column',
                    f"{dp_health.DP_THRESHOLDS['core_peak_warn']}%", f"{dp_health.DP_THRESHOLDS['core_peak_minute_warn']}%"):
         assert needle in cores_help, needle
-    assert 'Dataplane Throughput' in re.search(r'id="help-dph" hidden>(.*?)</div>', out, re.DOTALL).group(1)
+    assert 'Dataplane tab' in re.search(r'id="help-dph" hidden>(.*?)</div>', out, re.DOTALL).group(1)

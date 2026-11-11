@@ -154,9 +154,8 @@ TEMPLATE_BODY = r'''</style>
 <details id="warn" style="display:none;margin:0 0 16px"><summary id="warnsum"></summary><ul id="warnlist"></ul></details>
 
 <div class="tabs" id="tabs" role="tablist" aria-label="Report sections">
-  <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
+  <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
-  <button type="button" role="tab" id="tab-dph" aria-controls="p-dph" aria-selected="false" tabindex="-1" style="display:none">Dataplane health</button>
   <button type="button" role="tab" id="tab-mp" aria-controls="p-mp" aria-selected="false" tabindex="-1" style="display:none">Management plane</button>
   <button type="button" role="tab" id="tab-sys" aria-controls="p-sys" aria-selected="false" tabindex="-1" style="display:none">System health</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
@@ -166,6 +165,15 @@ TEMPLATE_BODY = r'''</style>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
+  <div id="dphblock" style="display:none">
+  <div class="sechead"><h2>Dataplane health</h2>__HB_dph__</div>__HP_dph__
+  <p class="hint" id="dphinfo"></p>
+  <details id="dphwarn" style="display:none;margin:0 0 12px"><summary id="dphwarnsum"></summary><ul id="dphwarnlist"></ul></details>
+  <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
+  <ul class="banner" id="dphbanner"></ul>
+  </div>
+  <div id="tpsec">
   <div class="sechead"><h2>Dataplane throughput</h2>__HB_chart__</div>__HP_chart__
   <div class="bar">
     <label>Metric <select id="metric"></select></label>
@@ -177,6 +185,7 @@ TEMPLATE_BODY = r'''</style>
   <div class="cw" id="chartwrap"><svg id="chart" role="img" aria-label="Metrics over time chart"></svg><div class="tip" id="tip"></div></div>
   <p class="hint">Drag on the chart to zoom into a range; the range also applies to the other charts and to the table.</p>
   <table class="stats" id="stats"></table>
+  </div>
   <div class="sep" id="pcsec" style="display:none">
   <div class="sechead"><h2>CPU per core (heatmap)</h2>__HB_dphcores__</div>__HP_dphcores__
   <div class="bar">
@@ -221,16 +230,6 @@ TEMPLATE_BODY = r'''</style>
   <div class="leg" id="gleg" style="margin-bottom:10px"></div>
   <div class="cw" id="gwrap"><svg id="gchart" role="img" aria-label="CPU load by group over time"></svg><div class="tip" id="gtip"></div></div>
   <table class="stats" id="gstats"></table>
-</section>
-
-<section class="panel" id="p-dph" role="tabpanel" aria-labelledby="tab-dph" hidden>
-  <div class="sechead"><h2>Dataplane health</h2>__HB_dph__</div>__HP_dph__
-  <p class="hint" id="dphinfo"></p>
-  <details id="dphwarn" style="display:none;margin:0 0 12px"><summary id="dphwarnsum"></summary><ul id="dphwarnlist"></ul></details>
-  <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
-  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
-  <ul class="banner" id="dphbanner"></ul>
-  <p class="hint">The utilization charts and the CPU per core tables are in the <b>Dataplane Throughput</b> tab (Metric selector and "CPU per core (heatmap)").</p>
 </section>
 
 <section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
@@ -810,7 +809,7 @@ let activeTab='chart';
 function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); renderCoreTable(); } else if(activeTab==='cpu') drawGroups();  else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='sys' && hasSys) renderSys(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','mp','sys','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -1312,13 +1311,15 @@ if(hasIfc){
 
 '''
 
-# Dataplane health tab (resource monitor of the panio sections: sessions, packet buffer, cores)
-JS_DPH = r'''// Dataplane health tab (summary per DP and findings). The charts and the CPU per core tables are in the throughput tab.
+# Dataplane health block of the Dataplane tab (resource monitor of the panio sections: sessions, packet buffer, cores)
+JS_DPH = r'''// Dataplane health block, at the top of the Dataplane tab (summary per DP and findings). The charts and the CPU per core tables are below it.
 function dphWorst(dp){
   const fl = DH.findings.filter(f=>f.dp===dp);
   return fl.some(f=>f.level==='crit') ? 'crit' : (fl.some(f=>f.level==='warn') ? 'warn' : '');
 }
 function renderDphStatic(){
+  $('#dphblock').style.display = '';
+  $('#tpsec').classList.add('sep');   // separates the health block from the throughput chart
   const all = DH.dps.flatMap(d=>DH.series[d].t);
   if(!hasSamples){
     $('#sub').textContent = 'Period '+iso(minOf(all))+' - '+iso(maxOf(all))+' UTC | dp-monitor files read: '+D.files+' | generated '+D.generated+' UTC';
@@ -1362,8 +1363,8 @@ if(hasDph) renderDphStatic();
 
 '''
 
-# CPU per core (throughput tab): one core x time heatmap and, collapsed, one lazily expanded row per capture.
-JS_PERCORE = r'''// CPU per core (throughput tab): a core x time heatmap and the raw tables of each capture
+# CPU per core (Dataplane tab): one core x time heatmap and, collapsed, one lazily expanded row per capture.
+JS_PERCORE = r'''// CPU per core (Dataplane tab): a core x time heatmap and the raw tables of each capture
 const pcState = {hot:false, all:false, open:new Set()};
 const dphHeat = v => isNum(v) ? 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')' : '';
 const pcDps = () => HD ? ((state.dp && state.dp!=='ALL') ? HDPS.filter(d=>d===state.dp) : HDPS).filter(d=>DH.cores[d].ids.length) : [];
@@ -1629,8 +1630,8 @@ if(hasMp) renderMpStatic();
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''// Normal view: throughput, system health and management plane. Every other tab is advanced and is shown with the Advanced box.
-const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+JS_TABS = r'''// Normal view: dataplane (health and throughput), system health and management plane. Every other tab is advanced and is shown with the Advanced box.
+const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
 const NORMAL_TABS=['chart','sys','mp'], ADV_KEY='panosToolbox.tsfReport.advanced';
 const hasNormalTab=ALL_TABS.some(k=>NORMAL_TABS.includes(k)), hasAdvTab=ALL_TABS.some(k=>!NORMAL_TABS.includes(k));
 // localStorage can throw (file:// in some browsers, private mode): the choice is then simply not remembered.
@@ -1640,11 +1641,11 @@ let advanced = hasNormalTab ? loadAdv() : true;   // no normal tab: the advanced
 let TABS=[];                                      // the visible tabs, in order
 function applyTabs(){
   TABS=ALL_TABS.filter(k=>advanced||NORMAL_TABS.includes(k));
-  ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+  ['chart','cpu','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
   $('#tabs').style.display=ALL_TABS.length>1?'':'none';
   $('#advwrap').style.display=hasAdvTab&&ALL_TABS.length>1?'':'none';
   const cb=$('#advanced'); cb.checked=advanced; cb.disabled=!hasNormalTab;
-  $('#advwrap').title=hasNormalTab?'Show the advanced tabs (CPU load by group, Dataplane health, POW performance, Interface Errors, Source coverage)':'This report has no throughput, system health or management plane data, so the advanced tabs are always shown.';
+  $('#advwrap').title=hasNormalTab?'Show the advanced tabs (CPU load by group, POW performance, Interface Errors, Source coverage)':'This report has no throughput, system health or management plane data, so the advanced tabs are always shown.';
 }
 function setAdvanced(v){
   advanced=!!v||!hasNormalTab; if(hasNormalTab) saveAdv(advanced);
