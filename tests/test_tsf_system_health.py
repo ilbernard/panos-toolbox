@@ -526,7 +526,8 @@ def test_single_cli_file_gives_sys_report_with_suffix(tmp_path):
     assert '__HB_' not in out and '__HP_' not in out
     data = report_data(out)
     assert data['kind'] == 'TSF analysis' and data['sys']['status'] == 'critical'
-    assert [c['id'] for c in data['sys']['checks']] == ['software', 'cfg_mem', 'nat', 'cores']
+    assert [c['id'] for c in data['sys']['checks']] == [
+        'software', 'cfg_mem', 'nat', 'cores', 'crash_link']
     assert data['sys']['cores']['state'] == 'unknown'
     for code in FLAG_CODES:
         assert f'<code>{code}</code>' in out

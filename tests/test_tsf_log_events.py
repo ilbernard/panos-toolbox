@@ -739,7 +739,7 @@ def test_report_without_logs_has_no_logs_view(tmp_path):
     out = next(outdir.glob('*.html')).read_text(encoding='utf-8')
     data = report_data(out)
     assert 'logs' not in data['sys'] and {c['group'] for c in data['sys']['checks']} == {
-        'CLI snapshot', 'Archive members'}
+        'CLI snapshot', 'Archive members', 'Correlations'}   # sample has non-running processes
 
 
 def test_jobs_only_cli_file_gives_a_sys_report(tmp_path):

@@ -9,6 +9,7 @@ import pytest
 
 from panos_toolbox.tsf import (
     analyzer,
+    correlations,
     dp_health,
     log_events,
     mp_monitor,
@@ -121,6 +122,16 @@ def test_every_flag_code_in_log_events_is_documented():
     out = render_help()
     missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
     assert not missing, missing
+
+
+def test_every_flag_code_in_correlations_is_documented():
+    src = Path(correlations.__file__).read_text(encoding='utf-8')
+    codes = set(re.findall(r"_flag\(.*?,\s*'([A-Z][A-Z_]+)',\s*'(?:crit|warn|info)'", src,
+                           re.DOTALL))
+    assert codes == {'CRASH_LINK'} == set(correlations.FLAG_CODES)
+    assert set(correlations.CODE_CHECK) == codes
+    out = render_help()
+    assert all(f'<code>{c}</code>' in out for c in codes)
 
 
 def test_render_help_shows_live_log_thresholds():
