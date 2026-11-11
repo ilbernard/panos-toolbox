@@ -85,6 +85,8 @@ LOG_THRESHOLDS = {
     'log_repeat_min': 20,   # identical daemon error messages at or above: LOG_ERROR_REPEAT
     'corr_window_s': 90,    # commit/job correlation margin, seconds, on both sides
     'commit_gap_s': 120,    # COMMIT lines closer than this form one commit window, seconds
+    'log_recent_h': 24,     # LOG_ERROR_REPEAT counts occurrences in the last N hours of the TSF
+    'commit_min_lines': 2,  # a commit window needs at least this many COMMIT lines
 }
 
 # Daemon logs read (var/log/pan/<name>.log and rotations). Tunable allowlist.
@@ -95,15 +97,18 @@ DAEMON_LOGS = (
 )
 COMMIT_DAEMONS = ('configd', 'ms')
 
-FLAG_CODES = ('KERNEL_CRASH', 'KERNEL_CRASH_SEEN', 'LOG_ERROR_REPEAT', 'NEAR_COMMIT')
+FLAG_CODES = ('KERNEL_CRASH', 'KERNEL_CRASH_SEEN', 'LOG_ERROR_REPEAT', 'LOG_ERROR_CHRONIC',
+              'NEAR_COMMIT')
 CODE_CHECK = {'KERNEL_CRASH': 'kernel', 'KERNEL_CRASH_SEEN': 'kernel',
-              'LOG_ERROR_REPEAT': 'log_errors', 'NEAR_COMMIT': 'commits'}
+              'LOG_ERROR_REPEAT': 'log_errors', 'LOG_ERROR_CHRONIC': 'log_errors',
+              'NEAR_COMMIT': 'commits'}
 GROUP_LOGS = 'Logs'
 CMD_JOBS = 'show jobs processed'
 
 MAX_MSGS_PER_DAEMON_VIEW = 50
 MAX_REPEAT_FLAGS = 20
 MAX_DISTINCT_PER_DAEMON = 5000
+MAX_TS_PER_MSG = 100_000     # distinct timestamps kept per message (for the recent count)
 MAX_COMMIT_TS = 200_000
 MAX_WINDOWS_VIEW = 200
 MAX_JOBS = 5000
@@ -158,6 +163,7 @@ def new_store() -> dict[str, Any]:
         'commit_ts': [],                # (t_ms UTC, daemon, base file)
         'commit_dropped': 0,
         'jobs': {'rows': [], 'src': None, 'duplicates': 0},
+        'last_ts': None,                # latest explicit-offset timestamp seen (ms UTC)
         'offset_days': {},              # local date 'YYYY-MM-DD' -> {'+0100': samples, ...}
     }
 
@@ -214,21 +220,36 @@ def _note_offset(line, days) -> None:
         by_off[off] = by_off.get(off, 0) + 1
 
 
+def _note_last(store, line) -> None:
+    m = TS_RE.match(line)
+    if m:
+        t = _ts_ms(m)
+        if t is not None and (store['last_ts'] is None or t > store['last_ts']):
+            store['last_ts'] = t
+
+
 def tap_offsets(lines, store):
     """Yields `lines` unchanged and records the (local date, offset) of the lines that start
     with an explicit-offset timestamp (``2026-11-06 11:18:48.794 +0100``): the monitor headers
     and daemon log lines. Used by the analyzer for dp-monitor and mp-monitor files. To stay
     cheap, a line is parsed when its date and hour (the first 13 characters) differ from the
-    previous line's, so a change of offset at an hour boundary (DST) is still seen."""
+    previous line's, so a change of offset at an hour boundary (DST) is still seen. The last
+    timestamped line of the input also updates ``store['last_ts']`` (the end of the TSF)."""
     days = store['offset_days']
     prev = None
-    for line in lines:
-        if line[:2] == '20':
-            h = line[:13]
-            if h != prev:
-                prev = h
-                _note_offset(line, days)
-        yield line
+    last = None
+    try:
+        for line in lines:
+            if line[:2] == '20':
+                last = line
+                h = line[:13]
+                if h != prev:
+                    prev = h
+                    _note_offset(line, days)
+            yield line
+    finally:
+        if last is not None:
+            _note_last(store, last)
 
 
 # --------------------------------------------------------------------------
@@ -378,6 +399,12 @@ def parse_daemon_log(data, daemon, src, store, warnings) -> int:
     for text in _chunks(data):
         n_lines += text.count('\n') + (1 if text and not text.endswith('\n') else 0)
         _sample_offsets(text, days)
+        j = text.rfind('\n20')
+        while j >= 0:                        # last timestamped line of the chunk: end of the log
+            if TS_RE.match(text, j + 1):
+                _note_last(store, text[j + 1:j + 40])
+                break
+            j = text.rfind('\n20', 0, j)
         for ls in _candidate_lines(text):
             m = LINE_RE.match(text, ls)
             if m is None:
@@ -399,12 +426,17 @@ def parse_daemon_log(data, daemon, src, store, warnings) -> int:
                 if len(msgs) >= MAX_DISTINCT_PER_DAEMON:
                     d['dropped'] += 1
                     continue
-                rec = msgs[key] = [0, None, None, set()]
+                rec = msgs[key] = [0, None, None, set(), {}]
             rec[0] += 1
             rec[3].add(src)
             if m.group(1):
                 t = _ts_ms(m)
                 if t is not None:
+                    secs = rec[4]
+                    if t in secs:
+                        secs[t] += 1
+                    elif len(secs) < MAX_TS_PER_MSG:
+                        secs[t] = 1
                     if rec[1] is None or t < rec[1]:
                         rec[1] = t
                     if rec[2] is None or t > rec[2]:
@@ -642,21 +674,39 @@ def _kernel_view(store, th, flags):
             'events': events, 'dropped': k['dropped'], 'time_note': note}
 
 
+def _recent_count(rec, lo, hi) -> int:
+    return sum(n for t, n in rec[4].items() if lo <= t <= hi)
+
+
 def _daemon_view(store, th, flags, budgets):
     rep_min = th['log_repeat_min']
+    end = store.get('last_ts')
+    lo = end - int(th['log_recent_h'] * 3_600_000) if end is not None else None
     rows = []
-    flagged = []
+    recent_flagged = []          # (recent, total, daemon, msg, first, last, files)
+    chronic: dict[str, list] = {}
     for name in sorted(store['daemons']):
         d = store['daemons'][name]
         items = sorted(d['msgs'].items(), key=lambda kv: (-kv[1][0], kv[0]))
         msgs = []
-        for msg, (n, t0, t1, files) in items[:MAX_MSGS_PER_DAEMON_VIEW]:
-            msgs.append({'msg': msg, 'count': n, 'first': t0, 'last': t1,
-                         'files': sorted(files), 'flagged': n >= rep_min})
-        for msg, (n, t0, t1, files) in items:
-            if n < rep_min:
-                break
-            flagged.append((n, name, msg, t0, t1, sorted(files)))
+        n_recent = n_chronic = recent_occ = 0
+        for msg, rec in items:
+            n, t0, t1, files = rec[:4]
+            rc = _recent_count(rec, lo, end) if end is not None else 0
+            recent_occ += rc
+            kind = ''
+            if rc >= rep_min:
+                kind = 'recent'
+                n_recent += 1
+                recent_flagged.append((rc, n, name, msg, t0, t1, sorted(files)))
+            elif n >= rep_min:
+                kind = 'chronic'
+                n_chronic += 1
+                chronic.setdefault(name, []).append((n, msg))
+            if len(msgs) < MAX_MSGS_PER_DAEMON_VIEW:
+                msgs.append({'msg': msg, 'count': n, 'recent': rc, 'first': t0, 'last': t1,
+                             'files': sorted(files), 'flagged': kind == 'recent',
+                             'kind': kind})
         omitted = max(0, len(items) - MAX_MSGS_PER_DAEMON_VIEW)
         if omitted:
             budgets.append(f'{name}: {omitted} less frequent message(s) not listed '
@@ -664,33 +714,48 @@ def _daemon_view(store, th, flags, budgets):
         if d['dropped']:
             budgets.append(f'{name}: {d["dropped"]} error line(s) with a new message were not '
                            f'counted after {MAX_DISTINCT_PER_DAEMON} distinct messages')
+        level = 'warn' if n_recent else ('info' if n_chronic else '')
         rows.append({'daemon': name, 'files': sorted(d['files']), 'lines': d['lines'],
                      'errors': d['errors'], 'distinct': len(d['msgs']), 'dropped': d['dropped'],
-                     'omitted': omitted, 'messages': msgs})
-    flagged.sort(key=lambda x: (-x[0], x[1], x[2]))
-    for n, name, msg, t0, t1, files in flagged[:MAX_REPEAT_FLAGS]:
-        when = (f'first {utc_str(t0)}, last {utc_str(t1)}' if t0 is not None
-                else 'no timestamp with an offset')
+                     'omitted': omitted, 'n_recent': n_recent, 'n_chronic': n_chronic,
+                     'recent_errors': recent_occ, 'level': level, 'messages': msgs})
+    recent_flagged.sort(key=lambda x: (-x[0], x[2], x[3]))
+    for rc, n, name, msg, t0, t1, files in recent_flagged[:MAX_REPEAT_FLAGS]:
         flags.append(_flag(f'{name}: {msg[:60]}', 'LOG_ERROR_REPEAT', 'warn', (
-            f'{name}.log: the error "{msg}" appears {n:,} times ({when}; files '
-            f'{", ".join(files)}), at or above {rep_min:g}. A message that repeats this often '
-            f'is a persistent condition, not an event; look it up with the daemon name and fix '
-            f'or silence its cause.')))
-    rest = flagged[MAX_REPEAT_FLAGS:]
+            f'{name}.log: the error "{msg}" appears {rc:,} times in the last '
+            f'{th["log_recent_h"]:g} h of the TSF (until {utc_str(end)}), {n:,} in total '
+            f'(first {utc_str(t0)}, last {utc_str(t1)}; files {", ".join(files)}), at or above '
+            f'{rep_min:g}. A message that repeats this often and still does is a persistent '
+            f'condition, not an event; look it up with the daemon name and fix or silence its '
+            f'cause.')))
+    rest = recent_flagged[MAX_REPEAT_FLAGS:]
     if rest:
-        budgets.append(f'{len(rest)} more repeated message(s) summarised in one flag '
+        budgets.append(f'{len(rest)} more recently repeated message(s) summarised in one flag '
                        f'(at most {MAX_REPEAT_FLAGS} are flagged one by one)')
-        daemons = sorted({x[1] for x in rest})
-        top = '; '.join(f'{x[1]}: "{x[2][:80]}" x{x[0]:,}' for x in rest[:5])
+        daemons = sorted({x[2] for x in rest})
+        top = '; '.join(f'{x[2]}: "{x[3][:80]}" x{x[0]:,}' for x in rest[:5])
         flags.append(_flag('other repeated messages', 'LOG_ERROR_REPEAT', 'warn', (
-            f'{len(rest)} more repeated error message(s) ({sum(x[0] for x in rest):,} '
-            f'occurrences) in {", ".join(daemons)}, each at or above {rep_min:g}; top: {top}.')))
-    return {'present': bool(store['daemons']), 'rows': rows, 'n_flagged': len(flagged),
-            'allowlist': list(DAEMON_LOGS)}
+            f'{len(rest)} more repeated error message(s) ({sum(x[0] for x in rest):,} recent '
+            f'occurrences) in {", ".join(daemons)}, each at or above {rep_min:g} in the last '
+            f'{th["log_recent_h"]:g} h; top: {top}.')))
+    why = ('' if end is not None else ' No reference time (no timestamp with a UTC offset) could '
+           'be found in the TSF, so no message can be called recent.')
+    for name in sorted(chronic):
+        items = sorted(chronic[name], key=lambda x: (-x[0], x[1]))
+        top = '; '.join(f'"{m[:80]}" x{n:,}' for n, m in items[:3])
+        flags.append(_flag(f'{name} (chronic)', 'LOG_ERROR_CHRONIC', 'info', (
+            f'{name}.log: {len(items)} message(s) repeated at least {rep_min:g} times over the '
+            f'whole log but not in the last {th["log_recent_h"]:g} h ({sum(n for n, _m in items):,}'
+            f' occurrences in total); top {min(3, len(items))}: {top}.{why}')))
+    return {'present': bool(store['daemons']), 'rows': rows, 'n_flagged': len(recent_flagged),
+            'n_chronic': sum(len(v) for v in chronic.values()), 'ref_end': end,
+            'recent_h': th['log_recent_h'], 'allowlist': list(DAEMON_LOGS)}
 
 
 def _context_view(store, th, events, flags, budgets):
-    wins = commit_windows(store, th['commit_gap_s'])
+    all_wins = commit_windows(store, th['commit_gap_s'])
+    wins = [w for w in all_wins if w['n'] >= th['commit_min_lines']]
+    discarded = sum(w['n'] for w in all_wins if w['n'] < th['commit_min_lines'])
     cache: dict = {}
     jobs = [j for j in (_job_view(r, store, cache) for r in store['jobs']['rows']) if j]
     margin = int(th['corr_window_s'] * 1000)
@@ -766,7 +831,8 @@ def _context_view(store, th, events, flags, budgets):
     states: dict[str, int] = {}
     for j in jobs:
         states[j['offset_state']] = states.get(j['offset_state'], 0) + 1
-    return {'present_commits': bool(wins), 'present_jobs': bool(jobs), 'n_windows': len(wins),
+    return {'present_commits': bool(all_wins), 'present_jobs': bool(jobs), 'n_windows': len(wins),
+            'n_discarded_lines': discarded,
             'n_jobs': len(jobs), 'timeline': timeline, 'correlations': corr,
             'n_correlations': len(corr), 'job_offsets': states, 'jobs_src': store['jobs']['src'],
             'offset_days': {k: dict(sorted(v.items())) for k, v in sorted(store['offset_days'].items())}
@@ -824,8 +890,8 @@ def evaluate_log_events(store, thresholds=None, mp_view=None, dph_view=None) -> 
 
     if daemons['present']:
         n_err = sum(r['errors'] for r in daemons['rows'])
-        value = (f'{daemons["n_flagged"]} repeated message(s); {n_err:,} error lines in '
-                 f'{len(daemons["rows"])} daemon log(s)')
+        value = (f'{daemons["n_flagged"]} recently repeated, {daemons["n_chronic"]} chronic '
+                 f'message(s); {n_err:,} error lines in {len(daemons["rows"])} daemon log(s)')
         note = '; '.join(budgets[:1]) if budgets else ''
     else:
         value, note = '', 'No daemon log of the allowlist in the input.'
@@ -836,7 +902,8 @@ def evaluate_log_events(store, thresholds=None, mp_view=None, dph_view=None) -> 
     if has_ctx:
         bad = ctx['job_offsets'].get('ambiguous', 0) + ctx['job_offsets'].get('unknown', 0)
         value = (f'{ctx["n_correlations"]} item(s) near a commit or job; {ctx["n_windows"]} '
-                 f'commit window(s), {ctx["n_jobs"]} job(s)')
+                 f'commit window(s) ({ctx["n_discarded_lines"]} single line(s) ignored), '
+                 f'{ctx["n_jobs"]} job(s)')
         note = (f'{bad} job(s) without a usable offset, not correlated' if bad else
                 ('job offsets inferred' if ctx['n_jobs'] else ''))
     else:

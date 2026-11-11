@@ -70,7 +70,7 @@ def err_lines(msg, n, start_min=0, level='Error:', off='+0100'):
 # --------------------------------------------------------------------------
 def test_defaults():
     assert LOG_THRESHOLDS == {'crash_min': 5, 'log_repeat_min': 20, 'corr_window_s': 90,
-                              'commit_gap_s': 120}
+                              'commit_gap_s': 120, 'log_recent_h': 24, 'commit_min_lines': 2}
     assert set(FLAG_CODES) == set(log_events.CODE_CHECK)
 
 
@@ -216,14 +216,19 @@ def test_doubled_timestamp_and_no_timestamp_messages_are_the_same_key():
     st = daemon(text)[1]
     msgs = st['daemons']['devsrv']['msgs']
     assert list(msgs) == ['Error: boom N'] and msgs['Error: boom N'][0] == 3
+    # 2 of the 3 occurrences carry a timestamp: recent count 2 < 3, so chronic, not a warning
     v = evaluate_log_events(st, {'log_repeat_min': 3})
+    assert codes(v) == ['LOG_ERROR_CHRONIC']
+    v = evaluate_log_events(st, {'log_repeat_min': 2})
     assert codes(v) == ['LOG_ERROR_REPEAT']
 
 
-def test_message_without_timestamp_has_no_utc_time():
-    v = dview('error: cannot stat /etc/x\n' * 21)
-    assert 'no timestamp with an offset' in v['findings'][0]['text']
+def test_message_without_timestamp_is_chronic_and_has_no_utc_time():
+    text = '2026-03-10 02:00:00.000 +0100 INFO: reference line\n' + 'error: cannot stat /etc/x\n' * 21
+    v = dview(text)
+    assert codes(v) == ['LOG_ERROR_CHRONIC'] and v['findings'][0]['level'] == 'info'
     assert v['logs']['daemons']['rows'][0]['messages'][0]['first'] is None
+    assert v['checks'][1]['status'] == 'ok'
 
 
 def test_first_last_across_files_and_files_listed():
@@ -506,7 +511,8 @@ def test_dst_ambiguous_job_is_not_correlated_but_commit_window_is():
             'Completed\n-----\n'
             '2026/03/29 05:00:00   05:00:00        1000     Content   FIN     OK 05:10:00\n')
     st = jobs_store(jobs, days)
-    daemon('2026-03-29 05:04:00.000 +0200 COMMIT a\n', 'configd', st, 'configd.log')
+    daemon('2026-03-29 05:04:00.000 +0200 COMMIT a\n2026-03-29 05:04:20.000 +0200 COMMIT b\n',
+           'configd', st, 'configd.log')
     mp, flag = mp_stub(utc_ms('2026-03-29', '03:04:00'), utc_ms('2026-03-29', '03:04:30'))
     v = evaluate_log_events(st, None, mp, None)
     near = [f for f in v['findings'] if f['code'] == 'NEAR_COMMIT']
@@ -766,3 +772,110 @@ def test_generated_javascript_is_valid(tmp_path):
     js.write_text(scripts[-1], encoding='utf-8')
     res = subprocess.run(['node', '--check', str(js)], check=False, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
+
+
+# --------------------------------------------------------------------------
+# Tuning: recent vs chronic repeats, commit_min_lines
+# --------------------------------------------------------------------------
+def timed(msg, stamps, off='+0000'):
+    return ''.join(f'{t} {off} Error:  {msg}\n' for t in stamps)
+
+
+def recent_store(n_old, n_recent, boundary='2026-03-09 12:00:00.000'):
+    """`n_recent` occurrences at/after the boundary, `n_old` just before it, TSF end 03-10 12:00."""
+    old = [f'2026-03-09 11:{i % 60:02d}:00.000' for i in range(n_old)]
+    rec = [boundary] * n_recent
+    end = '2026-03-10 12:00:00.000 +0000 INFO: end of the log\n'
+    return daemon(timed('boom', old + rec) + end)[1]
+
+
+def test_recent_count_decides_warning_versus_chronic():
+    v = evaluate_log_events(recent_store(30, 20))
+    assert codes(v) == ['LOG_ERROR_REPEAT']
+    f = v['findings'][0]
+    assert '20 times in the last 24 h' in f['text'] and '50 in total' in f['text']
+    assert v['checks'][1]['status'] == 'warning'
+    row = v['logs']['daemons']['rows'][0]
+    assert (row['n_recent'], row['n_chronic'], row['level']) == (1, 0, 'warn')
+    assert row['messages'][0]['recent'] == 20 and row['messages'][0]['count'] == 50
+    v = evaluate_log_events(recent_store(30, 19))
+    assert codes(v) == ['LOG_ERROR_CHRONIC'] and v['checks'][1]['status'] == 'ok'
+    assert '49 occurrences' in v['findings'][0]['text']
+
+
+def test_recent_window_boundary_is_exactly_24_hours_inclusive():
+    # TSF end = 2026-03-10 12:00:00.000; the window starts at 2026-03-09 12:00:00.000
+    on = evaluate_log_events(recent_store(0, 20, '2026-03-09 12:00:00.000'))
+    off = evaluate_log_events(recent_store(0, 20, '2026-03-09 11:59:59.999'))
+    assert codes(on) == ['LOG_ERROR_REPEAT'] and codes(off) == ['LOG_ERROR_CHRONIC']
+    wide = evaluate_log_events(recent_store(0, 20, '2026-03-09 11:59:59.999'),
+                               {'log_recent_h': 25})
+    assert codes(wide) == ['LOG_ERROR_REPEAT']
+
+
+def test_no_reference_time_everything_is_chronic():
+    v = dview('error: boom\n' * 25)
+    assert codes(v) == ['LOG_ERROR_CHRONIC'] and 'No reference time' in v['findings'][0]['text']
+    assert v['logs']['daemons']['ref_end'] is None
+
+
+def test_one_chronic_finding_per_daemon_with_top_three():
+    st = new_store()
+    end = '2026-03-10 12:00:00.000 +0000 INFO: end\n'
+    for name in ('devsrv', 'authd'):
+        text = ''.join(timed(f'old problem {k}', [f'2026-03-01 10:{i:02d}:00.000' for i in range(21 + k)])
+                       for k in range(5))
+        daemon(text + end, name, st, f'{name}.log')
+    v = evaluate_log_events(st)
+    ch = [f for f in v['findings'] if f['code'] == 'LOG_ERROR_CHRONIC']
+    assert sorted(f['subject'] for f in ch) == ['authd (chronic)', 'devsrv (chronic)']
+    assert '5 message(s)' in ch[0]['text'] and 'old problem 4' in ch[0]['text']
+    assert 'old problem 1' not in ch[0]['text'] or 'old problem 2' in ch[0]['text']
+    assert ch[0]['text'].count(' x') == 3
+    assert v['logs']['daemons']['n_chronic'] == 10 and v['checks'][1]['status'] == 'ok'
+
+
+def test_reference_time_is_the_latest_timestamp_of_daemon_logs_and_monitors():
+    st = new_store()
+    daemon('2026-03-10 02:00:00.000 +0100 INFO: a\nnoise\n2026-03-10 03:00:00.000 +0100 INFO: b\n')
+    assert st['last_ts'] is None
+    st = daemon('2026-03-10 02:00:00.000 +0100 INFO: a\n2026-03-10 03:00:00.000 +0100 INFO: b\nx\n')[1]
+    assert log_events.utc_str(st['last_ts']) == '2026-03-10 02:00:00 UTC'
+    list(log_events.tap_offsets(['2026-03-10 04:00:00.000 +0100  --- memory', 'x'], st))
+    assert log_events.utc_str(st['last_ts']) == '2026-03-10 03:00:00 UTC'
+
+
+def test_commit_single_line_discarded_and_two_lines_kept():
+    st = ctx_store(commit_lines=False)
+    daemon(configd([('02:06:51.000', 'COMMIT a')]), 'configd', st, 'configd.log')
+    mp, flag = mp_stub(utc_ms('2026-03-10', '01:07:00'), utc_ms('2026-03-10', '01:07:10'))
+    v = evaluate_log_events(st, None, mp, None)
+    ctx = v['logs']['context']
+    assert ctx['n_windows'] == 0 and ctx['n_discarded_lines'] == 1
+    assert 'NEAR_COMMIT' not in codes(v) and flag['text'] == 'Process configd: CPU high.'
+    assert all(r['kind'] == 'job' for r in ctx['timeline'])
+    assert '1 single line(s) ignored' in v['checks'][2]['value']
+    daemon(configd([('02:07:30.000', 'COMMIT b')]), 'configd', st, 'configd.log')
+    v = evaluate_log_events(st, None, mp, None)
+    assert v['logs']['context']['n_windows'] == 1 and 'NEAR_COMMIT' in codes(v)
+    v = evaluate_log_events(st, {'commit_min_lines': 3}, mp_stub(
+        utc_ms('2026-03-10', '01:07:00'), utc_ms('2026-03-10', '01:07:10'))[0], None)
+    assert v['logs']['context']['n_windows'] == 0 and v['logs']['context']['n_discarded_lines'] == 2
+
+
+def test_cli_overrides_for_the_new_thresholds(tmp_path):
+    _p, out = run_report(tmp_path, '--sys-log-recent-h', '12', '--sys-commit-min-lines', '3')
+    th = report_data(out)['sys']['thresholds']
+    assert th['log_recent_h'] == 12 and th['commit_min_lines'] == 3
+    assert report_data(out)['sys']['logs']['context']['n_windows'] == 0
+    assert 'log_recent_h = 12 h' in out and 'commit_min_lines = 3' in out
+    for opt in ('--sys-log-recent-h', '--sys-commit-min-lines'):
+        with pytest.raises(SystemExit):
+            analyzer.main([str(tmp_path / 'x'), '-o', str(tmp_path), opt, '-1'])
+
+
+def test_report_groups_info_findings_and_collapses_sections(tmp_path):
+    _p, out = run_report(tmp_path)
+    for text in ('informational finding(s)', "sysEl('details')", 'Commit and job timeline (',
+                 'recent of', 'LOG_ERROR_CHRONIC'):
+        assert text in out, text

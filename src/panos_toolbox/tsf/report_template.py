@@ -1291,17 +1291,17 @@ function sysDetailKernel(host, check){
 function sysDetailLogErrors(host, check){
   const L = SYS.logs.daemons, rep = SYS.thresholds.log_repeat_min;
   if(check.status==='no_data'){ sysNoData(host, check, 'Repeated daemon errors'); return; }
-  const d = sysBlock(host, 'Repeated daemon errors', sysTable(['Daemon','Files','Lines','Error lines','Distinct messages','Repeated (>= '+rep+')'], L.rows, (tr,r)=>{
+  const d = sysBlock(host, 'Repeated daemon errors', sysTable(['Daemon','Files','Lines','Error lines','Distinct messages','Recent repeats (>= '+rep+')','Chronic'], L.rows, (tr,r)=>{
     sysCell(tr, r.daemon); sysCell(tr, r.files.join(', ')); sysCell(tr, r.lines.toLocaleString('en-US')); sysCell(tr, r.errors.toLocaleString('en-US')); sysCell(tr, r.distinct.toLocaleString('en-US'));
-    const n = r.messages.filter(m=>m.flagged).length; sysCell(tr, n); if(n) tr.className = 'anom-warn'; }),
-    'An error line starts (after the timestamp) with a level token ERROR/ERR/CRIT/CRITICAL/FATAL or Error:/error:/Crit:/fatal:. Messages are normalised (3+ digit numbers become N, 0x... becomes 0xH, bracketed or quoted paths are kept). Identical messages are counted per daemon; lines of rotated files are not de-duplicated. At most 50 messages per daemon are listed.');
+    sysCell(tr, r.n_recent); sysCell(tr, r.n_chronic); if(r.n_recent) tr.className = 'anom-warn'; }),
+    'An error line starts (after the timestamp) with a level token ERROR/ERR/CRIT/CRITICAL/FATAL or Error:/error:/Crit:/fatal:. Messages are normalised (3+ digit numbers become N, 0x... becomes 0xH, bracketed or quoted paths are kept). Identical messages are counted per daemon; lines of rotated files are not de-duplicated. At most 50 messages per daemon are listed, in collapsed tables. Recent = within the last '+SYS.thresholds.log_recent_h+' h before the end of the TSF'+(L.ref_end===null ? ' (no reference time found: nothing is recent)' : ' ('+sysUtc(L.ref_end)+')')+'; only recent repeats are warnings, the others are chronic (info).');
   L.rows.forEach(r=>{
     if(!r.messages.length) return;
-    const det = sysEl('details'); const nf = r.messages.filter(m=>m.flagged).length;
-    det.appendChild(sysEl('summary', r.daemon+': '+r.errors.toLocaleString('en-US')+' error line(s), '+r.distinct.toLocaleString('en-US')+' distinct'+(nf ? ', '+nf+' repeated' : '')));
-    if(nf) det.open = true;
-    det.appendChild(sysTable(['Count','First (UTC)','Last (UTC)','Message','Files'], r.messages, (tr,m)=>{
-      sysCell(tr, m.count.toLocaleString('en-US')); sysCell(tr, sysUtc(m.first)); sysCell(tr, sysUtc(m.last)); sysCell(tr, m.msg); sysCell(tr, m.files.join(', ')); if(m.flagged) tr.className = 'anom-warn'; }));
+    const det = sysEl('details');
+    const lvl = r.level==='warn' ? 'WARN' : (r.level==='info' ? 'info' : 'ok');
+    det.appendChild(sysEl('summary', r.daemon+': '+r.messages.length+(r.omitted ? '+' : '')+' message(s), '+r.n_recent+' repeated recently ('+r.recent_errors.toLocaleString('en-US')+' recent of '+r.errors.toLocaleString('en-US')+' error line(s)), '+r.n_chronic+' chronic - '+lvl));
+    det.appendChild(sysTable(['Count','Recent','First (UTC)','Last (UTC)','Message','Files'], r.messages, (tr,m)=>{
+      sysCell(tr, m.count.toLocaleString('en-US')); sysCell(tr, m.recent.toLocaleString('en-US')); sysCell(tr, sysUtc(m.first)); sysCell(tr, sysUtc(m.last)); sysCell(tr, m.msg); sysCell(tr, m.files.join(', ')); if(m.kind==='recent') tr.className = 'anom-warn'; }));
     if(r.omitted) det.appendChild(sysEl('p', r.omitted+' less frequent message(s) not listed (limit of 50 per daemon).', 'hint'));
     if(r.dropped) det.appendChild(sysEl('p', r.dropped+' error line(s) with a new message were not counted (limit of distinct messages reached).', 'hint'));
     d.appendChild(det);
@@ -1310,7 +1310,7 @@ function sysDetailLogErrors(host, check){
 function sysDetailCommits(host, check){
   const C = SYS.logs.context;
   if(check.status==='no_data'){ sysNoData(host, check, 'Commit and job context'); return; }
-  const d = sysBlock(host, 'Commit and job context', null, 'Informational only: it never changes a flag. Commit windows come from COMMIT lines of configd.log (explicit UTC offset; lines at most '+SYS.thresholds.commit_gap_s+' s apart form one window). Jobs come from "show jobs processed" in device local time WITHOUT offset: the offset is inferred from the explicit-offset log headers of the same TSF; a job with an ambiguous (DST change within a day) or unknown offset has no UTC time and is not correlated. A flag is near a window or job when it lies within '+SYS.thresholds.corr_window_s+' s of it. Running jobs have no end and are not correlated.');
+  const d = sysBlock(host, 'Commit and job context', null, 'Informational only: it never changes a flag. Commit windows come from COMMIT lines of configd.log (explicit UTC offset; lines at most '+SYS.thresholds.commit_gap_s+' s apart form one window; a window needs at least '+SYS.thresholds.commit_min_lines+' lines, '+C.n_discarded_lines+' single line(s) were ignored). Jobs come from "show jobs processed" in device local time WITHOUT offset: the offset is inferred from the explicit-offset log headers of the same TSF; a job with an ambiguous (DST change within a day) or unknown offset has no UTC time and is not correlated. A flag is near a window or job when it lies within '+SYS.thresholds.corr_window_s+' s of it. Running jobs have no end and are not correlated.');
   if(C.correlations.length){
     d.appendChild(sysEl('h4', 'Items near a commit or job ('+C.correlations.length+')'));
     const ul = sysEl('ul', null, 'banner');
@@ -1324,9 +1324,8 @@ function sysDetailCommits(host, check){
     sysCell(tr, r.kind); sysCell(tr, r.label); sysCell(tr, r.start===null ? '(no UTC: offset '+r.offset_state+')' : sysUtc(r.start)); sysCell(tr, r.running ? 'running' : sysUtc(r.end));
     sysCell(tr, r.kind==='commit' ? 'explicit' : (r.offset ? 'inferred '+r.offset : r.offset_state)); sysCell(tr, r.detail); sysCell(tr, r.near.join(', ')); if(r.near.length) tr.className = 'anom-warn'; };
   const tl = C.timeline;
-  d.appendChild(sysEl('h4', 'Commit and job timeline'));
-  d.appendChild(sysTable(head, tl.slice(0, 20), fill));
-  if(tl.length>20){ const det = sysEl('details'); det.appendChild(sysEl('summary', 'All '+tl.length+' rows')); det.appendChild(sysTable(head, tl, fill)); d.appendChild(det); }
+  const det = sysEl('details'); det.appendChild(sysEl('summary', 'Commit and job timeline ('+tl.length+' rows)'));
+  det.appendChild(sysTable(head, tl, fill)); d.appendChild(det);
 }
 // check id -> detail renderer; a later step registers its own here.
 const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores, kernel:sysDetailKernel, log_errors:sysDetailLogErrors, commits:sysDetailCommits};
@@ -1348,11 +1347,19 @@ function renderSysStatic(){
     if(c.status==='critical') tr.className = 'anom-crit'; else if(c.status==='warning') tr.className = 'anom-warn';
   });
   const ul = $('#sysbanner'); ul.replaceChildren();
-  if(!SYS.findings.length){ ul.appendChild(sysEl('li', 'No system health flags with the current thresholds.')); }
-  SYS.findings.forEach(f=>{
+  if(!SYS.findings.filter(f=>f.level!=='info').length){ ul.appendChild(sysEl('li', 'No system health warnings or critical findings with the current thresholds.')); }
+  const finding = f=>{
     const li = sysEl('li', null, 'lvl-'+f.level);
-    li.append(sysEl('span', f.code, 'badge b-'+f.level), document.createTextNode(f.text)); ul.appendChild(li);
-  });
+    li.append(sysEl('span', f.code, 'badge b-'+f.level), document.createTextNode(f.text)); return li;
+  };
+  const infos = SYS.findings.filter(f=>f.level==='info');
+  SYS.findings.filter(f=>f.level!=='info').forEach(f=>ul.appendChild(finding(f)));
+  const old = $('#sysinfofind'); if(old) old.remove();
+  if(infos.length){
+    const det = sysEl('details'); det.id = 'sysinfofind'; det.appendChild(sysEl('summary', infos.length+' informational finding(s)'));
+    const il = sysEl('ul', null, 'banner'); infos.forEach(f=>il.appendChild(finding(f))); det.appendChild(il);
+    ul.after(det);
+  }
   const host = $('#sysdetails'); host.replaceChildren();
   SYS.checks.forEach(c=>{ if(SYS_DETAIL[c.id]) SYS_DETAIL[c.id](host, c); });
 }
