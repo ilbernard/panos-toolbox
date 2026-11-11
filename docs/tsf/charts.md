@@ -53,10 +53,10 @@ are unchanged.
 
 ## Dataplane health metrics in the throughput chart
 
-The utilization chart and the CPU per core table of the Dataplane health tab were merged
-into the Dataplane Throughput tab. That tab keeps the Metric selector, the series per DP
+The utilization chart and the CPU per core table of the former Dataplane health tab were merged
+into the Dataplane tab. That tab keeps the Metric selector, the series per DP
 (legend checkboxes), the zoomable chart, the stats table and the samples table; the
-Dataplane health tab keeps only the per-DP summary and the findings.
+Dataplane health block (summary per DP and findings, `#dphblock`) sits at the top of the same tab, above the throughput chart, and is hidden when there are no health data.
 
 **New Metric entries** (listed only when the data has them): Packet buffer & descriptors
 (one chart for one DP, one line per kind that has data: Packet buffer (avg), the per-minute
@@ -116,7 +116,7 @@ screen at 125% Windows scaling is about 1536 px) and its main column is capped a
 (`white-space:nowrap`) scroll inside their panel and never the whole page. The charts take the
 width of their container (at least 480 px).
 
-**Normal and Advanced view.** The tab bar shows the Dataplane Throughput, System health and
+**Normal and Advanced view.** The tab bar shows the Dataplane, System health and
 Management plane tabs by default (`NORMAL_TABS` in `JS_TABS`). The `Advanced` checkbox at the
 right end of the bar shows the other tabs; the choice is kept in `localStorage`
 (`panosToolbox.tsfReport.advanced`, wrapped in try/catch because file:// or private mode can

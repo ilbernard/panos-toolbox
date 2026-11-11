@@ -7,7 +7,7 @@ including CPU load by group). The output of `debug dataplane pow performance`
 (tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py), and the interface
 counters (`show counter interface all`, `show interface ...`) into an "Interface Errors" tab
 (see interface_errors.py). The resource monitor of the same dp-monitor files (session, packet
-buffer and descriptor utilization, CPU load per core) goes into a "Dataplane health" tab (see
+buffer and descriptor utilization, CPU load per core) goes into the top of the "Dataplane" tab (see
 dp_health.py). The memory and processes sections of the mp-monitor.* files go into a
 "Management plane" tab (see mp_monitor.py). Four sections of the CLI dump (software status,
 configuration memory, NAT pools) and the names of the core files in the archive go into a
