@@ -7,7 +7,8 @@ SECTION_HELP maps a section id to an HTML template. Its {name} placeholders are 
 with the live values of pow_perf.POW_THRESHOLDS by render_section_help(). The thresholds of
 the Interface Errors tab (interface_errors.IF_THRESHOLDS) are available as {if_<name>} and those of the
 Dataplane health tab (dp_health.DP_THRESHOLDS) as {dp_<name>}, those of the Management plane
-tab (mp_monitor.MP_THRESHOLDS) as {mp_<name>}. Literal braces
+tab (mp_monitor.MP_THRESHOLDS) as {mp_<name>}, those of the System health tab
+(system_health.SYS_THRESHOLDS) as {sys_<name>}. Literal braces
 in the HTML are doubled. The report template contains the placeholders __HB_<id>__
 (the button) and __HP_<id>__ (the collapsible text) for each id.
 
@@ -20,6 +21,7 @@ from .dp_health import DP_THRESHOLDS
 from .interface_errors import IF_THRESHOLDS
 from .mp_monitor import MP_IGNORE_PROCS, MP_THRESHOLDS, MP_WORKER_PREFIXES
 from .pow_perf import POW_THRESHOLDS
+from .system_health import SYS_THRESHOLDS
 
 # Titles are used for the accessible name of the buttons.
 SECTION_TITLES = {
@@ -34,6 +36,8 @@ SECTION_TITLES = {
     'dphchart': 'Dataplane health chart', 'dphcores': 'CPU peak per core',
     'mp': 'Management plane', 'mpflags': 'Management plane findings and flag reference',
     'mpchart': 'Management plane memory chart', 'mpprocs': 'Management plane processes',
+    'sys': 'System health', 'sysflags': 'System health findings and flag reference',
+    'sysdetail': 'System health details',
 }
 
 SECTION_HELP = {
@@ -441,12 +445,49 @@ row sums each core.</p>
 <li><b>State Z</b>: in how many samples the process was a zombie.</li>
 </ul>
 """,
+    'sys': """
+<p>Checks of the <b>state of the box</b> that the TSF records as plain command output or as files, not as a time series. The tab has a table of <b>checks</b> (one row per check, with its source, a status badge and the key value), the <b>findings</b> raised by them, and the <b>details</b> behind each check. More groups of checks can be added to the same table; the <i>Group</i> column tells where a check comes from.</p>
+<h3>Sources</h3>
+<ul>
+<li>The CLI dump <code>tmp/cli/techsupport_*.txt</code> of the TSF: a sequence of sections, each starting with a line <code>&gt; &lt;command&gt;</code> and ending at the next one. The commands read are <code>show system software status</code>, <code>debug dataplane show cfg-memstat statistics</code>, <code>show running global-ippool</code> and <code>show running ippool</code>. If a command appears twice, the first copy is used.</li>
+<li>The <b>names</b> of the archive members under <code>opt/dpfs/var/cores/</code> and <code>var/cores/</code>. Core files can be very large, so they are only listed (name and size) and their content is never read or extracted. Only regular files count: a directory alone is not a core.</li>
+</ul>
+<h3>Status of a check</h3>
+<ul>
+<li><b>ok</b>: data was found and no flag was raised.</li>
+<li><b>warning</b> / <b>critical</b>: the worst level of the flags of that check.</li>
+<li><b>no data</b>: the command is missing from the dump, or its section has no usable row (an empty section is never reported as ok), or, for the core files, the input is not an archive and has no member list. A check without data says nothing about the device.</li>
+</ul>
+<p>The values come from a single moment (when the TSF was generated). A condition that came and went before that is not visible here.</p>
+<h3>Not covered</h3>
+<p>Only these four checks exist so far. The firewall health checks of the GUI and the logs are not read here.</p>
+""",
+    'sysflags': """
+<p>The heuristics in <code>system_health.py</code> attach these flags. Levels: <b>crit</b> = high, <b>warn</b> = medium. The limits are <b>at or above</b> (a value equal to the limit is flagged). A check that has no flag and has data is shown as ok.</p>
+<table>
+<tr><th>Code</th><th>Level</th><th>Meaning and suggestion</th><th>Live thresholds</th></tr>
+<tr><td><code>PROC_NOT_RUNNING</code></td><td>crit</td><td>A <code>Group</code> or <code>Process</code> row of <code>show system software status</code> has a state other than <code>running</code>. One flag per <code>Slot N, Role X</code> block, listing the names, their type and state. A stopped or failing daemon can explain missing functions (for example a management or logging process); look at the system log and the process list of the Management plane tab, and restart the daemon only after finding why it stopped.</td><td>none (any row)</td></tr>
+<tr><td><code>CFG_MEMORY</code></td><td>warn; crit at the crit limit</td><td>The configuration memory of the dataplane is filling up. One flag per allocator: the <b>config allocator</b> (<i>VSYS Config Allocator Usage</i>) and the <b>policy cache</b> (<i>POLICY CACHE USAGE</i>, printed once for the active and once for the passive copy, so two subjects) are separate. The percentage is recomputed as used / total (the device prints an integer). When the command prints one block per DP the blocks are kept separate and named in the text (this layout is unverified: only single-block output has been seen). A full allocator makes commits fail or slow; look at the number of objects, rules and vsys, and at unused configuration.</td><td>cfg_mem_warn = {sys_cfg_mem_warn}%; cfg_mem_crit = {sys_cfg_mem_crit}%</td></tr>
+<tr><td><code>NAT_POOL</code></td><td>warn</td><td>NAT dynamic IP / dynamic IP and port resources are used at or above the limit. Raised for the <b>shared memory</b> of the pools (<i>Used NAT DIP/DIPP shared memory size</i>), for each pool line of <code>show running global-ippool</code> (<i>Dynamic IP NAT Pool</i>, <i>Dynamic IP/Port NAT Pool</i>) and for each <b>rule</b> of <code>show running ippool</code> (used / (used + available)). Up to three offending rules get their own flag; more are summarised in one flag that lists the top ten. When a pool is exhausted new translations fail and sessions are dropped; add addresses to the pool or review the oversubscription.</td><td>nat_pool_warn = {sys_nat_pool_warn}% (no crit level)</td></tr>
+<tr><td><code>CORE_FILES</code></td><td>crit</td><td>One or more regular files exist under <code>opt/dpfs/var/cores/</code> or <code>var/cores/</code>: a process crashed and left a core file. The text lists the names and sizes; the content is not read. Open a support case with the core files and the TSF: the file name tells which process crashed. No directory (<i>absent</i>) and an empty directory (<i>empty</i>) are both normal and ok.</td><td>none (any file)</td></tr>
+</table>
+<p class="hint">The thresholds are heuristics defined in <code>system_health.SYS_THRESHOLDS</code>. In code, override them with <code>evaluate_system_health(store, thresholds={{'cfg_mem_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--sys-&lt;name&gt;</code> options (for example <code>--sys-cfg-mem-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report.</p>
+""",
+    'sysdetail': """
+<ul>
+<li><b>Software status</b>: the number of rows in state <code>running</code> over all rows, per <code>Slot N, Role X</code> block. Only the rows in another state are listed; when all are running the list is replaced by a count.</li>
+<li><b>Configuration memory</b>: for each allocator the memory used, the total and the percentage. The policy cache is printed for the <i>ACTIVE</i> and the <i>PASSIVE</i> copy; both are shown and evaluated.</li>
+<li><b>NAT pools</b>: first the shared memory summary and the two pool lines, then the rules of <code>show running ippool</code> sorted by used % (Used / (Used + Available)); the ten busiest are shown and the full list can be expanded. <i>Persistent</i>, <i>Min</i> and <i>Max</i> exist only on some PAN-OS versions and are left empty otherwise. Rule names can contain spaces. There can be several VSYS blocks; the VSYS column tells which.</li>
+<li><b>Core files</b>: the core files found (name, size), or the reason there are none: <i>no core directory in the archive</i> or <i>core directory present, empty</i>.</li>
+</ul>
+""",
     'coverage': """
 <p>Shows what this analysis actually looked at, so that a missing or partial source is never mistaken for a clean one. The badge in the page header summarises it: <b>Analysis: complete</b> or <b>Analysis: partial</b>.</p>
-<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>mp-monitor</code> (the <code>var/log/pan/mp-monitor.*</code> logs, which give the management plane memory and processes) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW and interface data). The TSF is read in memory; nothing is extracted to disk.</p>
+<p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>mp-monitor</code> (the <code>var/log/pan/mp-monitor.*</code> logs, which give the management plane memory and processes) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW, interface and system health data) and <code>cores</code> (the core files under <code>opt/dpfs/var/cores/</code> and <code>var/cores/</code>, which are only <i>listed</i>). The TSF is read in memory; nothing is extracted to disk.</p>
 <h3>States</h3>
 <ul>
 <li><b>absent</b>: no member of the family exists in the input. The matching tabs are simply missing; this is not an error in the report.</li>
+<li><b>listed only</b>: the family is read by name and size only; the content is never opened (core files). It also covers a directory that exists but is empty. Not an error.</li>
 <li><b>unread</b>: members were found but none could be read (for example a total size limit was reached first).</li>
 <li><b>0 samples</b>: dp-monitor files were read but no Throughput sample could be extracted (unexpected format, or empty files). It differs from absent: the files exist.</li>
 <li><b>truncated</b>: a member is larger than the per-member read limit, so only its <i>tail</i> (the most recent part) was kept and analysed; older data of that file is missing. Compressed members are cut the same way.</li>
@@ -462,7 +503,7 @@ row sums each core.</p>
 
 
 def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
-                        mp_thresholds=None):
+                        mp_thresholds=None, sys_thresholds=None):
     """Returns {placeholder: html} for every section (buttons and collapsible texts).
 
     thresholds: optional overrides with the keys of pow_perf.POW_THRESHOLDS. Unknown keys
@@ -470,6 +511,7 @@ def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
     interface_errors.IF_THRESHOLDS (available as {if_<name>}). The values are escaped before
     insertion. dp_thresholds: the same for dp_health.DP_THRESHOLDS (available as {dp_<name>}).
     mp_thresholds: the same for mp_monitor.MP_THRESHOLDS (available as {mp_<name>}).
+    sys_thresholds: the same for system_health.SYS_THRESHOLDS (available as {sys_<name>}).
     """
     th = dict(POW_THRESHOLDS)
     unknown = set(thresholds or {}) - set(POW_THRESHOLDS)
@@ -491,7 +533,14 @@ def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None,
     if unknown:
         raise ValueError('unknown management plane threshold(s): ' + ', '.join(sorted(unknown)))
     mth.update(mp_thresholds or {})
+    sth = dict(SYS_THRESHOLDS)
+    unknown = set(sys_thresholds or {}) - set(SYS_THRESHOLDS)
+    if unknown:
+        raise ValueError('unknown system health threshold(s): ' + ', '.join(sorted(unknown)))
+    sth.update(sys_thresholds or {})
     values = {k: html.escape(str(v)) for k, v in th.items()}
+    values.update({'sys_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
+                   for k, v in sth.items()})
     values.update({'mp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
                    for k, v in mth.items()})
     values['mp_workers'] = html.escape(', '.join(p + '*' for p in MP_WORKER_PREFIXES))

@@ -147,6 +147,7 @@ TEMPLATE_BODY = r'''</style>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-dph" aria-controls="p-dph" aria-selected="false" tabindex="-1" style="display:none">Dataplane health</button>
   <button type="button" role="tab" id="tab-mp" aria-controls="p-mp" aria-selected="false" tabindex="-1" style="display:none">Management plane</button>
+  <button type="button" role="tab" id="tab-sys" aria-controls="p-sys" aria-selected="false" tabindex="-1" style="display:none">System health</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
   <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
@@ -228,6 +229,16 @@ TEMPLATE_BODY = r'''</style>
   <div class="bar"><label>Show <select id="mpview"></select></label><span class="hint" id="mpcount"></span></div>
   <details id="mpproctab" open><summary>Process table</summary>
   <div class="scroll"><table class="stats dphs" id="mpprocs"></table></div></details></div>
+</section>
+
+<section class="panel" id="p-sys" role="tabpanel" aria-labelledby="tab-sys" hidden>
+  <div class="sechead"><h2>System health</h2>__HB_sys__</div>__HP_sys__
+  <p class="hint" id="sysinfo"></p>
+  <div class="scroll"><table class="stats covt" id="syschecks"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_sysflags__</div>__HP_sysflags__
+  <ul class="banner" id="sysbanner"></ul>
+  <div class="sep"><div class="sechead"><h2>Details</h2>__HB_sysdetail__</div>__HP_sysdetail__
+  <div id="sysdetails"></div></div>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
@@ -515,10 +526,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='sys' && hasSys) renderSys(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','dph','mp','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -1168,8 +1179,8 @@ if(hasMp) renderMpStatic();
 '''
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
-['chart','cpu','dph','mp','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+['chart','cpu','dph','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
@@ -1186,6 +1197,118 @@ showTab(TABS[0]);
 </html>
 '''
 
+# System health tab (CLI dump sections and core file names; more check groups can be added)
+JS_SYS = r'''// System health tab: a checks table, the findings and one detail block per check
+const SYS = D.sys || null;
+const hasSys = !!SYS;
+const SYS_BADGE = {ok:['ok','ok'], warning:['warning','warn'], critical:['critical','crit'], no_data:['no data','info']};
+function sysEl(tag, text, cls){ const e = document.createElement(tag); if(text!==undefined && text!==null) e.textContent = text; if(cls) e.className = cls; return e; }
+function sysBadge(st){ const d = SYS_BADGE[st] || [st,'info']; return sysEl('span', d[0], 'badge b-'+d[1]); }
+function sysTable(head, rows, fill){
+  const t = sysEl('table', null, 'stats covt'); const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = sysEl('th', h); th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); Array.from(tr.cells).forEach(c=>{ c.className = 'l'; }); });
+  const w = sysEl('div', null, 'scroll'); w.appendChild(t); return w;
+}
+function sysCell(tr, v){ tr.insertCell().textContent = (v===null||v===undefined) ? '' : v; }
+function sysFmtBytes(n){
+  if(n===null||n===undefined) return 'unknown size';
+  const u = ['bytes','KB','MB','GB']; let i = 0, v = n;
+  while(v>=1024 && i<u.length-1){ v /= 1024; i++; }
+  return (i ? v.toLocaleString('en-US',{maximumFractionDigits:1}) : v.toLocaleString('en-US'))+' '+u[i];
+}
+function sysBlock(host, title, body, note){
+  const d = sysEl('div', null, 'sysblock'); d.style.margin = '0 0 16px';
+  d.appendChild(sysEl('h3', title)); if(note) d.appendChild(sysEl('p', note, 'hint'));
+  if(body) d.appendChild(body); host.appendChild(d); return d;
+}
+function sysNoData(host, check, title){
+  sysBlock(host, title, null, 'No data: '+check.note);
+}
+function sysDetailSoftware(host, check){
+  const S = SYS.software;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Software status'); return; }
+  S.blocks.forEach(b=>{
+    const msg = b.bad.length ? b.bad.length+' of '+b.total+' not running.' : 'All '+b.total+' running.';
+    sysBlock(host, 'Software status - '+b.title, b.bad.length ? sysTable(['Type','Name','State','Info'], b.bad, (tr,r)=>{
+      sysCell(tr, r.type); sysCell(tr, r.name); sysCell(tr, r.state); sysCell(tr, r.info); tr.className = 'anom-crit'; }) : null, msg);
+  });
+}
+function sysDetailCfg(host, check){
+  if(check.status==='no_data'){ sysNoData(host, check, 'Configuration memory'); return; }
+  const rows = [];
+  SYS.cfg.blocks.forEach(b=>{
+    if(b.config) rows.push({label:b.label, name:'Config allocator', a:b.config});
+    b.policies.forEach(p=>rows.push({label:b.label, name:'Policy cache'+(p.role ? ' ('+p.role+')' : ''), a:p}));
+  });
+  const th = SYS.thresholds;
+  sysBlock(host, 'Configuration memory', sysTable(['Block','Allocator','Used','Total','Used %'], rows, (tr,r)=>{
+    sysCell(tr, r.label); sysCell(tr, r.name); sysCell(tr, r.a.used_kb.toLocaleString('en-US')+' KB'); sysCell(tr, r.a.total_kb.toLocaleString('en-US')+' KB'); sysCell(tr, r.a.pct+'%');
+    if(r.a.pct>=th.cfg_mem_crit) tr.className = 'anom-crit'; else if(r.a.pct>=th.cfg_mem_warn) tr.className = 'anom-warn';
+  }), 'Limits: warn '+th.cfg_mem_warn+'%, crit '+th.cfg_mem_crit+'% (at or above).');
+}
+function sysRuleRow(tr, r, warn){
+  sysCell(tr, r.vsys); sysCell(tr, r.rule); sysCell(tr, r.type); sysCell(tr, r.used.toLocaleString('en-US')); sysCell(tr, r.avail.toLocaleString('en-US'));
+  sysCell(tr, r.pct===null ? '' : r.pct+'%'); sysCell(tr, r.mem); sysCell(tr, r.ratio); sysCell(tr, r.persistent); sysCell(tr, r.min); sysCell(tr, r.max);
+  if(r.pct!==null && r.pct>=warn) tr.className = 'anom-warn';
+}
+function sysDetailNat(host, check){
+  const N = SYS.nat, warn = SYS.thresholds.nat_pool_warn;
+  if(check.status==='no_data'){ sysNoData(host, check, 'NAT pools'); return; }
+  const g = [];
+  if(N.shared) g.push({name:'Shared memory used', v:N.shared.used.toLocaleString('en-US')+(N.shared.usable ? ' of '+N.shared.usable.toLocaleString('en-US') : ''), pct:N.shared.pct});
+  N.pools.forEach(p=>g.push({name:p.name+' NAT pool', v:p.count.toLocaleString('en-US'), pct:p.pct}));
+  const d = sysBlock(host, 'NAT pools', null, 'Limit: warn '+warn+'% (at or above). '+(N.present_global ? '' : 'show running global-ippool not found. ')+(N.present_rules ? N.n_rules+' rule(s) in '+N.vsys.length+' VSYS block(s)' : 'show running ippool not found')+(N.present_rules ? ', '+N.n_over+' at or above the limit.' : '.'));
+  if(g.length) d.appendChild(sysTable(['Global pool item','Value','Used %'], g, (tr,r)=>{ sysCell(tr, r.name); sysCell(tr, r.v); sysCell(tr, r.pct+'%'); if(r.pct>=warn) tr.className = 'anom-warn'; }));
+  const head = ['VSYS','Rule','Type','Used','Available','Used %','Mem size','Ratio','Persistent','Min','Max'];
+  if(N.rules.length){
+    d.appendChild(sysEl('h4', 'Top '+N.top.length+' rules by used %'));
+    d.appendChild(sysTable(head, N.top, (tr,r)=>sysRuleRow(tr, r, warn)));
+    if(N.rules.length>N.top.length){
+      const det = sysEl('details'); det.appendChild(sysEl('summary', 'All '+N.rules.length+' rules'+(N.n_rules>N.rules.length ? ' (worst '+N.rules.length+' of '+N.n_rules+')' : '')));
+      det.appendChild(sysTable(head, N.rules, (tr,r)=>sysRuleRow(tr, r, warn))); d.appendChild(det);
+    }
+  }
+}
+function sysDetailCores(host, check){
+  const C = SYS.cores;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Core files'); return; }
+  const msg = C.state==='files' ? C.files.length+' core file(s). The content was not read.' : (C.state==='empty' ? 'Core directory present, empty: '+C.dirs.join(', ') : 'No core directory in the archive.');
+  sysBlock(host, 'Core files', C.files.length ? sysTable(['File','Size'], C.files, (tr,f)=>{ sysCell(tr, f.name); sysCell(tr, sysFmtBytes(f.size)); tr.className = 'anom-crit'; }) : null, msg);
+}
+// check id -> detail renderer; a later step registers its own here.
+const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores};
+function renderSysStatic(){
+  if(!hasSamples && !hasDph && !hasMp && !hasPow && !hasIfc) $('#sub').textContent = 'Generated '+D.generated+' UTC';
+  const n = SYS.checks.length, nd = SYS.checks.filter(c=>c.status==='no_data').length;
+  $('#sysinfo').textContent = n+' check(s)'+(nd ? ', '+nd+' without data' : '')+'. Overall: '+(SYS_BADGE[SYS.status] || [SYS.status])[0]+'. Sources: the CLI dump of the TSF and the names of the core files in the archive.';
+  const t = $('#syschecks'); t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  ['Group','Check','Source','Status','Value','Note'].forEach(h=>{ const th = sysEl('th', h); th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  SYS.checks.forEach(c=>{
+    const tr = tb.insertRow();
+    sysCell(tr, c.group); sysCell(tr, c.title); sysCell(tr, c.source);
+    tr.insertCell().appendChild(sysBadge(c.status));
+    sysCell(tr, c.value); sysCell(tr, c.note);
+    Array.from(tr.cells).forEach(x=>{ x.className = 'l'; });
+    if(c.status==='critical') tr.className = 'anom-crit'; else if(c.status==='warning') tr.className = 'anom-warn';
+  });
+  const ul = $('#sysbanner'); ul.replaceChildren();
+  if(!SYS.findings.length){ ul.appendChild(sysEl('li', 'No system health flags with the current thresholds.')); }
+  SYS.findings.forEach(f=>{
+    const li = sysEl('li', null, 'lvl-'+f.level);
+    li.append(sysEl('span', f.code, 'badge b-'+f.level), document.createTextNode(f.text)); ul.appendChild(li);
+  });
+  const host = $('#sysdetails'); host.replaceChildren();
+  SYS.checks.forEach(c=>{ if(SYS_DETAIL[c.id]) SYS_DETAIL[c.id](host, c); });
+}
+function renderSys(){}
+if(hasSys) renderSysStatic();
+
+'''
+
 # Source coverage tab and analysis-status badge (what the analysis actually looked at).
 JS_COV = r'''// Source coverage tab and analysis status badge
 const CV = D.coverage || null;
@@ -1197,6 +1320,7 @@ const COV_STATE = {
   truncated:['truncated','warn','At least one member exceeded the read limit: only its last part was analysed.'],
   error:['read error','crit','At least one member could not be read to the end.'],
   conflict:['conflict','warn','Samples with the same DP and time but different values were found; the first was kept.'],
+  listed:['listed only','ok','Names and sizes were recorded; the content is never read.'],
   ok:['ok','ok','Everything found was read.']
 };
 function covBadge(host, st){
@@ -1205,7 +1329,7 @@ function covBadge(host, st){
 }
 function covMemberState(m){
   const k = m.state.split(':')[0], b = document.createElement('span');
-  b.className = 'badge b-'+(k==='read'?'ok':k==='error'?'crit':'warn'); b.textContent = m.state; if(m.detail) b.title = m.detail;
+  b.className = 'badge b-'+(k==='read'||k==='listed'?'ok':k==='error'?'crit':'warn'); b.textContent = m.state; if(m.detail) b.title = m.detail;
   return b;
 }
 function covTable(t, head, rows, fill){
@@ -1237,10 +1361,12 @@ function renderCov(){
       const ul = document.createElement('ul'); ul.className = 'cov-sub';
       f.members.forEach(m=>{
         const li = document.createElement('li'); li.appendChild(covMemberState(m));
-        let txt = ' '+m.name; if(m.samples!==null) txt += ' - '+m.samples+' samples'+(m.samples ? ', '+covRange(m.first, m.last) : '');
+        let txt = ' '+m.name+(m.state==='listed' && m.detail ? ' ('+m.detail+')' : ''); if(m.samples!==null) txt += ' - '+m.samples+' samples'+(m.samples ? ', '+covRange(m.first, m.last) : '');
         li.appendChild(document.createTextNode(txt)); ul.appendChild(li);
       });
       d.appendChild(ul); mc.appendChild(d);
+    } else if(f.dirs && f.dirs.length){
+      mc.textContent = 'empty directory: '+f.dirs.join(', ');
     }
     if(f.states.some(s=>s!=='ok')) tr.className = 'anom-warn';
   });
@@ -1268,5 +1394,6 @@ TEMPLATE = (TEMPLATE_HEAD +
             JS_IFC +
             JS_DPH +
             JS_MP +
+            JS_SYS +
             JS_COV +
             JS_TABS)
