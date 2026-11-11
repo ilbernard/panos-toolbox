@@ -43,7 +43,7 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import archive, dp_health, if_glossary, log_events, mp_monitor, pow_glossary, system_health
+from . import archive, correlations, dp_health, if_glossary, log_events, mp_monitor, pow_glossary, system_health
 from .coverage import build_coverage
 from .dp_health import DP_THRESHOLDS, evaluate_dp_health
 from .findings import analysis_status
@@ -685,6 +685,8 @@ def main(argv=None):
         if sys_view and col.log_data:
             log_events.apply_to_system_view(sys_view, col.log_data, log_overrides, mp_view,
                                             dph_view)
+        if sys_view and (col.log_data or sys_view['software']['bad']):
+            correlations.apply_to_system_view(sys_view)
         pow_warnings = pow_data['warnings'] if pow_data else []
         ifc_warnings = ifc_view['warnings'] if ifc_view else []
         if samples:

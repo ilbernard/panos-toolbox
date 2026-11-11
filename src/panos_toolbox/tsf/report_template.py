@@ -1327,8 +1327,19 @@ function sysDetailCommits(host, check){
   const det = sysEl('details'); det.appendChild(sysEl('summary', 'Commit and job timeline ('+tl.length+' rows)'));
   det.appendChild(sysTable(head, tl, fill)); d.appendChild(det);
 }
+// Correlations group: not-running processes linked to kernel crashes by process name
+function sysDetailCrashLink(host, check){
+  const C = SYS.correlations;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Not-running processes vs kernel crashes'); return; }
+  const rule = 'Names are compared lowercase, without a trailing + (truncation) and without (ppid:N); a kernel command name of exactly 15 characters matches a longer name that starts with it. confirmed = one crashed process matches, ambiguous = several, no_match = none in the kernel log. Context only: no flag changes.';
+  const SC = {confirmed:'anom-warn', ambiguous:'anom-warn'};
+  sysBlock(host, 'Not-running processes vs kernel crashes', C.items.length ? sysTable(['Process','Slot / role','State','Status','Crash type','Events','Files'], C.items, (tr,r)=>{
+    sysCell(tr, r.process); sysCell(tr, r.slot===null ? '' : 'Slot '+r.slot+', '+r.role); sysCell(tr, r.state); sysCell(tr, r.status.replace('_',' '));
+    sysCell(tr, r.matches.map(m=>m.process+': '+m.type).join('; ')); sysCell(tr, r.matches.map(m=>m.count.toLocaleString('en-US')).join('; ')); sysCell(tr, r.matches.map(m=>m.files.join(', ')).join('; '));
+    if(SC[r.status]) tr.className = SC[r.status]; }) : null, C.items.length ? rule : 'All processes running - nothing to correlate.');
+}
 // check id -> detail renderer; a later step registers its own here.
-const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores, kernel:sysDetailKernel, log_errors:sysDetailLogErrors, commits:sysDetailCommits};
+const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores, kernel:sysDetailKernel, log_errors:sysDetailLogErrors, commits:sysDetailCommits, crash_link:sysDetailCrashLink};
 function renderSysStatic(){
   if(!hasSamples && !hasDph && !hasMp && !hasPow && !hasIfc) $('#sub').textContent = 'Generated '+D.generated+' UTC';
   const n = SYS.checks.length, nd = SYS.checks.filter(c=>c.status==='no_data').length;
