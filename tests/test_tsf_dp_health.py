@@ -14,7 +14,14 @@ from pathlib import Path
 import pytest
 
 from panos_toolbox.tsf import analyzer, dp_health, findings
-from panos_toolbox.tsf.dp_health import DP_THRESHOLDS, evaluate_dp_health, parse_dp_health
+from panos_toolbox.tsf.dp_health import (
+    DP_THRESHOLDS,
+    evaluate_dp_health,
+    minute_index,
+    parse_dp_health,
+    row_time_m,
+    row_time_s,
+)
 
 SAMPLE = Path(__file__).parent / 'data' / 'dp_monitor_health_sample.log'
 OLD_SAMPLE = Path(__file__).parent / 'data' / 'dp_monitor_sample.log'
@@ -517,8 +524,9 @@ def report_data(html_text):
 def test_render_report_contains_the_tab_and_help(tmp_path):
     out = run_main(tmp_path)
     assert 'id="tab-dph"' in out and 'id="p-dph"' in out and '>Dataplane health<' in out
-    for sid in ('dph', 'dphflags', 'dphchart', 'dphcores'):
+    for sid in ('dph', 'dphflags', 'dphcores'):
         assert f'id="help-{sid}" hidden' in out
+    assert 'id="help-dphchart"' not in out
     assert '__HB_' not in out and '__HP_' not in out
     data = report_data(out)
     assert data['dph']['dps'] == ['dp0'] and data['dph']['n_samples'] == 2
@@ -591,3 +599,164 @@ def test_shared_pools_core_table_is_not_a_cpu_table():
     assert max(rec['core_s'].values()) == 3
     assert store['counters']['bad_rows'] == 0
     assert store['counters']['out_of_range'] == 0
+
+
+# --------------------------------------------------------------------------
+# Full tables and reconstructed timestamps (view['detail'])
+# --------------------------------------------------------------------------
+def detail_of(*samples):
+    """View of captures (ts, res_block kwargs) of one DP; returns (view, detail of dp0)."""
+    view = view_for(*samples)
+    return view, view['detail']['by_dp']['dp0']
+
+
+def test_row_time_reconstruction_newest_first():
+    t = T_A                                    # 07:20:20.485 UTC
+    assert row_time_s(t, 0) == t and row_time_s(t, 4) == t - 4000 and row_time_s(t, 14) == t - 14000
+    # per-minute rows are whole minutes: row 0 ends at the last minute boundary at or before t
+    boundary = (t // 60000) * 60000
+    assert boundary == t - 20485
+    assert row_time_m(t, 0) == boundary and row_time_m(t, 1) == boundary - 60000
+    assert row_time_m(t, 14) == boundary - 14 * 60000
+    assert minute_index(t) == boundary // 60000
+    # the same minute is the same key whatever the seconds of the section time
+    assert minute_index(t + 600000 + 27) - 10 == minute_index(t)
+
+
+def test_detail_tables_are_flat_row_major_with_missing_as_none():
+    rows = [[1, 2, 3] for _ in range(15)]
+    rows[4] = [10, 20, 30]
+    _view, d = detail_of(('2026-10-27 08:20:20.485', {'extra_s': cpu_s(range(3), rows), 'cores': 3}))
+    cs = d['cs'][0]
+    assert len(cs) == 15 * 3
+    assert cs[0:3] == [1, 2, 3]                      # row 0 (newest) is the first line of the table
+    assert cs[4 * 3:5 * 3] == [10, 20, 30]           # row 4
+    assert len(d['cmm'][0]) == 15 * 3 and len(d['cma'][0]) == 15 * 3
+    # a '*' is None, never 0
+    lines = cpu_s(range(3), rows)
+    lines[3] = lines[3].replace('   2', '   *', 1)       # row 2, core 1
+    _v, d2 = detail_of(('2026-10-27 08:20:20.485', {'extra_s': lines, 'cores': 3}))
+    assert d2['cs'][0][2 * 3 + 1] is None and d2['cs'][0][2 * 3] == 1 and d2['cs'][0][2 * 3 + 2] == 3
+
+
+def test_detail_wrong_column_row_keeps_row_index():
+    rows = [[1, 1, 1]] * 15
+    lines = cpu_s(range(3), rows)
+    lines[2] = ':    7   7'                               # row 1 has the wrong column count
+    _v, d = detail_of(('2026-10-27 08:20:20.485', {'extra_s': lines, 'cores': 3}))
+    cs = d['cs'][0]
+    assert cs[3:6] == [None, None, None]                  # a gap, the later rows do not shift up
+    assert cs[6:9] == [1, 1, 1]
+
+
+def test_detail_split_32_core_blocks_merge_into_one_flat_table():
+    def rows(base):
+        return [[base + c + r * 3 for c in range(16)] for r in range(15)]
+    s_lines = cpu_s(range(16), rows(0)) + cpu_s(range(16, 32), rows(16))
+    block = res_block(extra_s=s_lines, cores=32)
+    lines = section('2026-10-27 08:20:20.485', [block], [target()])
+    _n, store, _w = parse(lines)
+    view = evaluate_dp_health(store)
+    ids = view['cores']['dp0']['ids']
+    assert ids == list(range(32))
+    cs = view['detail']['by_dp']['dp0']['cs'][0]
+    assert len(cs) == 15 * 32
+    # core c of row r is c + 3 * r for all 32 cores, whichever block it came from
+    assert all(cs[r * 32 + c] == c + 3 * r for r in range(15) for c in range(32))
+
+
+def test_detail_overlapping_per_minute_windows_share_keys():
+    # Two captures 10 minutes apart: the rows of the newer one shift by exactly 10.
+    old_rows = [[(r + 1, r + 1)] for r in range(15)]                    # row r: avg=max=r+1
+    new_rows = [[(50 + r, 50 + r)] for r in range(10)] + old_rows[:5]   # rows 10..14 = old rows 0..4
+    a = ('2026-10-27 08:20:20.485', {'cores': 1, 'extra_m': cpu_m([0], old_rows)})
+    b = ('2026-10-27 08:30:20.512', {'cores': 1, 'extra_m': cpu_m([0], new_rows)})
+    _view, d = detail_of(a, b)
+    assert d['k0'][1] - d['k0'][0] == 10
+    assert d['cmm'][0] == [r + 1 for r in range(15)]
+    assert d['cmm'][1][10:15] == d['cmm'][0][0:5]
+    # row r of the newer capture and row r + 10 of the older one are the same minute
+    for r in range(5):
+        assert d['k0'][1] - (r + 10) == d['k0'][0] - r
+    # per-second and utilization lists are per capture
+    assert len(d['us']['pb']) == 2 and len(d['us']['pb'][0]) == 15
+    assert d['um'] == {}                                   # no per-minute packet buffer in this fixture
+
+
+def test_detail_per_minute_packet_buffer_average_and_per_second_values_newest_first():
+    block = res_block(pb=list(range(15))) + util('packet buffer (average)', [7] * 14 + [9])
+    _n, store, _w = parse(section('2026-10-27 08:20:20.485', [block], [target()]))
+    d = evaluate_dp_health(store)['detail']['by_dp']['dp0']
+    assert d['us']['pb'][0] == list(range(15))             # value i is the second T - i s
+    assert d['um']['pb_avg'][0] == [7] * 14 + [9]
+
+
+def test_detail_keys_only_for_present_data():
+    view = evaluate_dp_health(parse_dp_health_file()[1])
+    d = view['detail']['by_dp']['dp0']
+    assert set(d['us']) == {'sess', 'pb', 'pd', 'pdc'}       # the sample has on-chip descriptors
+    _v, d2 = detail_of(('2026-10-27 08:20:20.485', {}))
+    assert set(d2['us']) == {'sess', 'pb', 'pd'}
+
+
+def parse_dp_health_file():
+    store, warnings = dp_health.new_store(), []
+    parse_dp_health(SAMPLE.open(encoding='utf-8'), 's.log', store, warnings)
+    return warnings, store
+
+
+def test_detail_is_json_serializable_and_aligned_with_series():
+    view = evaluate_dp_health(parse_dp_health_file()[1])
+    json.dumps(view)
+    d = view['detail']['by_dp']['dp0']
+    n = len(view['series']['dp0']['t'])
+    for key in ('k0', 'cs', 'cma', 'cmm'):
+        assert len(d[key]) == n
+    assert all(len(v) == n for v in d['us'].values())
+
+
+def test_summary_and_flags_do_not_depend_on_the_detail():
+    # the aggregates are unchanged: same flags and series as before the detail existed
+    view = evaluate_dp_health(parse_dp_health_file()[1])
+    assert {f['code'] for f in view['findings']} == {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK', 'CORE_PEAK_MINUTE'}
+    assert view['series']['dp0']['pb_max'] == [5, 55]
+
+
+def tab_html(out, tab_id):
+    m = re.search(rf'<section class="panel" id="p-{tab_id}".*?</section>', out, re.DOTALL)
+    assert m, tab_id
+    return m.group(0)
+
+
+def test_charts_and_core_tables_moved_to_the_throughput_tab(tmp_path):
+    out = run_main(tmp_path)
+    chart_tab, dph_tab = tab_html(out, 'chart'), tab_html(out, 'dph')
+    # moved into the throughput tab
+    for needle in ('id="pcsec"', 'id="dphcores"', 'id="help-dphcores"', 'CPU peak per core', 'id="metric"',
+                   'id="hdp"', 'id="hcol"', 'Dataplane health columns'):
+        assert needle in chart_tab, needle
+    # gone from the Dataplane health tab, which keeps the summary and the findings
+    for needle in ('<h2>Utilization over time</h2>', '<h2>CPU peak per core</h2>', 'id="dphchart"', 'id="dphstats"', 'id="dphdp"',
+                   'id="dphcores"', 'id="dphleg"'):
+        assert needle not in dph_tab, needle
+    for needle in ('id="dphsum"', 'id="dphbanner"', 'id="help-dphflags"', 'id="help-dph"'):
+        assert needle in dph_tab, needle
+    assert 'id="help-dphchart"' not in out
+    data = report_data(out)
+    assert set(data['dph']['detail']['by_dp']) == {'dp0'}
+    for code in dp_health.FLAG_CODES:
+        assert f'<code>{code}</code>' in out
+
+
+def test_help_describes_the_merge_and_the_reconstruction(tmp_path):
+    out = run_main(tmp_path)
+    chart_help = re.search(r'id="help-chart" hidden>(.*?)</div>\s*\n', out, re.DOTALL).group(1)
+    for needle in ('Packet buffer (avg)', 'Packet buffer (max)', 'Busiest core (per-minute max)',
+                   'CPU per core (per-second)', 'Reconstructed timestamps', 'newest first',
+                   'inferred', 'most recent capture', 'maximum across DPs'):
+        assert needle in chart_help, needle
+    table_help = re.search(r'id="help-table" hidden>(.*?)</div>', out, re.DOTALL).group(1)
+    assert 'Dataplane health columns' in table_help
+    cores_help = re.search(r'id="help-dphcores" hidden>(.*?)</div>', out, re.DOTALL).group(1)
+    assert 'collapsible' in cores_help and 'Show all' in cores_help
+    assert 'Dataplane Throughput' in re.search(r'id="help-dph" hidden>(.*?)</div>', out, re.DOTALL).group(1)

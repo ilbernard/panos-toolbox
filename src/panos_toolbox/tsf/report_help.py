@@ -34,7 +34,7 @@ SECTION_TITLES = {
     'itable': 'Interfaces table', 'ixchk': 'Cross-check with the global counters',
     'coverage': 'Source coverage',
     'dph': 'Dataplane health', 'dphflags': 'Dataplane health findings and flag reference',
-    'dphchart': 'Dataplane health chart', 'dphcores': 'CPU peak per core',
+    'dphcores': 'CPU peak per core',
     'mp': 'Management plane', 'mpflags': 'Management plane findings and flag reference',
     'mpchart': 'Management plane memory chart', 'mpprocs': 'Management plane processes',
     'sys': 'System health', 'sysflags': 'System health findings and flag reference',
@@ -45,16 +45,28 @@ SECTION_HELP = {
     'chart': """
 <ul>
 <li><b>Metric</b> selects Throughput (kbps, shown as Mbps or Gbps when large), Packet rate
-(pkt/s), New connections (cps), Allocated sessions or Session table utilization (%). Only the
-metrics present in the file are listed.</li>
+(pkt/s), New connections (cps), Allocated sessions or Session table utilization (%), and the
+<b>dataplane health metrics</b> described below. Only the metrics present in the file are listed.</li>
 <li><b>Series</b>: one per DP. With two or more DPs an <b>ALL</b> series is added. It is the sum
-across DPs, except for session table utilization, where ALL is the maximum across DPs.</li>
-<li>The legend checkboxes show or hide a series. Hovering the chart shows the nearest sample.</li>
+across DPs, except for the percentages (session table utilization and the health metrics), where
+ALL is the maximum across DPs.</li>
+<li>The legend checkboxes show or hide a series. Hovering the chart shows the nearest sample (with
+many series, the 12 highest values).</li>
 <li><b>Zoom</b>: drag horizontally across the chart to select a range. Short drags are ignored.
 <b>Reset zoom</b> returns to the full period. The selected range also applies to the stats table
 and the data table.</li>
 </ul>
 <p><b>Stats table</b> (under the chart): For each visible series: samples, min, avg, max and the UTC time of the maximum.</p>
+<h3>Dataplane health metrics</h3>
+<p>They come from the resource monitor in the <code>panio</code> sections of the dp-monitor files (the same source as the Dataplane health tab, which keeps only the per-DP summary and the findings). All are percentages (vertical axis 0-100).</p>
+<ul>
+<li><b>Session table utilization</b> is one entry. It uses the per-second <code>session</code> value of the resource monitor (15 values per capture) when the capture has it, and otherwise the <i>Session table utilization</i> reading of the target-dp block (one value at the capture time). Both can appear in the same series.</li>
+<li><b>Packet buffer (max)</b>, <b>Packet descriptor (max)</b> and <b>Packet descriptor on-chip (max)</b> (if the device reports it) are the per-second values (15 per capture). <b>Packet buffer (avg)</b> is the per-minute average of the resource monitor (15 values per capture, one per minute).</li>
+<li><b>Busiest core (per-second)</b> is, for each second of the per-second CPU table, the highest load among the cores; <b>Busiest core (per-minute max)</b> is the same for the <code>max</code> column of the per-minute table. They are the series that the flags <code>CORE_PEAK</code> and <code>CORE_PEAK_MINUTE</code> (Dataplane health tab) summarise, but here every second or minute is plotted, not one value per capture.</li>
+<li><b>CPU per core (per-second)</b>, <b>(per-minute max)</b> and <b>(per-minute avg)</b> draw one series per core of one DP. A <b>DP</b> selector appears when there are several DPs. The legend has one entry per core (colours repeat after 12) with <b>All</b> and <b>None</b> buttons, because a device can have 48 cores or more. There is no ALL series.</li>
+</ul>
+<p><b>Reconstructed timestamps.</b> The time of a <code>panio</code> section is when the command ran (call it T). The rows of the <b>per-minute</b> table are <b>newest first</b> and each row is a <b>whole wall-clock minute</b>: row 0 is the last whole minute that ended at or before T, and row i ends i minutes before it. This was verified on real data: between two captures 10 minutes apart the rows shift by exactly 10, and the seconds just before T are not in row 0 (a spike seen in the per-second table of one capture appears in row 9 of the capture 10 minutes later, in 84 of 84 cases on an 8-core device). Reading the rows as ending at T - i minutes does not fit the data (it is off by the seconds of T). The <b>per-second</b> CPU table and the 15 per-second utilization values come from the same command; the same order is assumed, so value i is the second T - i seconds. This is <b>inferred from the per-minute table and cannot be verified</b> from the file. The chart therefore plots 15 points per capture (about every 10 minutes) for the per-second metrics and 15 per capture for the per-minute ones; the line is broken between captures by the gap rule below, which is correct: nothing is known in between.</p>
+<p><b>Overlapping minutes.</b> A per-minute table covers 15 minutes and the captures are about 10 minutes apart, so consecutive tables overlap. For each (DP, core, minute) the value of the <b>most recent capture</b> is kept, and a missing value (<code>*</code>) never replaces a real one, so every minute appears once. Because the minutes are whole wall-clock minutes, the same minute of two captures is the same key whatever the seconds of the section time. The per-second windows (15 s) do not overlap.</p>
 <p><b>Display.</b> The report is designed for Full HD (1920x1080) or larger screens. The charts and
 tables use the available width and height, and on screens of 2560 px wide or more the POW
 tables sit side by side. Below 1900 px wide the page scrolls horizontally.</p>
@@ -69,11 +81,12 @@ offsets are listed in the note above the tabs. The POW "Collected at" line is th
 and <b>Search</b>, which matches the time, DP, source file and throughput in kbps.</li>
 <li><b>CPU by group columns</b> adds one column per workgroup. The checkbox appears only when the
 file has CPU data.</li>
+<li><b>Dataplane health columns</b> adds, for each capture row where the resource monitor has the data: packet buffer avg and max, packet descriptor max, and the busiest core from the per-second and from the per-minute table (percent; the aggregates of the 15 values of the capture that the Dataplane health findings use). The checkbox appears only when the file has resource monitor data. Captures that have no dp-monitor sample get a row with empty throughput columns; rows of the ALL series have no health values.</li>
 <li>Click a column header to sort, and click again to reverse. Enter or Space works on a focused
 header.</li>
 <li>The table shows the first 500 matching rows. <b>Show all</b> displays the rest.</li>
 <li><b>Export CSV</b> downloads the rows that match the filters, as UTF-8 with a byte order mark.
-The CPU by group columns are always included when the file has them.</li>
+The columns follow the visible ones: the CPU by group and the Dataplane health columns are included only when their checkbox is ticked.</li>
 </ul>
 """,
     'cpu': """
@@ -375,13 +388,15 @@ row sums each core.</p>
 </ul>
 <h3>How a sample is read</h3>
 <ul>
-<li>The value of a sample is the <b>maximum of its 15 per-second values</b>, so a short spike inside the window is not averaged away. For the packet buffer the chart also shows the average of the 15 values.</li>
+<li>The value of a sample is the <b>maximum of its 15 per-second values</b>, so a short spike inside the window is not averaged away. The Dataplane Throughput tab plots the individual values (Metric selector) with their reconstructed times.</li>
 <li>A <code>*</code> in a CPU table cell means that the measurement is missing: the cell is ignored (not counted as 0). A value outside 0-100 is discarded. A row whose number of columns differs from the header is discarded. The number of discarded rows and values is shown below the summary.</li>
 <li>Each resource block is bound to the <code>target-dp</code> of the same section, by order of appearance. If the numbers of blocks and DPs differ, nothing is bound and a warning is shown. An explicit <code>DP &lt;name&gt;:</code> line before a block would bind it to that DP, but that layout has not been seen on a real device (unverified). DPs are never added or averaged together; each is evaluated alone.</li>
 <li>When the same section appears in several rotated files, the first copy (the oldest file) is kept.</li>
 </ul>
 <h3>Peak versus last</h3>
 <p>The firewall's own health checks look at the last sample only. A TSF is a history, so the flags here are based on the <b>peak over the whole period</b>. The text of each flag gives the peak (value and UTC time), the last value and how many samples were at or above the threshold, so that you can tell a spike that is over from a condition that is still there.</p>
+<h3>Where the charts are</h3>
+<p>This tab keeps only the summary table and the findings. The charts (session table utilization, packet buffer, packet descriptors, busiest core and CPU per core, second by second and minute by minute) are in the <b>Dataplane Throughput</b> tab, under the Metric selector, and the per-core tables with all values are under <b>CPU peak per core</b> in the same tab.</p>
 <h3>Summary table</h3>
 <p>For each DP: the number of samples and the period, then for the session table, the packet buffer, the packet descriptors and the busiest core, once from the per-second table and once from the per-minute max, the last and the peak value (the peak with its UTC time and, for the CPU, the core). Per-minute values have no time of their own: the time shown is that of the section, and the value covers the 15 minutes before it. Rows are coloured by the worst flag of the DP.</p>
 """,
@@ -396,17 +411,14 @@ row sums each core.</p>
 </table>
 <p class="hint">The thresholds are heuristics defined in <code>dp_health.DP_THRESHOLDS</code>. In code, override them with <code>evaluate_dp_health(store, thresholds={{'pkt_buffer_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--dp-&lt;name&gt;</code> options (for example <code>--dp-pkt-buffer-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report. The packet descriptors have no flag: they are shown for context.</p>
 """,
-    'dphchart': """
-<ul>
-<li><b>DP</b> selects the dataplane. The series are the session table utilization, the packet buffer (average and maximum of the 15 per-second values) and the busiest core, from the per-second table and from the per-minute max. The legend checkboxes show or hide a series.</li>
-<li>Each point is one <code>panio</code> section, about 10 minutes apart: between two points nothing is known, so a short peak can fall between samples.</li>
-<li>The vertical axis runs from 0 to 100 percent. Zoom (drag across the chart), <b>Reset zoom</b> and the stats table work as in the throughput chart. Hover for the values at the nearest sample.</li>
-</ul>
-<p><b>Reduction, gaps and missing values.</b> A long series is drawn reduced to the lowest and highest sample of each block of about 2 pixels (plus the first and last), so peaks stay visible; the stats table and the hover use the real samples. The line is broken between samples further apart than 3 times the median interval (never under 60 s, always over 6 hours), and a missing value is a gap, never 0.</p>
-""",
     'dphcores': """
-<p>One cell per core of the selected DP, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the whole period (the maximum of the 15 values of every sample), and the highest per-minute maximum. The colour goes from white (idle) to red (100%). A bold border marks a cell at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) in the first row and <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) in the second. Hover a cell for the UTC time of the peak and the last value.</p>
-<p>Cores that show no data at all (always <code>*</code>) are left empty. A core that is always 0 is normally not used by the dataplane (cores reserved for other functions).</p>
+<p>Shown in the Dataplane Throughput tab for the DP chosen in the <b>DP</b> filter of the samples table (all DPs when it is All) and for the captures inside the current zoom range.</p>
+<h3>Peak blocks</h3>
+<p>One cell per core, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the captures in the range (the maximum of every value of the per-second table) and the highest per-minute maximum. The colour goes from white (idle) to red (100%). A bold border marks a cell at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) in the first row and <code>core_peak_minute_warn</code> ({dp_core_peak_minute_warn}%) in the second. Hover a cell for the UTC time of the peak (the reconstructed second, or the minute ending) and the last value.</p>
+<h3>Captures</h3>
+<p>One collapsible row per capture (the <code>panio</code> section): its UTC time, the DP, and the busiest core with its value in the per-second table and in the per-minute max table (red when at or above the limit). <b>Only captures with a core at or above the limit</b> filters the rows. Expand a row to see every value of that capture: the 15 rows of the per-second table, each with its reconstructed UTC time to the second, and the 15 rows of the per-minute max and of the per-minute average tables, each with the UTC time of the minute end, one column per core. Rows are listed oldest first. The content is built when a row is expanded, so a large report stays fast; at most 300 rows are listed until <b>Show all</b>.</p>
+<p><b>Timestamps.</b> The capture time T is when the command ran. Per-minute row i is the whole minute ending i minutes before the last minute boundary at or before T (rows newest first: verified on real data; the seconds of T are not part of row 0). The per-second row i is taken as the second T - i seconds: the same order as the per-minute table, inferred and not verifiable from the file. Consecutive per-minute tables overlap; the table of a capture always shows that capture's own values, while the chart keeps the most recent capture's value for each minute.</p>
+<p>A missing value (<code>*</code> in the file) is shown as <code>&ndash;</code> with a tooltip; it is never counted as 0. Cores that show no data at all are left empty. A core that is always 0 is normally not used by the dataplane (cores reserved for other functions).</p>
 """,
     'mp': """
 <p>Built from the <code>memory</code> and <code>processes</code> sections of <code>var/log/pan/mp-monitor.log</code> and its rotations (<code>.1</code> to <code>.4</code>) in the TSF. They describe the <b>management plane</b> (the control CPU and its RAM, where <code>configd</code>, <code>mgmtsrvr</code>, <code>logrcvr</code> and the other daemons run), not the dataplane. The time of a sample is the one of its section header, converted to UTC with the offset written in that header: the offset of mp-monitor can differ from the one of dp-monitor, so the two are not assumed to be equal. The other sections of the file (cpu, top_summary, pidstat, filesystem, ...) are not read.</p>
