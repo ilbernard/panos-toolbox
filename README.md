@@ -34,7 +34,7 @@ To use `panos-toolbox` from anywhere without managing a venv, install it with
 | Command | Description |
 |---------|-------------|
 | `panos-toolbox firewall console [--profiles-file FILE]` | Desktop GUI (Windows/macOS/Linux, needs `.[console]`): log in to Panorama with username/password, list the managed firewalls (filter by any column) and run actions on the selection, all proxied through Panorama. First action: Reboot. Saved connection profiles never contain passwords. See [docs/console/](docs/console/) |
-| `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open] [--pow-*]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags); every tab and panel has its own collapsible help and counter names show a glossary tooltip; output goes to `./output/` by default |
+| `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open] [--pow-*] [--if-*]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags); an Interface Errors tab from `show counter interface all` / `show interface ...` output (per-interface physical, hardware and flow drop counters, link state, flags, cross-check with the global counters); every tab and panel has its own collapsible help and counter names show a glossary tooltip; output goes to `./output/` by default |
 
 Run `panos-toolbox` with no arguments for the full list.
 
@@ -91,6 +91,33 @@ example `--pow-share-warn 15`. Defaults:
 | `--pow-hist-slow-share` | 5 |
 | `--pow-hist-slow-min-count` | 10 |
 
+### Interface Errors tab
+
+The Interface Errors tab reads, by content, the interface counter outputs found in `tmp/cli/*.txt` of a
+TSF or in a plain text file given directly (`tests/data/interface_errors_sample.txt` is a trimmed
+example). Commands used, all optional (a missing one is skipped with a warning):
+
+| Command | Used for |
+|---------|----------|
+| `show counter interface all` | Physical (MAC), hardware (CPU) and logical/flow counters per interface |
+| `show interface ethernetX/Y` | Link speed/duplex/state, zone, address and the detailed physical counters (CRC, fifo overrun, collisions...) |
+| `show interface all` | Link table and logical interface table (zone, virtual router, tag, address) |
+| `show system info`, `show clock` | Hostname, model, version, uptime, capture time |
+| `show counter global` | Cross-check of the per-interface sums with the global drop counters |
+| `show transceiver all`, `show lacp aggregate-ethernet all` | Shown when they hold data |
+
+All counters are cumulative since boot, so the report shows the uptime and raises `UPTIME_SHORT` when it
+is below one hour. The main table has one row per interface (physical, `ae`, sub-interfaces, tunnel,
+vlan, loopback) with link, zone, address, traffic, every non-zero error counter in three column groups,
+the drop percentage and flags; by default only interfaces with issues are listed, and it can be
+filtered, sorted and exported to CSV. Flags (`PHY_ERRORS`, `DROP_PCT`, `NO_ROUTE`, `ARP_NOT_FOUND`,
+`FLOW_STATE_CHECK`, `IP_SPOOF`, `LINK_HALF_DUPLEX`...) are heuristics whose thresholds
+(`IF_THRESHOLDS` in `interface_errors.py`) can be overridden with `--if-<name>`, for example
+`--if-drop-pct-warn 2`. The flag reference and the meaning of every counter are in the help of the tab;
+counter names and column headers show the same glossary tooltip as the POW tab
+(`src/panos_toolbox/tsf/if_glossary.py`, with the same confidence codes). Reports with only interface
+data are written as `<name>_interfaces.html`; with POW data too, as `<name>_tsf.html`.
+
 ## Layout
 
 ```
@@ -100,7 +127,7 @@ src/panos_toolbox/
   firewall/       PAN-OS tools + client.py
     console/      Panorama desktop GUI (core/ logic, actions/ plugins, gui/ Qt)
   scm/            SCM tools + client.py
-  tsf/            offline TSF tools (analyzer.py, pow_perf.py, pow_glossary.py, report_*.py)
+  tsf/            offline TSF tools (analyzer.py, pow_perf.py, pow_glossary.py, interface_errors.py, if_glossary.py, report_*.py)
 scripts/          zero-install launchers (run from a checkout)
 tests/            pytest suite (no real devices)
 docs/             contributor docs (docs/console/ for the console tool)

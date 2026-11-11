@@ -18,11 +18,11 @@ TEMPLATE_HEAD = r'''<!doctype html>
 # Stylesheet rules (CSS variables, layout, tabs, tables, badges).
 TEMPLATE_CSS = r''':root{--ink:#1c2530;--mute:#5d6b7a;--line:#d8dde3;--bg:#f4f6f8;--card:#fff;--acc:#1f6f8b;--warn-bg:#fff4d6;--warn-bd:#c98a00}
 *{box-sizing:border-box}
-/* Layout: designed for Full HD (1920x1080) or larger; 1900 leaves room for a classic scrollbar. Below 1900 CSS px the page keeps
-   its width and scrolls horizontally, so no layout reflows at smaller sizes. The main
-   column grows with the window; it is capped at 3200px on ultrawide and 4K screens so
-   that lines of tables and text do not run across the whole display. */
-body{margin:0;min-width:1900px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+/* Layout: fluid from 1200 CSS px up (1280x800, Full HD at 125% scaling = 1536, Full HD = 1920, and wider). Below 1200 px the page keeps
+   its width and scrolls horizontally. The main column grows with the window; it is capped at 3200px on ultrawide and 4K screens so
+   that lines of tables and text do not run across the whole display. Wide content (tables that do not wrap) scrolls inside its
+   own box (.panel and .scroll), never the whole page. */
+body{margin:0;min-width:1200px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:3200px;margin:0 auto;padding:20px 24px 48px}
 h1{font-size:20px;margin:0 0 2px}
 h2{font-size:15px;margin:0 0 10px}
@@ -55,7 +55,9 @@ th{cursor:pointer;background:#eef1f4;position:sticky;top:0}
 .tabs button{border:1px solid transparent;border-bottom:none;border-radius:4px 4px 0 0;background:transparent;color:var(--mute);padding:8px 18px}
 .tabs button:hover{color:var(--ink)}
 .tabs button[aria-selected=true]{background:var(--card);border-color:var(--line);color:var(--ink);font-weight:600;position:relative;top:1px}
-.panel{border-top-left-radius:0}
+.panel{border-top-left-radius:0;overflow-x:auto}
+.advtoggle{margin-left:auto;align-self:center;display:flex;align-items:center;gap:5px;color:var(--ink);cursor:pointer;padding:0 8px}
+.advtoggle input{margin:0;padding:0}
 .sep{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 details{margin-top:8px}
 .hint{color:var(--mute);font-size:12px}
@@ -64,7 +66,25 @@ details{margin-top:8px}
 .banner li.lvl-crit{border-color:#b42318;background:#fdecea}
 .banner li.lvl-warn{border-color:var(--warn-bd);background:var(--warn-bg)}
 .badge{display:inline-block;color:#fff;border-radius:3px;padding:0 6px;margin:0 3px 2px 0;font-size:11px;line-height:17px;white-space:nowrap}
-.b-crit{background:#b42318}.b-warn{background:#b7791f}.b-info{background:#5d6b7a}
+.b-crit{background:#b42318}.b-warn{background:#b7791f}.b-info{background:#5d6b7a}.b-ok{background:#2f855a}
+.astatus{font-size:12px;line-height:20px;padding:0 10px;border-radius:10px;margin:0 0 12px;cursor:help}
+.cov-sub{margin:6px 0 0 18px;padding:0;font-size:12px}.cov-sub li{margin:1px 0}
+table.covt td.l,table.covt th.l{text-align:left}
+table.hm{width:auto;margin:0 0 10px}
+table.hm td,table.hm th{text-align:center;min-width:36px;padding:3px 5px;cursor:default;position:static}
+table.hm th:first-child,table.hm td:first-child{text-align:left;min-width:150px}
+table.hm td.hot{outline:2px solid #1c2530;outline-offset:-2px;font-weight:700}
+.pcap{border:1px solid var(--line);border-radius:3px;margin:0 0 4px;padding:0}
+.pcap>summary{padding:4px 10px;background:#f7f9fb;font-variant-numeric:tabular-nums}
+.pcap>summary .pk.hot{color:#b42318;font-weight:700}
+.pcap[open]>summary{border-bottom:1px solid var(--line)}
+.pcwrap{padding:6px 10px;overflow:auto}
+.pcwrap h4{margin:10px 0 4px}
+.pcwrap table.hm{margin:0}
+.pcwrap table.hm td,.pcwrap table.hm th{min-width:30px;padding:2px 3px}
+.pcwrap table.hm th:first-child,.pcwrap table.hm td:first-child{min-width:150px}
+table.dphs th,table.dphs td{text-align:right}
+table.dphs th:first-child,table.dphs td:first-child{text-align:left}
 tr.anom-crit td{background:#fdecea}
 tr.anom-warn td{background:var(--warn-bg)}
 tr.anom-crit td:first-child{box-shadow:inset 4px 0 0 #b42318}
@@ -111,6 +131,14 @@ summary{cursor:pointer}
 .bl{fill:var(--ink);font-size:11px;font-family:ui-monospace,Consolas,monospace}
 .vl{fill:var(--mute);font-size:11px}
 .dim{color:var(--mute)}
+.itbl th.g-phys{box-shadow:inset 0 3px 0 #b42318}
+.itbl th.g-cpu{box-shadow:inset 0 3px 0 #a15c00}
+.itbl th.g-logical{box-shadow:inset 0 3px 0 #1f6f8b}
+.itbl td.nzc{font-weight:600;color:#b42318}
+.itbl td.zc{color:#9aa5b1}
+.itbl td.tl,.itbl th.tl{text-align:left}
+.legsq{display:inline-block;width:14px;height:4px;margin:0 4px 2px 12px}
+.isys td,.isys th{cursor:default;position:static;text-align:left}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -121,25 +149,59 @@ TEMPLATE_BODY = r'''</style>
 <div id="gltip" role="tooltip" hidden></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
+<div><span class="badge astatus" id="astatus" style="display:none" tabindex="0"></span></div>
 <div class="utc" id="utc"></div>
 <details id="warn" style="display:none;margin:0 0 16px"><summary id="warnsum"></summary><ul id="warnlist"></ul></details>
 
 <div class="tabs" id="tabs" role="tablist" aria-label="Report sections">
-  <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
+  <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
+  <button type="button" role="tab" id="tab-mp" aria-controls="p-mp" aria-selected="false" tabindex="-1" style="display:none">Management plane</button>
+  <button type="button" role="tab" id="tab-sys" aria-controls="p-sys" aria-selected="false" tabindex="-1" style="display:none">System health</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
+  <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
+  <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
+  <label class="advtoggle" id="advwrap" style="display:none"><input type="checkbox" id="advanced"> Advanced</label>
 </div>
 
 <section class="panel" id="p-chart" role="tabpanel" aria-labelledby="tab-chart">
+  <div id="dphblock" style="display:none">
+  <div class="sechead"><h2>Dataplane health</h2>__HB_dph__</div>__HP_dph__
+  <p class="hint" id="dphinfo"></p>
+  <details id="dphwarn" style="display:none;margin:0 0 12px"><summary id="dphwarnsum"></summary><ul id="dphwarnlist"></ul></details>
+  <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
+  <ul class="banner" id="dphbanner"></ul>
+  </div>
+  <div id="tpsec">
   <div class="sechead"><h2>Dataplane throughput</h2>__HB_chart__</div>__HP_chart__
   <div class="bar">
     <label>Metric <select id="metric"></select></label>
+    <label id="hdpwrap" style="display:none">DP <select id="hdp"></select></label>
     <div class="leg" id="leg"></div>
+    <span id="corebtns" style="display:none"><button id="call" type="button">All</button> <button id="cnone" type="button">None</button></span>
     <button id="reset" type="button">Reset zoom</button>
   </div>
   <div class="cw" id="chartwrap"><svg id="chart" role="img" aria-label="Metrics over time chart"></svg><div class="tip" id="tip"></div></div>
   <p class="hint">Drag on the chart to zoom into a range; the range also applies to the other charts and to the table.</p>
   <table class="stats" id="stats"></table>
+  </div>
+  <div class="sep" id="pcsec" style="display:none">
+  <div class="sechead"><h2>CPU per core (heatmap)</h2>__HB_dphcores__</div>__HP_dphcores__
+  <div class="bar">
+    <label>Source <select id="hmsrc"></select></label>
+    <span class="hint" id="pcinfo"></span>
+  </div>
+  <div id="dphcores"></div>
+  <details id="pcraw"><summary>Raw tables per capture</summary>
+  <div class="bar" style="margin-top:8px">
+    <label><input type="checkbox" id="pchot"> only captures with a core at or above the limit</label>
+    <span class="hint" id="pccount"></span>
+  </div>
+  <div id="pclist"></div>
+  <p class="hint" id="pcmore"></p>
+  </details>
+  </div>
   <div class="sep">
   <div class="sechead"><h3>Samples table</h3>__HB_table__</div>__HP_table__
   <div class="bar">
@@ -148,6 +210,7 @@ TEMPLATE_BODY = r'''</style>
     <label>To (UTC) <input type="datetime-local" id="t1"></label>
     <label>Search <input type="search" id="q" placeholder="free text"></label>
     <label id="gcolwrap" style="display:none"><input type="checkbox" id="gcol"> CPU by group columns</label>
+    <label id="hcolwrap" style="display:none"><input type="checkbox" id="hcol"> Dataplane health columns</label>
     <button id="csv" type="button">Export CSV</button>
     <span class="hint" id="count"></span>
   </div>
@@ -167,6 +230,36 @@ TEMPLATE_BODY = r'''</style>
   <div class="leg" id="gleg" style="margin-bottom:10px"></div>
   <div class="cw" id="gwrap"><svg id="gchart" role="img" aria-label="CPU load by group over time"></svg><div class="tip" id="gtip"></div></div>
   <table class="stats" id="gstats"></table>
+</section>
+
+<section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
+  <div class="sechead"><h2>Management plane</h2>__HB_mp__</div>__HP_mp__
+  <p class="hint" id="mpinfo"></p>
+  <details id="mpwarn" style="display:none;margin:0 0 12px"><summary id="mpwarnsum"></summary><ul id="mpwarnlist"></ul></details>
+  <div class="scroll"><table class="stats dphs" id="mpsum"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_mpflags__</div>__HP_mpflags__
+  <ul class="banner" id="mpbanner"></ul>
+  <div class="sep"><div class="sechead"><h2>Memory over time</h2>__HB_mpchart__</div>__HP_mpchart__
+  <div class="bar">
+    <button id="mpreset" type="button">Reset zoom</button>
+    <div class="leg" id="mpleg"></div>
+  </div>
+  <div class="cw" id="mpwrap"><svg id="mpchart" role="img" aria-label="Management plane memory over time chart"></svg><div class="tip" id="mptip"></div></div>
+  <table class="stats" id="mpstats"></table></div>
+  <div class="sep"><div class="sechead"><h2>Processes</h2>__HB_mpprocs__</div>__HP_mpprocs__
+  <div class="bar"><label>Show <select id="mpview"></select></label><span class="hint" id="mpcount"></span></div>
+  <details id="mpproctab" open><summary>Process table</summary>
+  <div class="scroll"><table class="stats dphs" id="mpprocs"></table></div></details></div>
+</section>
+
+<section class="panel" id="p-sys" role="tabpanel" aria-labelledby="tab-sys" hidden>
+  <div class="sechead"><h2>System health</h2>__HB_sys__</div>__HP_sys__
+  <p class="hint" id="sysinfo"></p>
+  <div class="scroll"><table class="stats covt" id="syschecks"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_sysflags__</div>__HP_sysflags__
+  <ul class="banner" id="sysbanner"></ul>
+  <div class="sep"><div class="sechead"><h2>Details</h2>__HB_sysdetail__</div>__HP_sysdetail__
+  <div id="sysdetails"></div></div>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
@@ -202,6 +295,40 @@ TEMPLATE_BODY = r'''</style>
   <div class="sep"><div class="sechead"><h2>Workgroup total-us per core</h2>__HB_pmx__</div>__HP_pmx__<div class="scroll"><table id="pmx"></table></div></div>
 </section>
 
+<section class="panel" id="p-ifc" role="tabpanel" aria-labelledby="tab-ifc" hidden>
+  <div class="sechead"><h2>Interface errors</h2>__HB_ifc__</div>__HP_ifc__
+  <table class="stats isys" id="isys"></table>
+  <details id="iwarn" style="display:none;margin:8px 0 12px"><summary id="iwarnsum"></summary><ul id="iwarnlist"></ul></details>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_iflags__</div>__HP_iflags__
+  <ul class="banner" id="ibanner"></ul>
+  <p class="hint" id="idown"></p>
+  <div class="sep"><div class="sechead"><h2>Interfaces</h2>__HB_itable__</div>__HP_itable__
+  <div class="bar">
+    <label>Search <input type="search" id="iq" placeholder="name, zone, address, flag"></label>
+    <label>Type <select id="ikind"></select></label>
+    <label><input type="checkbox" id="iissues" checked> only interfaces with issues</label>
+    <button id="icsv" type="button">Export CSV</button>
+    <span class="hint" id="imeta"></span>
+  </div>
+  <p class="hint" id="igleg"></p>
+  <div class="scroll"><table class="itbl" id="itbl"></table></div></div>
+  <div class="sep"><div class="sechead"><h2>Cross-check with the global counters</h2>__HB_ixchk__</div>__HP_ixchk__
+  <p class="hint" id="ixmsg"></p>
+  <table class="stats" id="ixchk"></table>
+  <h4>Other drop-related global counters (no interface counter)</h4>
+  <table class="stats" id="ictx"></table></div>
+  <div id="iextra"></div>
+</section>
+
+<section class="panel" id="p-cov" role="tabpanel" aria-labelledby="tab-cov" hidden>
+  <div class="sechead"><h2>Source coverage</h2>__HB_coverage__</div>__HP_coverage__
+  <p class="hint" id="covmsg"></p>
+  <div class="scroll"><table class="stats covt" id="covfam"></table></div>
+  <div class="sep"><h3>Skipped members</h3><p class="hint" id="covskipmsg"></p><table class="stats covt" id="covskip"></table></div>
+  <div class="sep"><h3>Limit notes</h3><ul id="covnotes"></ul></div>
+  <div class="sep"><h3>Conflicting samples</h3><p class="hint" id="covconfmsg"></p><div class="scroll"><table class="stats covt" id="covconf"></table></div></div>
+</section>
+
 </main>
 
 '''
@@ -231,7 +358,7 @@ function glName(name, tag){ const s = document.createElement(tag || 'span'); s.t
     const key = el.getAttribute('data-gl') || el.getAttribute('data-gf'), field = el.hasAttribute('data-gf');
     const e = field ? GL.fields[key] : GL.names[key]; tip.replaceChildren(); if(!e) return false;
     const h = div('gt-h', key), b = document.createElement('span'); b.className = 'cb c-' + e.f; b.textContent = e.f; h.appendChild(b); tip.appendChild(h);
-    tip.appendChild(div('gt-c', field ? 'Column' : (e.c + ' - ' + (e.k === 'group' ? 'group' : 'function'))));
+    tip.appendChild(div('gt-c', field ? 'Column' : (e.c + ' - ' + (e.k === 'group' ? 'group' : (e.k === 'counter' ? 'counter' : 'function')))));
     tip.appendChild(div('gt-m', e.m));
     tip.appendChild(div('gt-f', 'Confidence ' + e.f + ': ' + (GL.conf[e.f] || '')));
     if(!field && noMeaning(e)) tip.appendChild(div('gt-bad', 'No known meaning. If this counter is active, please report it.'));
@@ -274,19 +401,36 @@ const D = __DATA__;
 const $ = s => document.querySelector(s);
 const NS = 'http://www.w3.org/2000/svg';
 __GL_JS__
+// Dataplane health data (resource monitor): D.dph. HD holds the full per-capture tables (view key "detail").
+const DH = D.dph || null;
+const hasDph = !!DH;
+const HD = (hasDph && DH.detail) ? DH.detail : null;
+const HDPS = HD ? DH.dps.filter(dp=>HD.by_dp[dp]) : [];
+// h: 'dp' = one series per DP (ALL = maximum across DPs); 'core' = one series per core of the selected DP (g = which grid);
+// 'pkt' = one series per packet buffer / descriptor kind of the selected DP.
 const METRICS = {
   kbps:{label:'Throughput'},
   pps:{label:'Packet rate', unit:'pkt/s'},
   cps:{label:'New connections', unit:'cps'},
   sess:{label:'Allocated sessions', unit:''},
-  util:{label:'Session table utilization', unit:'%'}
+  util:{label:'Session table utilization', unit:'%'},
+  hpkt:{label:'Packet buffer & descriptors', unit:'%', h:'pkt'},
+  hcore_s:{label:'Busiest core (per-second)', unit:'%', h:'dp'},
+  hcore_mm:{label:'Busiest core (per-minute max)', unit:'%', h:'dp'},
+  pc_s:{label:'CPU per core (per-second)', unit:'%', h:'core', g:'s'},
+  pc_mm:{label:'CPU per core (per-minute max)', unit:'%', h:'core', g:'mm'},
+  pc_ma:{label:'CPU per core (per-minute avg)', unit:'%', h:'core', g:'ma'}
 };
 const PALETTE = ['#1c2530','#1f6f8b','#c2410c','#2f855a','#7c3aed','#b7791f','#be185d','#0e7490','#4d7c0f'];
-const colors = {}; D.series.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
+const CORE_PAL = ['#1f6f8b','#c2410c','#2f855a','#7c3aed','#b7791f','#be185d','#0e7490','#4d7c0f','#1c2530','#d97706','#2563eb','#9d174d'];
+const coreColor = k => CORE_PAL[k%CORE_PAL.length];
+// Series of the DP legend: the sample series, or (a report with health data only) the DPs of the health data.
+const SERIES = D.series.length ? D.series : (hasDph ? (DH.dps.length>1 ? ['ALL'].concat(DH.dps) : DH.dps.slice()) : []);
+const colors = {}; SERIES.forEach((s,i)=>colors[s]=PALETTE[i%PALETTE.length]);
 const hasG = D.groups.length>0;
 const hasSamples = D.samples.length>0;
 const GCOL = D.groups.map((_,i)=>'hsl('+Math.round(i*360/D.groups.length)+',62%,40%)');
-const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false};
+const state = {metric:'kbps', hidden:new Set(), range:[null,null], sort:{k:'t',dir:1}, dp:'', q:'', all:false, showG:false, showH:false, hdp:null, hiddenCores:new Set(), hiddenPkt:new Set()};
 const gs = {dp:null, hidden:new Set()};
 const maxOf = a => a.reduce((m,v)=>v>m?v:m,-Infinity);
 const minOf = a => a.reduce((m,v)=>v<m?v:m,Infinity);
@@ -296,7 +440,7 @@ const TMIN = minOf(ALLT), TMAX = maxOf(ALLT);
 const pad = n => String(n).padStart(2,'0');
 const iso = ms => new Date(ms).toISOString().replace('T',' ').slice(0,19);
 const isoLocalInput = ms => new Date(ms).toISOString().slice(0,16);
-const hasMetric = k => D.samples.some(s=>s[k]!==null && s[k]!==undefined);
+const hasMetric = k => METRICS[k].h ? HAVAIL.includes(k) : (D.samples.some(s=>s[k]!==null && s[k]!==undefined) || (k==='util' && HAVAIL.includes('util')));
 const inRange = t => (state.range[0]===null||t>=state.range[0]) && (state.range[1]===null||t<=state.range[1]);
 
 function scaleFor(vals){
@@ -309,10 +453,178 @@ const fmt = (v,div) => (v/div).toLocaleString('en-US',{maximumFractionDigits: di
 
 // header
 $('#title').textContent = D.kind + ' - ' + D.name;
-$('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : '');
-$('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (D.series[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization it is the maximum value).' : '');
+$('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : (D.ifc && D.ifc.system.collected_at ? 'Collected at ' + D.ifc.system.collected_at : ''));
+$('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (SERIES[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization and the dataplane health metrics it is the maximum value).' : '');
 $('#utc').style.display = hasSamples ? '' : 'none';
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
+
+// CHART-HELPERS-BEGIN
+// Chart point reduction and gap breaking (see docs/tsf/charts.md). Pure functions, no DOM.
+// Tunables:
+//  CH.REDUCE_FACTOR   reduce a series only when it has more than this many points per plot pixel
+//  CH.PX_PER_BLOCK    width in plot pixels of one reduction block (one min and one max point each)
+//  CH.GAP_FACTOR      a line is broken when two consecutive samples are further apart than this many median intervals...
+//  CH.GAP_MIN_MS      ...but never for a distance up to this value (60 s)...
+//  CH.GAP_MAX_MS      ...and always for a distance above this value (6 h)
+const CH = {REDUCE_FACTOR:2, PX_PER_BLOCK:2, GAP_FACTOR:3, GAP_MIN_MS:60000, GAP_MAX_MS:6*3600000};
+const isNum = v => v!==null && v!==undefined && !Number.isNaN(v);
+// Median distance between consecutive real samples (a missing value separates its neighbours, it is not bridged).
+function medianInterval(ts, vs){
+  const d=[]; let prev=null;
+  for(let i=0;i<ts.length;i++){ if(!isNum(vs[i])){ prev=null; continue; } if(prev!==null) d.push(ts[i]-ts[prev]); prev=i; }
+  if(!d.length) return 0;
+  d.sort((a,b)=>a-b); const m=d.length>>1;
+  return d.length%2 ? d[m] : (d[m-1]+d[m])/2;
+}
+// Splits the points into runs of consecutive indices: a missing value (null/undefined/NaN) is never part of a run and ends it,
+// and so does a distance larger than min(hi, max(lo, factor*median interval)). Returns an array of arrays of indices.
+function splitGaps(ts, vs, lo, hi, factor){
+  const thr=Math.min(hi, Math.max(lo, factor*medianInterval(ts, vs)));
+  const segs=[]; let cur=null, prevT=null;
+  for(let i=0;i<ts.length;i++){
+    if(!isNum(vs[i])){ cur=null; prevT=null; continue; }
+    if(cur===null || ts[i]-prevT>thr){ cur=[]; segs.push(cur); }
+    cur.push(i); prevT=ts[i];
+  }
+  return segs;
+}
+// Block reduction that keeps the extremes: the range [t0,t1] is split into nBlocks blocks; of the points in each block only the
+// one with the lowest and the one with the highest value are kept, plus always the first and the last point.
+// Returns the kept indices in time order. All indices are returned when there is nothing to gain (<= 2 points per block).
+function reduceMinMax(ts, vs, t0, t1, nBlocks){
+  const n=ts.length, all=()=>Array.from({length:n},(_,i)=>i);
+  if(n<=2*nBlocks+2 || nBlocks<1) return all();
+  const span=t1-t0, imin=new Array(nBlocks).fill(-1), imax=new Array(nBlocks).fill(-1);
+  for(let i=0;i<n;i++){
+    if(!isNum(vs[i])) continue;
+    let b=span>0 ? Math.floor((ts[i]-t0)/span*nBlocks) : 0; if(b<0) b=0; else if(b>=nBlocks) b=nBlocks-1;
+    if(imin[b]<0 || vs[i]<vs[imin[b]]) imin[b]=i;
+    if(imax[b]<0 || vs[i]>vs[imax[b]]) imax[b]=i;
+  }
+  const keep=new Set([0,n-1]);
+  for(let b=0;b<nBlocks;b++){ if(imin[b]>=0) keep.add(imin[b]); if(imax[b]>=0) keep.add(imax[b]); }
+  return Array.from(keep).sort((a,b)=>a-b);
+}
+// The runs to draw for one series {d:[{t,v}]}: gaps and missing values break the line, long runs are reduced (only the given range).
+function chartRuns(d, t0, t1, plotW){
+  const ts=d.map(p=>p.t), vs=d.map(p=>p.v), nB=Math.max(1, Math.round(plotW/CH.PX_PER_BLOCK));
+  return splitGaps(ts, vs, CH.GAP_MIN_MS, CH.GAP_MAX_MS, CH.GAP_FACTOR).map(seg=>{
+    if(seg.length<=CH.REDUCE_FACTOR*plotW) return seg.map(i=>d[i]);
+    const st=seg.map(i=>ts[i]), sv=seg.map(i=>vs[i]);
+    return reduceMinMax(st, sv, t0, t1, nB).map(k=>d[seg[k]]);
+  });
+}
+// The real samples of a series (missing values are kept in d only to break the line).
+const realPts = d => d.filter(p=>isNum(p.v));
+// CHART-HELPERS-END
+
+// DPH-HELPERS-BEGIN
+// Reconstructed timestamps and series of the dataplane health tables (see docs/tsf/charts.md). Pure functions, no DOM.
+// The section time T is when the command ran. Rows of the per-minute table are NEWEST FIRST and each is a whole wall-clock
+// minute (verified on real data): row i is the minute ending at the last minute boundary at or before T, minus i minutes.
+// The per-second table and the 15 per-second utilization values are assumed to follow the same order (inferred, not
+// verifiable): row i is the second T - i s.
+const REC_S = 1000, REC_M = 60000;
+const recSec = (t, i) => t - i*REC_S;
+const recMin = (t, i) => Math.floor(t/REC_M)*REC_M - i*REC_M;
+// Per-second grid: ts[c] = capture times (ascending), flats[c] = flat row-major array (rows x nc) or null/undefined.
+// Returns {t:[ascending ms], cols:[nc arrays aligned with t]}; a missing value is null. For an equal timestamp (windows that
+// overlap) the later capture wins.
+function secondGrid(ts, flats, nc){
+  if(!(nc>=1)) return {t:[], cols:[]};
+  const T=[], cols=Array.from({length:nc},()=>[]); let sorted=true;
+  for(let c=0;c<ts.length;c++){
+    const f=flats[c]; if(!f) continue; const n=Math.floor(f.length/nc);
+    for(let r=n-1;r>=0;r--){
+      const t=recSec(ts[c], r); if(T.length && t<=T[T.length-1]) sorted=false;
+      T.push(t); for(let k=0;k<nc;k++){ const v=f[r*nc+k]; cols[k].push(isNum(v)?v:null); }
+    }
+  }
+  if(sorted) return {t:T, cols};
+  const idx=T.map((_,i)=>i).sort((a,b)=>T[a]-T[b]||a-b), out={t:[], cols:cols.map(()=>[])};
+  idx.forEach(i=>{
+    const last=out.t.length-1;
+    if(last>=0 && out.t[last]===T[i]) cols.forEach((col,k)=>{ if(col[i]!==null) out.cols[k][last]=col[i]; });
+    else { out.t.push(T[i]); cols.forEach((col,k)=>out.cols[k].push(col[i])); }
+  });
+  return out;
+}
+// Per-minute grid with the overlapping windows merged. k0[c] = floor(T/60 s) of capture c, so the minute of row r of capture c
+// is k0[c]-r and it ends at (k0[c]-r)*60000. Captures must be in ascending time order: for the same (core, minute) the most
+// recent capture wins; a missing value never replaces a real one.
+function minuteGrid(k0, flats, nc){
+  if(!(nc>=1)) return {t:[], cols:[]};
+  const m=new Map();
+  for(let c=0;c<k0.length;c++){
+    const f=flats[c]; if(!f || !isNum(k0[c])) continue; const n=Math.floor(f.length/nc);
+    for(let r=0;r<n;r++){
+      const key=k0[c]-r; let row=m.get(key); if(!row){ row=new Array(nc).fill(null); m.set(key,row); }
+      for(let k=0;k<nc;k++){ const v=f[r*nc+k]; if(isNum(v)) row[k]=v; }
+    }
+  }
+  const keys=Array.from(m.keys()).sort((a,b)=>a-b);
+  return {t:keys.map(k=>k*REC_M), cols:Array.from({length:nc},(_,k)=>keys.map(key=>m.get(key)[k]))};
+}
+const gridCol = (g, k) => g.t.map((t,i)=>({t, v:g.cols[k][i]}));
+// The busiest core at each time of a grid (maximum over the cores; null when no core has a value).
+function gridMax(g){
+  return g.t.map((t,i)=>{ let mx=null; for(let k=0;k<g.cols.length;k++){ const v=g.cols[k][i]; if(isNum(v) && (mx===null || v>mx)) mx=v; } return {t, v:mx}; });
+}
+// Several series of {t,v} merged into one with the maximum at each timestamp (the ALL series of a percentage).
+function mergeMax(lists){
+  const m=new Map();
+  lists.forEach(d=>d.forEach(p=>{ if(!m.has(p.t)) m.set(p.t, null); if(isNum(p.v) && (m.get(p.t)===null || p.v>m.get(p.t))) m.set(p.t, p.v); }));
+  return Array.from(m.keys()).sort((a,b)=>a-b).map(t=>({t, v:m.get(t)}));
+}
+const hasReal = a => !!a && a.some(isNum);
+// Session table utilization of one DP: the per-second resource values where the capture has them, else the target-dp reading
+// (fb[c], one point at the capture time).
+function sessionSeries(ts, arrs, fb){
+  const g=secondGrid(ts, arrs.map(a=>hasReal(a)?a:null), 1), d=gridCol(g, 0);
+  for(let c=0;c<ts.length;c++) if(!hasReal(arrs[c]) && isNum(fb[c])) d.push({t:ts[c], v:fb[c]});
+  return d.sort((a,b)=>a.t-b.t);
+}
+// The packet buffer / descriptor kinds of the combined 'hpkt' metric: [internal series key (see dpMetric), label, colour].
+const PKT_KINDS = [['hpb_avg','Packet buffer (avg)','#1f6f8b'], ['hpb_max','Packet buffer (max)','#c2410c'],
+                   ['hpd_max','Packet descriptor (max)','#7c3aed'], ['hpdc_max','Packet descriptor on-chip (max)','#2f855a']];
+// The kinds that have at least one real value for one DP; get(key) returns the [{t,v}] points of a kind.
+const pktKinds = get => PKT_KINDS.filter(k=>hasReal(get(k[0]).map(p=>p.v)));
+// The metric keys present in the health detail ({by_dp}); absent metrics are not listed.
+function dphAvail(detail, dps){
+  const any = fn => dps.some(dp=>{ const d=detail.by_dp[dp]; return !!d && fn(d); });
+  const has = arr => !!arr && arr.some(x=>hasReal(Array.isArray(x)?x:[x]));
+  const out=[];
+  if(any(d=>d.us && has(d.us.sess))) out.push('util');
+  if(any(d=>(d.um && has(d.um.pb_avg)) || (d.us && (has(d.us.pb) || has(d.us.pd) || has(d.us.pdc))))) out.push('hpkt');
+  if(any(d=>has(d.cs))) out.push('hcore_s', 'pc_s');
+  if(any(d=>has(d.cmm))) out.push('hcore_mm', 'pc_mm');
+  if(any(d=>has(d.cma))) out.push('pc_ma');
+  return out;
+}
+// Heatmap buckets (see docs/tsf/charts.md). g = a core grid {t, cols} whose cell j covers the dur ms ending at t[j]. The range
+// [x0,x1] is split into nb equal buckets; every bucket of every core holds the MAXIMUM of the cells that overlap it (null = no
+// data, never 0), so a cell longer than a bucket fills all the buckets it covers.
+function hmBucket(g, dur, x0, x1, nb){
+  const nc=g.cols.length, cells=Array.from({length:nc},()=>new Array(Math.max(0,nb)).fill(null)), span=x1-x0;
+  if(!(span>0) || !(nb>=1)) return cells;
+  const bw=span/nb;
+  for(let j=0;j<g.t.length;j++){
+    const b=g.t[j], a=b-dur; if(b<=x0 || a>=x1) continue;
+    let i0=Math.floor((a-x0)/bw), i1=Math.ceil((b-x0)/bw)-1;
+    if(i0<0) i0=0; if(i1>=nb) i1=nb-1; if(i1<i0) i1=i0;
+    for(let k=0;k<nc;k++){
+      const v=g.cols[k][j]; if(!isNum(v)) continue; const row=cells[k];
+      for(let i=i0;i<=i1;i++) if(row[i]===null || v>row[i]) row[i]=v;
+    }
+  }
+  return cells;
+}
+// The peak of every core over the cells that overlap [x0,x1] (null when the core has no value there).
+function hmPeaks(g, dur, x0, x1){
+  return g.cols.map(col=>{ let mx=null; for(let j=0;j<g.t.length;j++){ const v=col[j]; if(isNum(v) && g.t[j]>x0 && g.t[j]-dur<x1 && (mx===null || v>mx)) mx=v; } return mx; });
+}
+// DPH-HELPERS-END
+const HAVAIL = HD ? dphAvail(HD, HDPS) : [];
 
 // reusable chart
 // Chart height follows the window height: 360px (the 1080p size) up to 720px on 4K.
@@ -323,11 +635,11 @@ function makeChart(svg, tip, wrap){
   const el=(n,a)=>{const e=document.createElementNS(NS,n); for(const k in a) e.setAttribute(k,a[k]); svg.appendChild(e); return e;};
   const niceMax=v=>{ if(v<=0) return 1; const p=Math.pow(10,Math.floor(Math.log10(v))), n=v/p; return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p; };
   function draw(series,o){
-    const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=16,T=12,B=34, u=o.u;
+    const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=o.R||16,T=12,B=34, u=o.u;
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
-    const all=series.flatMap(s=>s.d.map(p=>p.v));
-    const x0=state.range[0]!==null?state.range[0]:TMIN, x1=state.range[1]!==null?state.range[1]:TMAX;
-    let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.cap) ymax=Math.min(ymax,o.cap);
+    const all=series.flatMap(s=>realPts(s.d).map(p=>p.v));
+    const x0=state.range[0]!==null?state.range[0]:(o.t0!==undefined?o.t0:TMIN), x1=state.range[1]!==null?state.range[1]:(o.t1!==undefined?o.t1:TMAX);
+    let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.top) ymax=Math.max(ymax,o.top); if(o.cap) ymax=Math.min(ymax,o.cap);
     const X=t=>L+(x1===x0?0.5:(t-x0)/(x1-x0))*(W-L-R), Y=v=>T+(1-v/u.div/ymax)*(H-T-B);
     view={W,L,R,T,B,x0,x1,X,u};
     for(let i=0;i<=5;i++){
@@ -345,10 +657,15 @@ function makeChart(svg, tip, wrap){
       const tx=el('text',{x:x,y:H-B+17,'text-anchor':i===0?'start':i===6?'end':'middle','font-size':11,fill:'#5d6b7a'}); tx.textContent=lab;
     }
     el('line',{x1:L,x2:W-R,y1:H-B,y2:H-B,stroke:'#5d6b7a'});
+    (o.lines||[]).forEach(l=>{ if(l.v>ymax*u.div) return; const y=Y(l.v*u.div); el('line',{x1:L,x2:W-R,y1:y,y2:y,stroke:l.color,'stroke-width':1.2,'stroke-dasharray':'6 4'}); const t=el('text',{x:W-R-4,y:y-4,'text-anchor':'end','font-size':11,fill:l.color}); t.textContent=l.label; });
     series.forEach(s=>{
-      if(!s.d.length) return;
-      el('polyline',{points:s.d.map(p=>X(p.t).toFixed(1)+','+Y(p.v).toFixed(1)).join(' '),fill:'none',stroke:s.color,'stroke-width':s.w||1.6,'stroke-linejoin':'round'});
-      if(s.d.length<=80) s.d.forEach(p=>el('circle',{cx:X(p.t),cy:Y(p.v),r:2.6,fill:s.color}));
+      const real=realPts(s.d); if(!real.length) return;
+      const runs=chartRuns(s.d,x0,x1,W-L-R);
+      const dd=runs.map(r=>r.length>1?r.map((p,i)=>(i?'L':'M')+X(p.t).toFixed(1)+','+Y(p.v).toFixed(1)).join(''):'').join('');
+      if(dd) el('path',{d:dd,fill:'none',stroke:s.color,'stroke-width':s.w||1.6,'stroke-linejoin':'round'});
+      // isolated samples (both neighbours missing or too far) have no line: draw them as dots; short series get a dot per sample
+      if(real.length<=80) real.forEach(p=>el('circle',{cx:X(p.t),cy:Y(p.v),r:2.6,fill:s.color}));
+      else runs.forEach(r=>{ if(r.length===1) el('circle',{cx:X(r[0].t),cy:Y(r[0].v),r:2.2,fill:s.color}); });
     });
     if(!all.length){ const t=el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'#5d6b7a'}); t.textContent='No data to display'; }
     view.sel=el('rect',{y:T,height:H-T-B,fill:'rgba(31,111,139,.15)',stroke:'#1f6f8b',display:'none'});
@@ -365,10 +682,12 @@ function makeChart(svg, tip, wrap){
       const x=px(e);
       if(drag!==null){ view.sel.setAttribute('display',''); view.sel.setAttribute('x',Math.min(drag,x)); view.sel.setAttribute('width',Math.abs(x-drag)); tip.style.display='none'; return; }
       const t=tOf(x); let best=null,bd=Infinity;
-      series.forEach(s=>s.d.forEach(p=>{const d=Math.abs(p.t-t); if(d<bd){bd=d;best=p.t;}}));
+      series.forEach(s=>s.d.forEach(p=>{if(!isNum(p.v)) return; const d=Math.abs(p.t-t); if(d<bd){bd=d;best=p.t;}}));
       if(best===null){tip.style.display='none'; return;}
       const cx=view.X(best); view.cur.setAttribute('x1',cx); view.cur.setAttribute('x2',cx); view.cur.setAttribute('display','');
-      const rows=series.map(s=>{const p=s.d.find(z=>z.t===best); return p?'<div><span class="sw" style="background:'+s.color+'"></span> '+s.name+': '+fmt(p.v,view.u.div)+' '+view.u.unit+'</div>':'';}).join('');
+      const ents=[]; series.forEach(s=>{const p=s.d.find(z=>z.t===best&&isNum(z.v)); if(p) ents.push({s,p});});
+      const shown=ents.length>12?ents.slice().sort((a,b)=>b.p.v-a.p.v).slice(0,12):ents;   // many series (cores): the 12 highest
+      const rows=shown.map(e=>'<div><span class="sw" style="background:'+e.s.color+'"></span> '+e.s.name+': '+fmt(e.p.v,view.u.div)+' '+view.u.unit+'</div>').join('')+(ents.length>shown.length?'<div>+'+(ents.length-shown.length)+' more (lower values)</div>':'');
       tip.innerHTML='<div>'+iso(best)+' UTC</div>'+rows; tip.style.display='block';
       const r=svg.getBoundingClientRect(); let left=(cx/view.W)*r.width+12; if(left>r.width-190) left-=210;
       tip.style.left=left+'px'; tip.style.top='12px';
@@ -379,7 +698,7 @@ function makeChart(svg, tip, wrap){
       if(Math.abs(x-a)>6) setRange(Math.round(tOf(Math.min(a,x))),Math.round(tOf(Math.max(a,x)))); else view.sel.setAttribute('display','none');
     };
   }
-  return {draw};
+  return {draw, view:()=>view};
 }
 const chart=makeChart($('#chart'),$('#tip'),$('#chartwrap'));
 const gchart=hasG?makeChart($('#gchart'),$('#gtip'),$('#gwrap')):null;
@@ -389,28 +708,96 @@ function statsTable(t, series, u){
   const hd=t.createTHead().insertRow(); ['Series','Samples','Min','Avg','Max','Time of maximum (UTC)'].forEach(h=>{const c=document.createElement('th'); c.textContent=h; hd.appendChild(c);});
   const tb=t.createTBody();
   series.forEach(s=>{
-    if(!s.d.length) return;
-    const v=s.d.map(p=>p.v), mx=maxOf(v), at=s.d.find(p=>p.v===mx).t;
-    const r=tb.insertRow(); [s.name,s.d.length,fmt(minOf(v),u.div)+' '+u.unit,fmt(v.reduce((a,b)=>a+b,0)/v.length,u.div)+' '+u.unit,fmt(mx,u.div)+' '+u.unit,iso(at)].forEach(x=>{r.insertCell().textContent=x;});
+    const real=realPts(s.d); if(!real.length) return;   // all real samples, never the reduced ones
+    const v=real.map(p=>p.v), mx=maxOf(v), at=real.find(p=>p.v===mx).t;
+    const r=tb.insertRow(); [s.name,real.length,fmt(minOf(v),u.div)+' '+u.unit,fmt(v.reduce((a,b)=>a+b,0)/v.length,u.div)+' '+u.unit,fmt(mx,u.div)+' '+u.unit,iso(at)].forEach(x=>{r.insertCell().textContent=x;});
   });
 }
 
 // grafico principale
-const visibleSeries=()=>D.series.filter(s=>!state.hidden.has(s));
+const visibleSeries=()=>SERIES.filter(s=>!state.hidden.has(s));
+const isCoreMetric=()=>METRICS[state.metric].h==='core';
+const isPktMetric=()=>METRICS[state.metric].h==='pkt';
+const usesHealth=()=>!!METRICS[state.metric].h || (state.metric==='util' && HAVAIL.includes('util'));
+// Health grids and series are built once per DP and kept (a metric switch only filters them by the zoom range).
+const gridMemo={}, dpMemo={};
+function coreGrid(dp, g){
+  const key=dp+'#'+g; if(gridMemo[key]) return gridMemo[key];
+  const d=HD.by_dp[dp], ts=DH.series[dp].t, nc=DH.cores[dp].ids.length;
+  return gridMemo[key]=(g==='s' ? secondGrid(ts, d.cs, nc) : minuteGrid(d.k0, g==='mm'?d.cmm:d.cma, nc));
+}
+function dpMetric(dp, m){
+  const d=HD.by_dp[dp], ts=DH.series[dp].t, S=DH.series[dp], one=g=>gridCol(g,0), us=d.us||{}, um=d.um||{};
+  switch(m){
+    case 'util': return sessionSeries(ts, us.sess||ts.map(()=>null), S.sess.map((v,i)=>S.sess_src[i]==='tdp'?v:null));
+    case 'hpb_avg': return one(minuteGrid(d.k0, um.pb_avg||[], 1));
+    case 'hpb_max': return one(secondGrid(ts, us.pb||[], 1));
+    case 'hpd_max': return one(secondGrid(ts, us.pd||[], 1));
+    case 'hpdc_max': return one(secondGrid(ts, us.pdc||[], 1));
+    case 'hcore_s': return gridMax(coreGrid(dp,'s'));
+    case 'hcore_mm': return gridMax(coreGrid(dp,'mm'));
+  }
+  return [];
+}
+// Whole-period points of one DP series (or ALL = maximum across the DPs) of a health metric, not filtered by the zoom.
+function dpFull(name, m){
+  const key=name+'|'+m; if(dpMemo[key]) return dpMemo[key];
+  let d;
+  if(name==='ALL') d=mergeMax(SERIES.filter(x=>x!=='ALL').map(x=>dpFull(x,m)));
+  else if(HD && HD.by_dp[name]) d=dpMetric(name, m);
+  else if(m==='util') d=D.samples.filter(x=>x.dp===name).map(x=>({t:x.t, v:isNum(x.util)?x.util:null}));
+  else d=[];
+  return dpMemo[key]=d;
+}
+function coreSeriesList(){
+  const dp=state.hdp; if(!dp || !HD || !HD.by_dp[dp]) return [];
+  const ids=DH.cores[dp].ids, g=coreGrid(dp, METRICS[state.metric].g), out=[];
+  ids.forEach((id,k)=>{
+    const name='core '+id; if(state.hiddenCores.has(name)) return;
+    const d=[]; for(let i=0;i<g.t.length;i++){ const t=g.t[i]; if(inRange(t)) d.push({t, v:g.cols[k][i]}); }
+    out.push({name, color:coreColor(k), w:1.2, d});
+  });
+  return out;
+}
+// The kinds of the combined packet metric that have data for the selected DP, with their whole-period points.
+function pktAvail(){
+  const dp=state.hdp; if(!dp || !HD || !HD.by_dp[dp]) return [];
+  return pktKinds(m=>dpFull(dp,m)).map(k=>({key:k[0], name:k[1], color:k[2]}));
+}
+function pktSeriesList(){
+  return pktAvail().filter(k=>!state.hiddenPkt.has(k.name)).map(k=>({name:k.name, color:k.color, w:1.6, d:dpFull(state.hdp,k.key).filter(p=>inRange(p.t))}));
+}
 function mainSeries(){
+  if(isCoreMetric()) return coreSeriesList();
+  if(isPktMetric()) return pktSeriesList();
+  if(usesHealth()) return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,d:dpFull(s,state.metric).filter(p=>inRange(p.t))}));
   return visibleSeries().map(s=>({name:s,color:colors[s],w:s==='ALL'?2.2:1.6,
-    d:D.samples.filter(x=>x.dp===s&&x[state.metric]!==null&&x[state.metric]!==undefined&&inRange(x.t)).map(x=>({t:x.t,v:x[state.metric]}))}));
+    d:D.samples.filter(x=>x.dp===s&&inRange(x.t)).map(x=>({t:x.t,v:isNum(x[state.metric])?x[state.metric]:null}))}));   // a missing value stays in d as null (breaks the line)
 }
 function mainUnit(ser){
-  const vals=ser.flatMap(s=>s.d.map(p=>p.v));
+  const vals=ser.flatMap(s=>realPts(s.d).map(p=>p.v));
   return state.metric==='kbps'?scaleFor(vals):{div:1,unit:METRICS[state.metric].unit};
 }
-function drawMain(){ const ser=mainSeries(), u=mainUnit(ser); chart.draw(ser,{label:METRICS[state.metric].label,u}); statsTable($('#stats'),ser,u); }
+// Time extent of a health metric over the whole period (the reconstructed times reach back before the first capture).
+function healthExtent(){
+  let lo=Infinity, hi=-Infinity;
+  const take = d => { if(d.length){ lo=Math.min(lo,d[0].t); hi=Math.max(hi,d[d.length-1].t); } };
+  if(isCoreMetric()){ const dp=state.hdp; if(dp && HD && HD.by_dp[dp]) take(coreGrid(dp, METRICS[state.metric].g).t.map(t=>({t}))); }
+  else if(isPktMetric()) pktAvail().forEach(k=>take(dpFull(state.hdp,k.key)));
+  else SERIES.filter(x=>x!=='ALL').forEach(x=>take(dpFull(x,state.metric)));
+  return lo<=hi ? [lo,hi] : null;
+}
+function drawMain(){
+  const ser=mainSeries(), u=mainUnit(ser), o={label:METRICS[state.metric].label,u};
+  if(HD && hmShown()) o.R=hmRight();   // same plot width as the CPU per core heatmap below
+  if(usesHealth()){ o.cap=100; const e=healthExtent(); if(e){ o.t0=e[0]; o.t1=e[1]; } }
+  chart.draw(ser,o); statsTable($('#stats'),ser,u);
+}
 
 // CPU by group chart
 function groupSeries(){
   return D.groups.map((n,i)=>({name:n,color:GCOL[i],w:1.5,i})).filter(s=>!gs.hidden.has(s.name)).map(s=>({name:s.name,color:s.color,w:s.w,
-    d:D.samples.filter(x=>x.dp===gs.dp&&x.g&&x.g[s.i]!==null&&x.g[s.i]!==undefined&&inRange(x.t)).map(x=>({t:x.t,v:x.g[s.i]}))}));
+    d:D.samples.filter(x=>x.dp===gs.dp&&inRange(x.t)).map(x=>({t:x.t,v:x.g&&isNum(x.g[s.i])?x.g[s.i]:null}))}));
 }
 function drawGroups(){
   if(!hasG) return;
@@ -419,10 +806,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); renderCoreTable(); } else if(activeTab==='cpu') drawGroups();  else if(activeTab==='mp' && hasMp) renderMp(); else if(activeTab==='sys' && hasSys) renderSys(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','pow'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','mp','sys','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -435,17 +822,38 @@ function setRange(a,b,fromInput){
 // controlli
 const msel=$('#metric');
 Object.keys(METRICS).filter(hasMetric).forEach(k=>{const o=document.createElement('option'); o.value=k; o.textContent=METRICS[k].label; msel.appendChild(o);});
-msel.onchange=()=>{state.metric=msel.value; drawMain();};
+if(msel.options.length && !hasMetric(state.metric)) state.metric=msel.options[0].value;
+msel.value=state.metric;
+HDPS.forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v; $('#hdp').appendChild(o);});
+state.hdp=HDPS[0]||null;
+// Legend: one entry per DP series, or (CPU per core metrics) one per core of the selected DP with All/None.
+let coreBoxes=[];
+function buildLegend(){
+  const host=$('#leg'); host.replaceChildren(); coreBoxes=[];
+  if(isCoreMetric() && state.hdp && HD && HD.by_dp[state.hdp]) DH.cores[state.hdp].ids.forEach((id,k)=>coreBoxes.push(legendItem(host,'core '+id,coreColor(k),state.hiddenCores,drawMain)));
+  else if(isPktMetric()) pktAvail().forEach(k=>legendItem(host,k.name,k.color,state.hiddenPkt,drawMain));
+  else if(!isCoreMetric()) SERIES.forEach(s=>legendItem(host,s,colors[s],state.hidden,drawMain));
+}
+function syncMetricUi(){
+  const core=isCoreMetric();
+  $('#hdpwrap').style.display=(core||isPktMetric())&&HDPS.length>1?'':'none';
+  $('#corebtns').style.display=core?'':'none';
+  buildLegend();
+}
+msel.onchange=()=>{state.metric=msel.value; syncMetricUi(); drawMain();};
+$('#hdp').onchange=()=>{state.hdp=$('#hdp').value; buildLegend(); drawMain();};
+$('#call').onclick=()=>{state.hiddenCores.clear(); coreBoxes.forEach(b=>b.checked=true); drawMain();};
+$('#cnone').onclick=()=>{ if(state.hdp&&HD) DH.cores[state.hdp].ids.forEach(id=>state.hiddenCores.add('core '+id)); coreBoxes.forEach(b=>b.checked=false); drawMain();};
 const fdp=$('#fdp');
-[''].concat(D.series).forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v||'All'; fdp.appendChild(o);});
-fdp.onchange=()=>{state.dp=fdp.value; renderTable();};
+[''].concat(SERIES).forEach(v=>{const o=document.createElement('option'); o.value=v; o.textContent=v||'All'; fdp.appendChild(o);});
+fdp.onchange=()=>{state.dp=fdp.value; renderTable(); renderCoreTable();};
 function legendItem(host,name,color,hiddenSet,onchange){
   const l=document.createElement('label'), c=document.createElement('input'); c.type='checkbox'; c.checked=!hiddenSet.has(name);
   c.onchange=()=>{c.checked?hiddenSet.delete(name):hiddenSet.add(name); onchange();};
   const sw=document.createElement('span'); sw.className='sw'; sw.style.background=color;
   l.append(c,sw,GL.names[name]?glName(name):document.createTextNode(name)); host.appendChild(l); return c;
 }
-D.series.forEach(s=>legendItem($('#leg'),s,colors[s],state.hidden,drawMain));
+syncMetricUi();
 $('#reset').onclick=()=>setRange(null,null);
 $('#q').oninput=e=>{state.q=e.target.value.toLowerCase(); renderTable();};
 $('#t0').onchange=()=>{const v=$('#t0').value; setRange(v?Date.parse(v+':00Z'):null,state.range[1],true);};
@@ -461,8 +869,19 @@ if(hasG){
   $('#gnone').onclick=()=>{D.groups.forEach(n=>gs.hidden.add(n)); boxes.forEach(b=>b.checked=false); drawGroups();};
   $('#gcol').onchange=()=>{state.showG=$('#gcol').checked; renderTable();};
 }
+if(hasDph){ $('#hcolwrap').style.display=''; $('#hcol').onchange=()=>{state.showH=$('#hcol').checked; renderTable();}; }
 
 // table
+// Rows: the dp-monitor samples, plus one row per health capture that has no sample. Health columns are looked up by (DP, time).
+const HIDX={};
+const ROWS=D.samples.slice();
+if(hasDph){
+  DH.dps.forEach(dp=>{ const m=new Map(); DH.series[dp].t.forEach((t,i)=>m.set(t,i)); HIDX[dp]=m; });
+  const have=new Set(D.samples.map(s=>s.dp+'|'+s.t));
+  DH.dps.forEach(dp=>DH.series[dp].t.forEach(t=>{ if(!have.has(dp+'|'+t)) ROWS.push({t, dp, kbps:null, pps:null, cps:null, sess:null, util:null, src:'', g:null}); }));
+}
+const HCOLS=[['pb_avg','Packet buffer avg (%)','packet_buffer_avg_pct'],['pb_max','Packet buffer max (%)','packet_buffer_max_pct'],['pd_max','Packet descriptor max (%)','packet_descriptor_max_pct'],['core_max','Busiest core per-second (%)','busiest_core_per_second_pct'],['core_m_max','Busiest core per-minute max (%)','busiest_core_per_minute_max_pct']];
+function hVal(s,key){ const m=HIDX[s.dp]; if(!m) return null; const i=m.get(s.t); if(i===undefined) return null; const v=DH.series[s.dp][key][i]; return isNum(v)?v:null; }
 const num=v=>v===null||v===undefined?'':v.toLocaleString('en-US');
 function cols(){
   const c=[
@@ -476,11 +895,12 @@ function cols(){
     {k:'util',l:'Session utilization (%)',get:s=>s.util,f:s=>s.util===null?'':s.util}
   ];
   if(state.showG) D.groups.forEach((n,i)=>c.push({k:'g'+i,l:n+' (%)',get:s=>s.g?s.g[i]:null,f:s=>s.g&&s.g[i]!==null?s.g[i]:''}));
+  if(state.showH) HCOLS.forEach(h=>c.push({k:'h_'+h[0],l:h[1],get:s=>hVal(s,h[0]),f:s=>{const v=hVal(s,h[0]); return v===null?'':v;}}));
   c.push({k:'src',l:'Source file',get:s=>s.src,f:s=>s.src});
   return c;
 }
 function filtered(){
-  const rows=D.samples.filter(s=>inRange(s.t)&&(!state.dp||s.dp===state.dp)&&(!state.q||(iso(s.t)+' '+s.dp+' '+s.src+' '+s.kbps).toLowerCase().includes(state.q)));
+  const rows=ROWS.filter(s=>inRange(s.t)&&(!state.dp||s.dp===state.dp)&&(!state.q||(iso(s.t)+' '+s.dp+' '+s.src+' '+s.kbps).toLowerCase().includes(state.q)));
   const c=cols().find(x=>x.k===state.sort.k)||cols()[0], d=state.sort.dir;
   return rows.sort((a,b)=>{const x=c.get(a),y=c.get(b); if(x===y) return a.t-b.t; if(x===null||x===undefined) return 1; if(y===null||y===undefined) return -1; return (x<y?-1:1)*d;});
 }
@@ -498,10 +918,14 @@ function renderTable(){
   if(rows.length>lim){ m.textContent='Showing the first '+lim+' rows. '; const b=document.createElement('button'); b.type='button'; b.textContent='Show all'; b.onclick=()=>{state.all=true; renderTable();}; m.appendChild(b); }
 }
 $('#csv').onclick=()=>{
+  // The exported columns follow the visible ones: the optional CPU by group and dataplane health columns only when shown.
   const rows=filtered(), q=v=>'"'+String(v).replace(/"/g,'""')+'"', nz=v=>v===null||v===undefined?'':v;
-  const lines=[['datetime_utc','dp','throughput_kbps','packet_rate_pps','cps','allocated_sessions','session_utilization_pct'].concat(D.groups.map(n=>'cpu_'+n),['source_file']).join(',')];
-  rows.forEach(s=>lines.push([q(iso(s.t)),q(s.dp),nz(s.kbps),nz(s.pps),nz(s.cps),nz(s.sess),nz(s.util)].concat(D.groups.map((n,i)=>s.g?nz(s.g[i]):''),[q(s.src)]).join(',')));
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
+  const head=['datetime_utc','dp','throughput_kbps','packet_rate_pps','cps','allocated_sessions','session_utilization_pct']
+    .concat(state.showG?D.groups.map(n=>'cpu_'+n):[], state.showH?HCOLS.map(h=>h[2]):[], ['source_file']);
+  const lines=[head.join(',')];
+  rows.forEach(s=>lines.push([q(iso(s.t)),q(s.dp),nz(s.kbps),nz(s.pps),nz(s.cps),nz(s.sess),nz(s.util)]
+    .concat(state.showG?D.groups.map((n,i)=>s.g?nz(s.g[i]):''):[], state.showH?HCOLS.map(h=>nz(hVal(s,h[0]))):[], [q(s.src)]).join(',')));
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));
   a.download=D.name+'_throughput.csv'; a.click(); URL.revokeObjectURL(a.href);
 };
 
@@ -743,12 +1167,494 @@ if(hasPow){
 
 '''
 
+# Interface Errors tab (show counter interface all, show interface ...).
+JS_IFC = r'''// Interface Errors tab (interface counters, link state, cross-check with the global counters)
+const IF = D.ifc || null;
+const hasIfc = !!IF;
+const ifState = {q:'', kind:'', issues:true, sort:{k:'order', dir:1}};
+const ifLevel = r => r.flags.some(f=>f.level==='crit') ? 'crit' : (r.flags.some(f=>f.level==='warn') ? 'warn' : '');
+const ifNum = v => v===null||v===undefined ? '' : v.toLocaleString('en-US');
+function ifCols(){
+  const c = [
+    {k:'order', l:'Interface', fk:'if:interface', left:true, get:r=>r.order, f:r=>r.name, name:true},
+    {k:'kind', l:'Type', fk:'if:type', left:true, get:r=>r.kind, f:r=>r.kind},
+    {k:'link', l:'Link', fk:'if:link', left:true, get:r=>r.link_txt, f:r=>r.link_txt},
+    {k:'zone', l:'Zone', fk:'if:zone', left:true, get:r=>r.zone, f:r=>r.zone},
+    {k:'ip', l:'Address', fk:'if:ip', left:true, get:r=>r.ip, f:r=>r.ip},
+    {k:'rx_pkts', l:'rx packets', fk:'if:rx_pkts', get:r=>r.rx_pkts, f:r=>ifNum(r.rx_pkts)},
+    {k:'tx_pkts', l:'tx packets', fk:'if:tx_pkts', get:r=>r.tx_pkts, f:r=>ifNum(r.tx_pkts)},
+    {k:'rx_bytes', l:'rx bytes', fk:'if:rx_bytes', get:r=>r.rx_bytes, f:r=>ifNum(r.rx_bytes)},
+    {k:'tx_bytes', l:'tx bytes', fk:'if:tx_bytes', get:r=>r.tx_bytes, f:r=>ifNum(r.tx_bytes)}
+  ];
+  IF.groups.forEach(g=>g.cols.forEach(x=>c.push({k:g.id+':'+x.k, l:x.k, gl:x.gl, grp:g.id, counter:true, get:r=>(r[g.id]||{})[x.k]||0, f:r=>ifNum((r[g.id]||{})[x.k]||0)})));
+  c.push({k:'drop_pct', l:'Drop %', fk:'if:drop_pct', get:r=>r.drop_pct, f:r=>r.drop_pct===null?'':r.drop_pct.toFixed(2)});
+  c.push({k:'flags', l:'Flags', fk:'if:flags', left:true, get:r=>r.flags.length, f:null});
+  return c;
+}
+function ifFiltered(){
+  const q = ifState.q;
+  return IF.rows.filter(r=>(!ifState.issues || r.issue)
+    && (!ifState.kind || r.kind===ifState.kind)
+    && (!q || (r.name+' '+r.zone+' '+r.ip+' '+r.kind+' '+r.flags.map(f=>f.code).join(' ')).toLowerCase().includes(q)));
+}
+function ifTable(){
+  const C = ifCols(), t = $('#itbl'), st = ifState.sort;
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  C.forEach(c=>{
+    const th = document.createElement('th'); th.textContent = c.l + (st.k===c.k ? (st.dir>0?' ▲':' ▼') : ''); th.tabIndex = 0;
+    if(c.left) th.classList.add('tl');
+    if(c.grp) th.classList.add('g-'+c.grp);
+    if(c.counter) glTag(th, c.gl, false); else glTag(th, c.fk, true);
+    const go = ()=>{ ifState.sort = st.k===c.k ? {k:c.k, dir:-st.dir} : {k:c.k, dir:(c.left?1:-1)}; renderIfc(); };
+    th.onclick = go; th.onkeydown = e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
+    hr.appendChild(th);
+  });
+  const sc = C.find(x=>x.k===st.k) || C[0];
+  const rows = ifFiltered().sort((a,b)=>{
+    const x = sc.get(a), y = sc.get(b);
+    if(x===y) return a.order-b.order;
+    if(x===null||x===undefined) return 1;
+    if(y===null||y===undefined) return -1;
+    return (x<y?-1:1)*st.dir;
+  });
+  const tb = t.createTBody();
+  rows.forEach(r=>{
+    const tr = tb.insertRow(), lv = ifLevel(r);
+    if(lv) tr.className = 'anom-'+lv;
+    C.forEach(c=>{
+      const td = tr.insertCell();
+      if(c.left) td.classList.add('tl');
+      if(c.f===null){
+        r.flags.forEach(f=>{ const s = document.createElement('span'); s.className = 'badge b-'+f.level; s.textContent = f.code; s.title = f.text; td.appendChild(s); });
+      } else if(c.counter){
+        const v = c.get(r); td.textContent = v ? ifNum(v) : '·'; td.classList.add(v ? 'nzc' : 'zc');
+      } else td.textContent = c.f(r);
+    });
+  });
+  $('#imeta').textContent = rows.length+' of '+IF.rows.length+' interfaces shown'+(ifState.issues?' (only those with issues)':'');
+}
+function ifSimpleTable(t, head, rows, fill){
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); });
+}
+function renderIfcStatic(){
+  const S = IF.system;
+  ifSimpleTable($('#isys'), ['Hostname','Model','PAN-OS','Uptime','Captured'], [S], (tr,s)=>{
+    [s.hostname||'unknown', s.model||'unknown', s.sw_version||'unknown', s.uptime ? s.uptime+' ('+s.uptime_text+')' : 'unknown', s.collected_at||'unknown'].forEach(x=>{ tr.insertCell().textContent = x; });
+  });
+  const ul = $('#ibanner'); ul.replaceChildren();
+  if(!IF.banner.length){ const li = document.createElement('li'); li.textContent = 'No interface flags with the current thresholds.'; ul.appendChild(li); }
+  IF.banner.forEach(b=>{ const li = document.createElement('li'); li.className = 'lvl-'+b.level; li.textContent = b.text; ul.appendChild(li); });
+  $('#idown').textContent = IF.down_ports.length ? 'Down ports with no traffic: '+IF.down_ports.join(', ')+'.' : '';
+  if(IF.warnings.length){
+    $('#iwarn').style.display = ''; $('#iwarnsum').textContent = IF.warnings.length+' warnings while parsing the interface output';
+    IF.warnings.forEach(w=>{ const li = document.createElement('li'); li.textContent = w; $('#iwarnlist').appendChild(li); });
+  }
+  const leg = $('#igleg'); leg.replaceChildren();
+  IF.groups.filter(g=>g.cols.length).forEach(g=>{
+    const sq = document.createElement('span'); sq.className = 'legsq'; sq.style.background = g.id==='phys'?'#b42318':g.id==='cpu'?'#a15c00':'#1f6f8b';
+    leg.append(sq, document.createTextNode(g.label+' counters'));
+  });
+  if(!leg.childNodes.length) leg.textContent = 'No non-zero error counters.';
+  const ks = Array.from(new Set(IF.rows.map(r=>r.kind))), sel = $('#ikind');
+  [''].concat(ks).forEach(v=>{ const o = document.createElement('option'); o.value = v; o.textContent = v||'All'; sel.appendChild(o); });
+  // cross-check
+  $('#ixmsg').textContent = IF.crosscheck.length ? '' : 'No cross-check available (the output has no show counter global, or all counters are zero).';
+  ifSimpleTable($('#ixchk'), ['Counter','Sum over interfaces','Global counter(s)','Global value','Difference','Status'], IF.crosscheck, (tr,x)=>{
+    tr.insertCell().appendChild(glName(x.counter));
+    tr.insertCell().textContent = ifNum(x.interface_sum);
+    const c = tr.insertCell(); c.style.textAlign = 'left'; x.globals.forEach((g,i)=>{ if(i) c.appendChild(document.createTextNode(' + ')); c.appendChild(glName(g.name)); });
+    tr.insertCell().textContent = x.globals.map(g=>g.value===null?'n/a':ifNum(g.value)).join(' + ')+(x.globals.length>1?' = '+ifNum(x.global_sum):'');
+    tr.insertCell().textContent = (x.diff>0?'+':'')+ifNum(x.diff);
+    const s = tr.insertCell(); s.textContent = x.status; s.title = x.note; s.style.textAlign = 'left';
+    if(x.status==='differs') tr.className = 'anom-warn';
+  });
+  ifSimpleTable($('#ictx'), ['Global counter','Value','Description'], IF.context, (tr,c)=>{
+    tr.insertCell().appendChild(glName(c.name)); tr.insertCell().textContent = ifNum(c.value);
+    const d = tr.insertCell(); d.textContent = c.description; d.style.textAlign = 'left';
+  });
+  const ex = $('#iextra'); ex.replaceChildren();
+  if(IF.transceivers && IF.transceivers.rows.length){
+    const d = document.createElement('details'); d.open = true; const sm = document.createElement('summary'); sm.textContent = 'Transceivers ('+IF.transceivers.rows.length+')'; d.appendChild(sm);
+    const t = document.createElement('table'); t.className = 'stats'; d.appendChild(t); ex.appendChild(d);
+    ifSimpleTable(t, IF.transceivers.header, IF.transceivers.rows, (tr,r)=>{ r.forEach(x=>{ tr.insertCell().textContent = x; }); });
+  }
+  if(IF.lacp.length){
+    const d = document.createElement('details'); const sm = document.createElement('summary'); sm.textContent = 'LACP (show lacp aggregate-ethernet all, raw)'; d.appendChild(sm);
+    const pre = document.createElement('pre'); pre.textContent = IF.lacp.join('\n'); d.appendChild(pre); ex.appendChild(d);
+  }
+}
+function ifCsv(){
+  const C = ifCols().filter(c=>c.f!==null), q = v=>'"'+String(v).replace(/"/g,'""')+'"';
+  const head = C.map(c=>c.grp ? c.grp+': '+c.l : c.l).concat(['flags']);
+  const lines = [head.map(q).join(',')];
+  ifFiltered().sort((a,b)=>a.order-b.order).forEach(r=>{
+    const cells = C.map(c=>{ const v = c.left ? c.f(r) : c.get(r); return typeof v==='number' ? v : q(v===null||v===undefined?'':v); });
+    cells.push(q(r.flags.map(f=>f.code+':'+f.level).join(';')));
+    lines.push(cells.join(','));
+  });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'}));
+  a.download = D.name+'_interfaces.csv'; a.click(); URL.revokeObjectURL(a.href);
+}
+function renderIfc(){ ifTable(); }
+if(hasIfc){
+  $('#iq').oninput = e=>{ ifState.q = e.target.value.trim().toLowerCase(); renderIfc(); };
+  $('#ikind').onchange = e=>{ ifState.kind = e.target.value; renderIfc(); };
+  $('#iissues').onchange = e=>{ ifState.issues = e.target.checked; renderIfc(); };
+  $('#icsv').onclick = ifCsv;
+  renderIfcStatic(); renderIfc();
+}
+
+'''
+
+# Dataplane health block of the Dataplane tab (resource monitor of the panio sections: sessions, packet buffer, cores)
+JS_DPH = r'''// Dataplane health block, at the top of the Dataplane tab (summary per DP and findings). The charts and the CPU per core tables are below it.
+function dphWorst(dp){
+  const fl = DH.findings.filter(f=>f.dp===dp);
+  return fl.some(f=>f.level==='crit') ? 'crit' : (fl.some(f=>f.level==='warn') ? 'warn' : '');
+}
+function renderDphStatic(){
+  $('#dphblock').style.display = '';
+  $('#tpsec').classList.add('sep');   // separates the health block from the throughput chart
+  const all = DH.dps.flatMap(d=>DH.series[d].t);
+  if(!hasSamples){
+    $('#sub').textContent = 'Period '+iso(minOf(all))+' - '+iso(maxOf(all))+' UTC | dp-monitor files read: '+D.files+' | generated '+D.generated+' UTC';
+    $('#utc').style.display = '';
+  }
+  const dsc = DH.discarded;
+  $('#dphinfo').textContent = DH.n_samples+' sample(s) on '+DH.dps.length+' DP(s). Discarded while reading: '+dsc.bad_rows+' CPU row(s) with a wrong column count, '+dsc.out_of_range+' value(s) outside 0-100; '+dsc.asterisks+' missing (*) CPU/utilization cell(s) ignored.';
+  if(DH.warnings.length){ $('#dphwarn').style.display=''; $('#dphwarnsum').textContent = DH.warnings.length+' note(s)'; DH.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#dphwarnlist').appendChild(li); }); }
+  const onchip = DH.dps.some(d=>DH.summary[d].pkt_desc_onchip.n>0);
+  const metrics = [['session','Session util'],['pkt_buffer','Packet buffer'],['pkt_desc','Packet descriptor']]
+    .concat(onchip?[['pkt_desc_onchip','Pkt desc on-chip']]:[], [['core','Busiest core (per-second)'],['core_minute','Busiest core (per-minute max)']]);
+  const t = $('#dphsum'); t.replaceChildren();
+  const h1 = t.createTHead().insertRow();
+  ['DP','Samples','Period (UTC)'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; th.rowSpan=2; h1.appendChild(th); });
+  metrics.forEach(m=>{ const th=document.createElement('th'); th.textContent=m[1]; th.colSpan=2; th.style.textAlign='center'; h1.appendChild(th); });
+  const h2 = t.tHead.insertRow();
+  metrics.forEach(()=>['Last','Peak'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; h2.appendChild(th); }));
+  const tb = t.createTBody();
+  DH.dps.forEach(dp=>{
+    const S = DH.summary[dp], ts = DH.series[dp].t, r = tb.insertRow();
+    r.insertCell().textContent = dp; r.insertCell().textContent = ts.length;
+    r.insertCell().textContent = iso(ts[0])+' - '+iso(ts[ts.length-1]);
+    metrics.forEach(m=>{
+      const x = S[m[0]];
+      const core = m[0]==='core' || m[0]==='core_minute';
+      r.insertCell().textContent = x.last===null ? '' : x.last+'%'+(core && x.last_core!==null ? ' (core '+x.last_core+')' : '');
+      r.insertCell().textContent = x.peak===null ? '' : x.peak+'% @ '+iso(x.peak_t)+(core && x.peak_core!==null ? ' (core '+x.peak_core+')' : '');
+    });
+    const lv = dphWorst(dp); if(lv) r.className = 'anom-'+lv;
+  });
+  const ul = $('#dphbanner'); ul.replaceChildren();
+  if(!DH.findings.length){ const li=document.createElement('li'); li.textContent='No dataplane health flags with the current thresholds.'; ul.appendChild(li); }
+  DH.findings.forEach(f=>{
+    const li = document.createElement('li'); li.className = 'lvl-'+f.level;
+    const b = document.createElement('span'); b.className = 'badge b-'+f.level; b.textContent = f.code;
+    li.append(b, document.createTextNode(f.text)); ul.appendChild(li);
+  });
+}
+function renderDph(){}
+if(hasDph) renderDphStatic();
+
+'''
+
+# CPU per core (Dataplane tab): one core x time heatmap and, collapsed, one lazily expanded row per capture.
+JS_PERCORE = r'''// CPU per core (Dataplane tab): a core x time heatmap and the raw tables of each capture
+const pcState = {hot:false, all:false, open:new Set()};
+const dphHeat = v => isNum(v) ? 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')' : '';
+const pcDps = () => HD ? ((state.dp && state.dp!=='ALL') ? HDPS.filter(d=>d===state.dp) : HDPS).filter(d=>DH.cores[d].ids.length) : [];
+function heatTd(td, v, hot){
+  if(isNum(v)){ td.textContent = v; td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff'; if(hot) td.classList.add('hot'); }
+  else { td.textContent = '–'; td.title = 'Missing measurement (*)'; }
+}
+// Heatmap geometry: the left margin is the one of the line charts; the right margin is theirs (R) plus the 'peak' column (PK).
+// When the heatmap is shown the throughput chart uses the same right margin, so both plots have the same x scale.
+const HM = {L:70, R:16, PK:46, T:12, B:34, LEG:26, BUCKET_PX:2, ROW_MIN:6, ROW_MAX:16, H_MIN:160, H_MAX:520};
+const hmRight = () => HM.R + HM.PK;
+const HM_SRC = {mm:['Per-minute max', 60000], ma:['Per-minute average', 60000], s:['Per-second', 1000]};
+const hmState = {src:'mm'};
+// The sources that have a value for at least one core of the DPs shown.
+const hmSources = dps => ['mm','ma','s'].filter(g=>dps.some(dp=>{ const gr = coreGrid(dp, g); return gr.t.length>0 && gr.cols.some(hasReal); }));
+const hmShown = () => { const d = pcDps(); return d.length>0 && hmSources(d).length>0; };
+function hmThreshold(src){ const th = DH.thresholds; return src==='s' ? th.core_peak_warn : (src==='mm' ? th.core_peak_minute_warn : null); }
+function drawHeat(host, dp, src, label){
+  const g = coreGrid(dp, src), dur = HM_SRC[src][1], ids = DH.cores[dp].ids, n = ids.length, thr = hmThreshold(src);
+  if(label){ const h = document.createElement('h4'); h.textContent = label; host.appendChild(h); }
+  if(!g.t.length || !g.cols.some(hasReal)){ const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'No '+HM_SRC[src][0].toLowerCase()+' CPU data for this DP.'; host.appendChild(p); return; }
+  const wrap = document.createElement('div'); wrap.className = 'cw'; const svg = document.createElementNS(NS, 'svg'), tip = document.createElement('div'); tip.className = 'tip';
+  wrap.append(svg, tip); host.appendChild(wrap);
+  const W = Math.max(480, $('#chartwrap').clientWidth), L = HM.L, Rr = hmRight(), T = HM.T, B = HM.B, plotW = W-L-Rr;
+  const cv = chart.view(); let x0, x1;
+  if(cv){ x0 = cv.x0; x1 = cv.x1; } else { x0 = g.t[0]-dur; x1 = g.t[g.t.length-1]; }
+  if(state.range[0]!==null) x0 = state.range[0]; if(state.range[1]!==null) x1 = state.range[1];
+  const nb = Math.max(1, Math.floor(plotW/HM.BUCKET_PX)), bwPx = plotW/nb, span = x1-x0, bwT = span/nb;
+  const rowH = Math.min(HM.ROW_MAX, Math.max(HM.ROW_MIN, Math.floor(HM.H_MAX/n))), plotH = Math.min(HM.H_MAX, Math.max(HM.H_MIN, n*rowH)), rp = plotH/n;
+  const H = T+plotH+B+HM.LEG; svg.setAttribute('viewBox', '0 0 '+W+' '+H); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'CPU per core heatmap, '+HM_SRC[src][0]+(label?', '+label:''));
+  const el = (nm, a, par) => { const e = document.createElementNS(NS, nm); for(const k in a) e.setAttribute(k, a[k]); (par||svg).appendChild(e); return e; };
+  const txt = (a, t) => { const e = el('text', a); e.textContent = t; return e; };
+  el('rect', {x:L, y:T, width:plotW, height:plotH, fill:'#eef1f4'});
+  if(!(span>0)){ txt({x:W/2, y:T+plotH/2, 'text-anchor':'middle', fill:'#5d6b7a'}, 'No data to display'); return; }
+  const cells = hmBucket(g, dur, x0, x1, nb), peaks = hmPeaks(g, dur, x0, x1);
+  cells.forEach((row, k)=>{
+    const y = T+k*rp; let i = 0;
+    while(i<nb){
+      const v = row[i]; if(v===null){ i++; continue; }
+      let j = i; while(j+1<nb && row[j+1]===v) j++;
+      const hot = thr!==null && v>=thr, x = L+i*bwPx, w = (j-i+1)*bwPx;
+      if(hot) el('rect', {x:x+.5, y:y+.5, width:Math.max(.5,w-1), height:Math.max(.5,rp-1), fill:dphHeat(v), stroke:'#1c2530', 'stroke-width':1});
+      else el('rect', {x:x, y:y, width:w, height:rp+.3, fill:dphHeat(v)});
+      i = j+1;
+    }
+  });
+  // core labels (every one when the rows are tall enough, else every k-th) and the peak column
+  const step = rp>=10 ? 1 : Math.ceil(10/rp), fs = Math.max(8, Math.min(11, rp-1));
+  for(let k=0;k<n;k++){
+    const yc = T+(k+.5)*rp+fs*.35;
+    if(k%step===0) txt({x:L-6, y:yc, 'text-anchor':'end', 'font-size':fs, fill:'#5d6b7a'}, 'core '+ids[k]);
+    const pv = peaks[k]; if(!isNum(pv)) continue;
+    const px = W-Rr+4;
+    el('rect', {x:px, y:T+k*rp, width:HM.PK-8, height:rp+.3, fill:dphHeat(pv)});
+    if(rp>=8) txt({x:px+(HM.PK-8)/2, y:yc, 'text-anchor':'middle', 'font-size':fs, fill:pv>=55?'#fff':'#1c2530'}, pv);
+  }
+  txt({x:W-Rr+4+(HM.PK-8)/2, y:T-2, 'text-anchor':'middle', 'font-size':10, fill:'#5d6b7a'}, 'peak');
+  // time axis, same ticks as the line charts
+  const multi = span>86400000;
+  for(let i=0;i<=6;i++){
+    const t = x0+span*i/6, x = L+(t-x0)/span*plotW, d = new Date(t);
+    const lab = multi ? pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate())+' '+pad(d.getUTCHours())+':'+pad(d.getUTCMinutes()) : pad(d.getUTCHours())+':'+pad(d.getUTCMinutes());
+    el('line', {x1:x, x2:x, y1:T+plotH, y2:T+plotH+4, stroke:'#5d6b7a'});
+    txt({x:x, y:T+plotH+17, 'text-anchor':i===0?'start':i===6?'end':'middle', 'font-size':11, fill:'#5d6b7a'}, lab);
+  }
+  el('line', {x1:L, x2:L+plotW, y1:T+plotH, y2:T+plotH, stroke:'#5d6b7a'});
+  // colour legend: 0..100 %, no data, marker of the limit
+  const ly = T+plotH+B+4, gid = 'hmg'+Math.random().toString(36).slice(2, 8), defs = el('defs', {}), lg = el('linearGradient', {id:gid, x1:0, x2:1, y1:0, y2:0}, defs);
+  el('stop', {offset:0, 'stop-color':dphHeat(0)}, lg); el('stop', {offset:1, 'stop-color':dphHeat(100)}, lg);
+  txt({x:L, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, '0%'); el('rect', {x:L+26, y:ly, width:140, height:11, fill:'url(#'+gid+')', stroke:'#d8dde3'}); txt({x:L+172, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, '100%');
+  el('rect', {x:L+226, y:ly, width:14, height:11, fill:'#eef1f4', stroke:'#d8dde3'}); txt({x:L+246, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'no data');
+  if(thr!==null){ el('rect', {x:L+316, y:ly+.5, width:14, height:10, fill:dphHeat(thr), stroke:'#1c2530', 'stroke-width':1}); txt({x:L+336, y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'at or above '+thr+'%'); }
+  txt({x:L+(thr!==null?470:316), y:ly+9, 'font-size':11, fill:'#5d6b7a'}, 'Each pixel column shows the maximum of the cells in it. '+HM_SRC[src][0]+'.');
+  // hover and drag-to-zoom, as in the line charts
+  const sel = el('rect', {y:T, height:plotH, fill:'rgba(31,111,139,.15)', stroke:'#1f6f8b', display:'none'});
+  const cur = el('line', {y1:T, y2:T+plotH, stroke:'#8a95a1', 'stroke-dasharray':'3 3', display:'none'});
+  const hit = el('rect', {x:L, y:T, width:plotW, height:plotH, fill:'transparent'});
+  const pos = e => { const r = svg.getBoundingClientRect(); return [(e.clientX-r.left)*W/r.width, (e.clientY-r.top)*H/r.height, r]; };
+  const tOf = x => x0+(x-L)/plotW*span;
+  let drag = null;
+  hit.onpointerdown = e => { drag = pos(e)[0]; hit.setPointerCapture(e.pointerId); };
+  hit.onpointermove = e => {
+    const [x, y, r] = pos(e);
+    if(drag!==null){ sel.setAttribute('display', ''); sel.setAttribute('x', Math.min(drag, x)); sel.setAttribute('width', Math.abs(x-drag)); tip.style.display = 'none'; return; }
+    const i = Math.min(nb-1, Math.max(0, Math.floor((x-L)/bwPx))), k = Math.min(n-1, Math.max(0, Math.floor((y-T)/rp))), v = cells[k][i];
+    const bs = Math.round(x0+i*bwT), be = Math.round(x0+(i+1)*bwT), cx = L+(i+.5)*bwPx;
+    cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.setAttribute('display', '');
+    tip.innerHTML = '<div>core '+ids[k]+'</div><div>'+iso(bs)+' - '+iso(be)+' UTC</div><div>'+(v===null ? 'no data' : 'max '+v+'%')+'</div><div>'+HM_SRC[src][0]+(label?' | '+label:'')+'</div>';
+    tip.style.display = 'block'; let left = (cx/W)*r.width+12; if(left>r.width-230) left -= 250;
+    tip.style.left = left+'px'; tip.style.top = Math.max(0, (y/H)*r.height+8)+'px';
+  };
+  hit.onpointerleave = () => { if(drag===null){ tip.style.display = 'none'; cur.setAttribute('display', 'none'); } };
+  hit.onpointerup = e => {
+    if(drag===null) return; const x = pos(e)[0], a = drag; drag = null;
+    if(Math.abs(x-a)>6) setRange(Math.round(tOf(Math.min(a, x))), Math.round(tOf(Math.max(a, x)))); else sel.setAttribute('display', 'none');
+  };
+  hit.ondblclick = () => setRange(null, null);
+}
+// Peak value and core of one flat table (the first core, by number, on a tie).
+function flatPeak(flat, ids){
+  if(!flat) return null; const nc = ids.length; let bv = null, bk = -1;
+  for(let i=0;i<flat.length;i++){ const v = flat[i]; if(isNum(v) && (bv===null || v>bv || (v===bv && i%nc<bk))){ bv = v; bk = i%nc; } }
+  return bv===null ? null : [ids[bk], bv];
+}
+function capTable(host, title, note, flat, ids, tc, perSecond, thr){
+  const h = document.createElement('h4'); h.textContent = title; host.appendChild(h);
+  const p = document.createElement('p'); p.className = 'hint'; p.textContent = note; host.appendChild(p);
+  if(!flat){ const q = document.createElement('p'); q.className = 'hint'; q.textContent = 'This table is not present in the capture.'; host.appendChild(q); return; }
+  const nc = ids.length, n = Math.floor(flat.length/nc), box = document.createElement('div'); box.className = 'scroll'; box.style.maxHeight = 'none';
+  const t = document.createElement('table'); t.className = 'hm';
+  const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = perSecond ? 'Time (UTC)' : 'Minute ending (UTC)';
+  ids.forEach(c=>{ const th = document.createElement('th'); th.textContent = c; hr.appendChild(th); });
+  const tb = t.createTBody();
+  for(let r=n-1;r>=0;r--){          // oldest first; row r of the source table is the time T - r
+    const tr = tb.insertRow(); tr.insertCell().textContent = iso(perSecond ? recSec(tc, r) : recMin(tc, r));
+    for(let k=0;k<nc;k++){ const v = flat[r*nc+k]; heatTd(tr.insertCell(), v, thr!==null && isNum(v) && v>=thr); }
+  }
+  box.appendChild(t); host.appendChild(box);
+}
+function buildCap(host, dp, c){
+  const d = HD.by_dp[dp], ids = DH.cores[dp].ids, tc = DH.series[dp].t[c], th = DH.thresholds;
+  host.className = 'pcwrap';
+  const nS = 'Rows are listed oldest first. Row i of the source table is the second T - i s, where T is the capture time (inferred from the per-minute table, not verifiable).';
+  const nM = 'Rows are listed oldest first. Row i of the source table is the whole minute ending i minutes before the last minute boundary at or before the capture time T (verified on real data).';
+  capTable(host, 'Per-second CPU load (%)', nS, d.cs[c], ids, tc, true, th.core_peak_warn);
+  capTable(host, 'Per-minute CPU maximum (%)', nM, d.cmm[c], ids, tc, false, th.core_peak_minute_warn);
+  capTable(host, 'Per-minute CPU average (%)', nM, d.cma[c], ids, tc, false, null);
+}
+function renderCoreList(dps){
+  const th = DH.thresholds, items = [];
+  dps.forEach(dp=>{
+    const d = HD.by_dp[dp], ids = DH.cores[dp].ids, ts = DH.series[dp].t;
+    ts.forEach((t,c)=>{
+      if(!inRange(t) || !(d.cs[c] || d.cmm[c] || d.cma[c])) return;
+      const ps = flatPeak(d.cs[c], ids), pm = flatPeak(d.cmm[c], ids);
+      const hot = (ps && ps[1]>=th.core_peak_warn) || (pm && pm[1]>=th.core_peak_minute_warn);
+      if(pcState.hot && !hot) return;
+      items.push({dp, c, t, ps, pm, hot});
+    });
+  });
+  items.sort((a,b)=>a.t-b.t || (a.dp<b.dp?-1:1));
+  $('#pccount').textContent = items.length+' capture(s)';
+  const list = $('#pclist'); list.replaceChildren();
+  const lim = pcState.all ? items.length : 300;
+  const cell = (pr, what) => pr ? what+': core '+pr[0]+' '+pr[1]+'%' : what+': –';
+  items.slice(0, lim).forEach(it=>{
+    const key = it.dp+'|'+it.c, det = document.createElement('details'); det.className = 'pcap';
+    const sm = document.createElement('summary');
+    sm.append(document.createTextNode(iso(it.t)+' UTC | '+it.dp+' | '));
+    const a = document.createElement('span'); a.className = 'pk'+(it.ps && it.ps[1]>=th.core_peak_warn ? ' hot' : ''); a.textContent = cell(it.ps, 'per-second peak');
+    const b = document.createElement('span'); b.className = 'pk'+(it.pm && it.pm[1]>=th.core_peak_minute_warn ? ' hot' : ''); b.textContent = cell(it.pm, 'per-minute max peak');
+    sm.append(a, document.createTextNode(' | '), b); det.appendChild(sm);
+    const body = document.createElement('div'); det.appendChild(body);
+    det.addEventListener('toggle', ()=>{
+      if(det.open){ pcState.open.add(key); if(!body.hasChildNodes()) buildCap(body, it.dp, it.c); }   // built on first expand
+      else pcState.open.delete(key);
+    });
+    list.appendChild(det);
+    if(pcState.open.has(key)) det.open = true;
+  });
+  const m = $('#pcmore'); m.textContent = '';
+  if(items.length>lim){ m.textContent = 'Showing the first '+lim+' captures. '; const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = 'Show all'; bt.onclick = ()=>{ pcState.all = true; renderCoreList(dps); }; m.appendChild(bt); }
+}
+function renderCoreTable(){
+  const sec = $('#pcsec'), dps = pcDps();
+  sec.style.display = dps.length ? '' : 'none';
+  if(!dps.length) return;
+  const srcs = hmSources(dps), sel = $('#hmsrc');
+  sel.replaceChildren();
+  srcs.forEach(g=>{ const o = document.createElement('option'); o.value = g; o.textContent = HM_SRC[g][0]; sel.appendChild(o); });
+  if(!srcs.includes(hmState.src)) hmState.src = srcs[0] || 'mm';
+  sel.value = hmState.src;
+  const host = $('#dphcores'); host.replaceChildren();
+  $('#pcinfo').textContent = srcs.length ? 'Core by time. Drag to zoom (shared with the chart above), double-click to reset. Times are reconstructed from the capture time (see Help).' : 'No CPU per core table in the selected DP.';
+  if(srcs.length) dps.forEach(dp=>drawHeat(host, dp, hmState.src, dps.length>1 ? 'DP '+dp : ''));
+  if($('#pcraw').open) renderCoreList(dps);
+}
+$('#hmsrc').onchange = ()=>{ hmState.src = $('#hmsrc').value; renderCoreTable(); };
+$('#pcraw').addEventListener('toggle', ()=>{ if($('#pcraw').open && HD) renderCoreList(pcDps()); });
+$('#pchot').onchange = ()=>{ pcState.hot = $('#pchot').checked; pcState.all = false; renderCoreTable(); };
+
+'''
+
+# Management plane tab (mp-monitor memory and processes sections)
+JS_MP = r'''// Management plane tab (memory used %, per-process CPU and Res+Swap)
+const MP = D.mp || null;
+const hasMp = !!MP;
+const mpState = {hidden:new Set(), view:null};
+const MP_SERIES = [
+  {k:'used_pct', name:'Memory used', color:'#c2410c', w:1.8},
+  {k:'swap_used_pct', name:'Swap used', color:'#0e7490', w:1.4}
+];
+const mpChart = hasMp ? makeChart($('#mpchart'), $('#mptip'), $('#mpwrap')) : null;
+let MP_T0 = 0, MP_T1 = 0;
+const mpKb = v => v===null||v===undefined ? '' : (v/1024).toLocaleString('en-US',{maximumFractionDigits:1})+' MB';
+const mpGrowth = v => (v>0?'+':v<0?'-':'')+mpKb(Math.abs(v));
+const mpPct = v => v===null||v===undefined ? '' : v+'%';
+function mpRow(t, cells){ const r = t.insertRow(); cells.forEach(c=>{ r.insertCell().textContent = c; }); return r; }
+function mpHead(t, names){ const r = t.createTHead().insertRow(); names.forEach(x=>{ const th=document.createElement('th'); th.textContent=x; r.appendChild(th); }); }
+function mpWorst(){
+  return MP.findings.some(f=>f.level==='crit') ? 'crit' : (MP.findings.some(f=>f.level==='warn') ? 'warn' : '');
+}
+function renderMpStatic(){
+  const M = MP.memory, S = M.summary, P = MP.period;
+  MP_T0 = M.t.length ? M.t[0] : P.first; MP_T1 = M.t.length ? M.t[M.t.length-1] : P.last;
+  if(!hasSamples && !hasDph){
+    $('#sub').textContent = 'Period '+iso(P.first)+' - '+iso(P.last)+' UTC | generated '+D.generated+' UTC';
+  }
+  if(!hasSamples) $('#utc').style.display = '';
+  const dsc = MP.discarded;
+  $('#mpinfo').textContent = MP.n_mem+' memory and '+MP.n_proc+' processes sample(s)'+(MP.interval_s!==null ? ' (processes about every '+MP.interval_s+' s)' : '')+'. Discarded while reading: '+dsc.bad_rows+' row(s), '+dsc.bad_values+' non-numeric memory value(s); '+dsc.duplicates+' duplicate section(s) from rotated files ignored.';
+  if(MP.warnings.length){ $('#mpwarn').style.display=''; $('#mpwarnsum').textContent = MP.warnings.length+' note(s)'; MP.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#mpwarnlist').appendChild(li); }); }
+  const t = $('#mpsum'); t.replaceChildren();
+  mpHead(t, ['Memory samples','Processes samples','Period (UTC)','Total memory','Memory used, last','Memory used, peak','Lowest MemAvailable']);
+  const tb = t.createTBody();
+  const r = mpRow(tb, [MP.n_mem, MP.n_proc, iso(P.first)+' - '+iso(P.last),
+    S ? mpKb(S.total_kb) : '', S ? S.last+'% @ '+iso(S.last_t) : '', S ? S.peak+'% @ '+iso(S.peak_t) : '', S ? mpKb(S.min_avail_kb) : '']);
+  const lv = mpWorst(); if(lv) r.className = 'anom-'+lv;
+  const ul = $('#mpbanner'); ul.replaceChildren();
+  if(!MP.findings.length){ const li=document.createElement('li'); li.textContent='No management plane flags with the current thresholds.'; ul.appendChild(li); }
+  MP.findings.forEach(f=>{
+    const li = document.createElement('li'); li.className = 'lvl-'+f.level;
+    const b = document.createElement('span'); b.className = 'badge b-'+f.level; b.textContent = f.code;
+    li.append(b, document.createTextNode(f.text)); ul.appendChild(li);
+  });
+  $('#mpreset').onclick = ()=>setRange(null,null);
+  MP_SERIES.filter(s=>M[s.k].some(v=>v!==null)).forEach(s=>legendItem($('#mpleg'), s.name, s.color, mpState.hidden, renderMp));
+  const views = [['flagged','Processes with a PROC_CPU flag ('+MP.flagged.length+')'], ['cpu','Top '+MP.top_cpu.length+' by peak CPU'], ['rss','Top '+MP.top_rss.length+' by peak Res+Swap'], ['growth','Top '+MP.top_growth.length+' by Res+Swap growth'], ['all','All processes ('+MP.procs.length+')']];
+  views.forEach(v=>{ const o=document.createElement('option'); o.value=v[0]; o.textContent=v[1]; $('#mpview').appendChild(o); });
+  mpState.view = MP.flagged.length ? 'flagged' : 'rss';
+  $('#mpview').value = mpState.view;
+  $('#mpview').onchange = ()=>{ mpState.view = $('#mpview').value; renderMpProcs(); };
+}
+function renderMpProcs(){
+  const by = {}; MP.procs.forEach(p=>{ by[p.name] = p; });
+  const names = {flagged:MP.flagged, cpu:MP.top_cpu, rss:MP.top_rss, growth:MP.top_growth, all:MP.procs.map(p=>p.name)}[mpState.view];
+  const t = $('#mpprocs'); t.replaceChildren();
+  mpHead(t, ['Process','Samples','Peak CPU','Samples at/above '+MP.thresholds.proc_cpu_warn+'%','Longest run','Longest run period (UTC)','Runs (>= '+MP.thresholds.proc_cpu_min_samples+')','Peak Res+Swap','Last Res+Swap','Growth','State Z','Flag']);
+  const tb = t.createTBody();
+  names.forEach(n=>{
+    const p = by[n];
+    const r = mpRow(tb, [n+(p.ignored ? ' ('+p.ignored+', not flagged)' : ''), p.n, p.peak_cpu===null ? '' : p.peak_cpu+'% @ '+iso(p.peak_cpu_t), p.n_high, p.longest_run || '',
+      p.run_start===null ? '' : iso(p.run_start)+' - '+iso(p.run_end), p.n_runs || '',
+      p.peak_rss===null ? '' : mpKb(p.peak_rss)+' @ '+iso(p.peak_rss_t), mpKb(p.last_rss), p.n_rss>1 ? mpGrowth(p.growth) : '', p.zombie || '', '']);
+    if(MP.flagged.includes(n)){
+      r.className = 'anom-warn';
+      const b = document.createElement('span'); b.className = 'badge b-warn'; b.textContent = 'PROC_CPU'; r.cells[r.cells.length-1].appendChild(b);
+    }
+  });
+  $('#mpcount').textContent = names.length+' process(es) shown.';
+}
+function renderMp(){
+  const M = MP.memory, u = {div:1, unit:'%'};
+  const ser = MP_SERIES.filter(s=>!mpState.hidden.has(s.name) && M[s.k].some(v=>v!==null)).map(s=>({name:s.name, color:s.color, w:s.w,
+    d:M.t.map((t,i)=>({t:t, v:isNum(M[s.k][i])?M[s.k][i]:null})).filter(p=>inRange(p.t))}));
+  mpChart.draw(ser, {label:'Memory', u, cap:100, top:100, t0:MP_T0, t1:MP_T1,
+    lines:[{v:MP.thresholds.mem_warn, color:'#b7791f', label:'warn '+MP.thresholds.mem_warn+'%'}, {v:MP.thresholds.mem_crit, color:'#b42318', label:'crit '+MP.thresholds.mem_crit+'%'}]});
+  statsTable($('#mpstats'), ser, u);
+  renderMpProcs();
+}
+if(hasMp) renderMpStatic();
+
+'''
+
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[]);
-['chart','cpu','pow'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
-$('#tabs').style.display=TABS.length>1?'':'none';
-TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
+JS_TABS = r'''// Normal view: dataplane (health and throughput), system health and management plane. Every other tab is advanced and is shown with the Advanced box.
+const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+const NORMAL_TABS=['chart','sys','mp'], ADV_KEY='panosToolbox.tsfReport.advanced';
+const hasNormalTab=ALL_TABS.some(k=>NORMAL_TABS.includes(k)), hasAdvTab=ALL_TABS.some(k=>!NORMAL_TABS.includes(k));
+// localStorage can throw (file:// in some browsers, private mode): the choice is then simply not remembered.
+const loadAdv=()=>{ try{ return localStorage.getItem(ADV_KEY)==='1'; }catch(e){ return false; } };
+const saveAdv=v=>{ try{ localStorage.setItem(ADV_KEY, v?'1':'0'); }catch(e){} };
+let advanced = hasNormalTab ? loadAdv() : true;   // no normal tab: the advanced ones are the only content
+let TABS=[];                                      // the visible tabs, in order
+function applyTabs(){
+  TABS=ALL_TABS.filter(k=>advanced||NORMAL_TABS.includes(k));
+  ['chart','cpu','mp','sys','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+  $('#tabs').style.display=ALL_TABS.length>1?'':'none';
+  $('#advwrap').style.display=hasAdvTab&&ALL_TABS.length>1?'':'none';
+  const cb=$('#advanced'); cb.checked=advanced; cb.disabled=!hasNormalTab;
+  $('#advwrap').title=hasNormalTab?'Show the advanced tabs (CPU load by group, POW performance, Interface Errors, Source coverage)':'This report has no throughput, system health or management plane data, so the advanced tabs are always shown.';
+}
+function setAdvanced(v){
+  advanced=!!v||!hasNormalTab; if(hasNormalTab) saveAdv(advanced);
+  applyTabs(); if(!TABS.includes(activeTab)) showTab(TABS[0]);
+}
+ALL_TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
+$('#advanced').onchange=()=>setAdvanced($('#advanced').checked);
 $('#tabs').onkeydown=e=>{
+  if(e.target.id==='advanced') return;
   const i=TABS.indexOf(activeTab); let j=-1;
   if(e.key==='ArrowRight') j=(i+1)%TABS.length; else if(e.key==='ArrowLeft') j=(i+TABS.length-1)%TABS.length; else if(e.key==='Home') j=0; else if(e.key==='End') j=TABS.length-1;
   if(j<0) return; e.preventDefault(); showTab(TABS[j]); $('#tab-'+TABS[j]).focus();
@@ -756,15 +1662,281 @@ $('#tabs').onkeydown=e=>{
 // Debounced: re-draws the visible tab at the new size. Zoom range and selections are state, so they are kept.
 let resizeTimer=null;
 window.addEventListener('resize',()=>{ clearTimeout(resizeTimer); resizeTimer=setTimeout(renderActive,150); });
+applyTabs();
 showTab(TABS[0]);
 </script>
 </body>
 </html>
 '''
 
+# System health tab (CLI dump sections and core file names; more check groups can be added)
+JS_SYS = r'''// System health tab: a checks table, the findings and one detail block per check
+const SYS = D.sys || null;
+const hasSys = !!SYS;
+const SYS_BADGE = {ok:['ok','ok'], warning:['warning','warn'], critical:['critical','crit'], no_data:['no data','info']};
+function sysEl(tag, text, cls){ const e = document.createElement(tag); if(text!==undefined && text!==null) e.textContent = text; if(cls) e.className = cls; return e; }
+function sysBadge(st){ const d = SYS_BADGE[st] || [st,'info']; return sysEl('span', d[0], 'badge b-'+d[1]); }
+function sysTable(head, rows, fill){
+  const t = sysEl('table', null, 'stats covt'); const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = sysEl('th', h); th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); Array.from(tr.cells).forEach(c=>{ c.className = 'l'; }); });
+  const w = sysEl('div', null, 'scroll'); w.appendChild(t); return w;
+}
+function sysCell(tr, v){ tr.insertCell().textContent = (v===null||v===undefined) ? '' : v; }
+function sysFmtBytes(n){
+  if(n===null||n===undefined) return 'unknown size';
+  const u = ['bytes','KB','MB','GB']; let i = 0, v = n;
+  while(v>=1024 && i<u.length-1){ v /= 1024; i++; }
+  return (i ? v.toLocaleString('en-US',{maximumFractionDigits:1}) : v.toLocaleString('en-US'))+' '+u[i];
+}
+function sysBlock(host, title, body, note){
+  const d = sysEl('div', null, 'sysblock'); d.style.margin = '0 0 16px';
+  d.appendChild(sysEl('h3', title)); if(note) d.appendChild(sysEl('p', note, 'hint'));
+  if(body) d.appendChild(body); host.appendChild(d); return d;
+}
+function sysNoData(host, check, title){
+  sysBlock(host, title, null, 'No data: '+check.note);
+}
+function sysDetailSoftware(host, check){
+  const S = SYS.software;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Software status'); return; }
+  S.blocks.forEach(b=>{
+    const msg = b.bad.length ? b.bad.length+' of '+b.total+' not running.' : 'All '+b.total+' running.';
+    sysBlock(host, 'Software status - '+b.title, b.bad.length ? sysTable(['Type','Name','State','Info'], b.bad, (tr,r)=>{
+      sysCell(tr, r.type); sysCell(tr, r.name); sysCell(tr, r.state); sysCell(tr, r.info); tr.className = 'anom-crit'; }) : null, msg);
+  });
+}
+function sysDetailCfg(host, check){
+  if(check.status==='no_data'){ sysNoData(host, check, 'Configuration memory'); return; }
+  const rows = [];
+  SYS.cfg.blocks.forEach(b=>{
+    if(b.config) rows.push({label:b.label, name:'Config allocator', a:b.config});
+    b.policies.forEach(p=>rows.push({label:b.label, name:'Policy cache'+(p.role ? ' ('+p.role+')' : ''), a:p}));
+  });
+  const th = SYS.thresholds;
+  sysBlock(host, 'Configuration memory', sysTable(['Block','Allocator','Used','Total','Used %'], rows, (tr,r)=>{
+    sysCell(tr, r.label); sysCell(tr, r.name); sysCell(tr, r.a.used_kb.toLocaleString('en-US')+' KB'); sysCell(tr, r.a.total_kb.toLocaleString('en-US')+' KB'); sysCell(tr, r.a.pct+'%');
+    if(r.a.pct>=th.cfg_mem_crit) tr.className = 'anom-crit'; else if(r.a.pct>=th.cfg_mem_warn) tr.className = 'anom-warn';
+  }), 'Limits: warn '+th.cfg_mem_warn+'%, crit '+th.cfg_mem_crit+'% (at or above).');
+}
+function sysRuleRow(tr, r, warn){
+  sysCell(tr, r.vsys); sysCell(tr, r.rule); sysCell(tr, r.type); sysCell(tr, r.used.toLocaleString('en-US')); sysCell(tr, r.avail.toLocaleString('en-US'));
+  sysCell(tr, r.pct===null ? '' : r.pct+'%'); sysCell(tr, r.mem); sysCell(tr, r.ratio); sysCell(tr, r.persistent); sysCell(tr, r.min); sysCell(tr, r.max);
+  if(r.pct!==null && r.pct>=warn) tr.className = 'anom-warn';
+}
+function sysDetailNat(host, check){
+  const N = SYS.nat, warn = SYS.thresholds.nat_pool_warn;
+  if(check.status==='no_data'){ sysNoData(host, check, 'NAT pools'); return; }
+  const g = [];
+  if(N.shared) g.push({name:'Shared memory used', v:N.shared.used.toLocaleString('en-US')+(N.shared.usable ? ' of '+N.shared.usable.toLocaleString('en-US') : ''), pct:N.shared.pct});
+  N.pools.forEach(p=>g.push({name:p.name+' NAT pool', v:p.count.toLocaleString('en-US'), pct:p.pct}));
+  const d = sysBlock(host, 'NAT pools', null, 'Limit: warn '+warn+'% (at or above). '+(N.present_global ? '' : 'show running global-ippool not found. ')+(N.present_rules ? N.n_rules+' rule(s) in '+N.vsys.length+' VSYS block(s)' : 'show running ippool not found')+(N.present_rules ? ', '+N.n_over+' at or above the limit.' : '.'));
+  if(g.length) d.appendChild(sysTable(['Global pool item','Value','Used %'], g, (tr,r)=>{ sysCell(tr, r.name); sysCell(tr, r.v); sysCell(tr, r.pct+'%'); if(r.pct>=warn) tr.className = 'anom-warn'; }));
+  const head = ['VSYS','Rule','Type','Used','Available','Used %','Mem size','Ratio','Persistent','Min','Max'];
+  if(N.rules.length){
+    d.appendChild(sysEl('h4', 'Top '+N.top.length+' rules by used %'));
+    d.appendChild(sysTable(head, N.top, (tr,r)=>sysRuleRow(tr, r, warn)));
+    if(N.rules.length>N.top.length){
+      const det = sysEl('details'); det.appendChild(sysEl('summary', 'All '+N.rules.length+' rules'+(N.n_rules>N.rules.length ? ' (worst '+N.rules.length+' of '+N.n_rules+')' : '')));
+      det.appendChild(sysTable(head, N.rules, (tr,r)=>sysRuleRow(tr, r, warn))); d.appendChild(det);
+    }
+  }
+}
+function sysDetailCores(host, check){
+  const C = SYS.cores;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Core files'); return; }
+  const msg = C.state==='files' ? C.files.length+' core file(s). The content was not read.' : (C.state==='empty' ? 'Core directory present, empty: '+C.dirs.join(', ') : 'No core directory in the archive.');
+  sysBlock(host, 'Core files', C.files.length ? sysTable(['File','Size'], C.files, (tr,f)=>{ sysCell(tr, f.name); sysCell(tr, sysFmtBytes(f.size)); tr.className = 'anom-crit'; }) : null, msg);
+}
+// Logs group: kernel crashes, repeated daemon errors, commit and job context
+function sysUtc(ms){ return (ms===null||ms===undefined) ? '' : iso(ms)+' UTC'; }
+function sysDetailKernel(host, check){
+  const K = SYS.logs.kernel;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Kernel crashes'); return; }
+  const crit = SYS.thresholds.crash_min;
+  const note = K.lines.toLocaleString('en-US')+' kernel line(s) in '+K.files.join(', ')+'. Only segfault, general protection and out-of-memory kill lines are counted, per process and type; at or above '+crit+' is flagged. Times are the ones written in the log: device local time, no year, no offset (not used for correlation).'+(K.dropped ? ' '+K.dropped+' event(s) of further process/type pairs were not counted (limit reached).' : '');
+  sysBlock(host, 'Kernel crashes', K.events.length ? sysTable(['Process','Type','Events','First (local, no year)','Last (local, no year)','PIDs','Files'], K.events, (tr,e)=>{
+    sysCell(tr, e.process); sysCell(tr, e.type); sysCell(tr, e.count.toLocaleString('en-US')); sysCell(tr, e.first); sysCell(tr, e.last); sysCell(tr, e.pids.join(', ')); sysCell(tr, e.files.join(', '));
+    tr.className = e.count>=crit ? 'anom-crit' : 'anom-warn'; }) : null, K.events.length ? note : 'No crash line found. '+note);
+}
+function sysDetailLogErrors(host, check){
+  const L = SYS.logs.daemons, rep = SYS.thresholds.log_repeat_min;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Repeated daemon errors'); return; }
+  const d = sysBlock(host, 'Repeated daemon errors', sysTable(['Daemon','Files','Lines','Error lines','Distinct messages','Recent repeats (>= '+rep+')','Chronic'], L.rows, (tr,r)=>{
+    sysCell(tr, r.daemon); sysCell(tr, r.files.join(', ')); sysCell(tr, r.lines.toLocaleString('en-US')); sysCell(tr, r.errors.toLocaleString('en-US')); sysCell(tr, r.distinct.toLocaleString('en-US'));
+    sysCell(tr, r.n_recent); sysCell(tr, r.n_chronic); if(r.n_recent) tr.className = 'anom-warn'; }),
+    'An error line starts (after the timestamp) with a level token ERROR/ERR/CRIT/CRITICAL/FATAL or Error:/error:/Crit:/fatal:. Messages are normalised (3+ digit numbers become N, 0x... becomes 0xH, bracketed or quoted paths are kept). Identical messages are counted per daemon; lines of rotated files are not de-duplicated. At most 50 messages per daemon are listed, in collapsed tables. Recent = within the last '+SYS.thresholds.log_recent_h+' h before the end of the TSF'+(L.ref_end===null ? ' (no reference time found: nothing is recent)' : ' ('+sysUtc(L.ref_end)+')')+'; only recent repeats are warnings, the others are chronic (info).');
+  L.rows.forEach(r=>{
+    if(!r.messages.length) return;
+    const det = sysEl('details');
+    const lvl = r.level==='warn' ? 'WARN' : (r.level==='info' ? 'info' : 'ok');
+    det.appendChild(sysEl('summary', r.daemon+': '+r.messages.length+(r.omitted ? '+' : '')+' message(s), '+r.n_recent+' repeated recently ('+r.recent_errors.toLocaleString('en-US')+' recent of '+r.errors.toLocaleString('en-US')+' error line(s)), '+r.n_chronic+' chronic - '+lvl));
+    det.appendChild(sysTable(['Count','Recent','First (UTC)','Last (UTC)','Message','Files'], r.messages, (tr,m)=>{
+      sysCell(tr, m.count.toLocaleString('en-US')); sysCell(tr, m.recent.toLocaleString('en-US')); sysCell(tr, sysUtc(m.first)); sysCell(tr, sysUtc(m.last)); sysCell(tr, m.msg); sysCell(tr, m.files.join(', ')); if(m.kind==='recent') tr.className = 'anom-warn'; }));
+    if(r.omitted) det.appendChild(sysEl('p', r.omitted+' less frequent message(s) not listed (limit of 50 per daemon).', 'hint'));
+    if(r.dropped) det.appendChild(sysEl('p', r.dropped+' error line(s) with a new message were not counted (limit of distinct messages reached).', 'hint'));
+    d.appendChild(det);
+  });
+}
+function sysDetailCommits(host, check){
+  const C = SYS.logs.context;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Commit and job context'); return; }
+  const d = sysBlock(host, 'Commit and job context', null, 'Informational only: it never changes a flag. Commit windows come from COMMIT lines of configd.log (explicit UTC offset; lines at most '+SYS.thresholds.commit_gap_s+' s apart form one window; a window needs at least '+SYS.thresholds.commit_min_lines+' lines, '+C.n_discarded_lines+' single line(s) were ignored). Jobs come from "show jobs processed" in device local time WITHOUT offset: the offset is inferred from the explicit-offset log headers of the same TSF; a job with an ambiguous (DST change within a day) or unknown offset has no UTC time and is not correlated. A flag is near a window or job when it lies within '+SYS.thresholds.corr_window_s+' s of it. Running jobs have no end and are not correlated.');
+  if(C.correlations.length){
+    d.appendChild(sysEl('h4', 'Items near a commit or job ('+C.correlations.length+')'));
+    const ul = sysEl('ul', null, 'banner');
+    C.correlations.forEach(c=>{ const li = sysEl('li', null, 'lvl-info'); li.append(sysEl('span', 'NEAR_COMMIT', 'badge b-info'), document.createTextNode(c.text)); ul.appendChild(li); });
+    d.appendChild(ul);
+  } else d.appendChild(sysEl('p', 'No flagged item is near a commit window or a job.', 'hint'));
+  const off = Object.entries(C.job_offsets).map(([k,v])=>v+' '+k).join(', ');
+  if(off) d.appendChild(sysEl('p', 'Job offsets: '+off+'.'+(C.jobs_src ? ' Source: '+C.jobs_src+'.' : ''), 'hint'));
+  const head = ['Kind','Item','Start (UTC)','End (UTC)','Offset','Detail','Near'];
+  const fill = (tr,r)=>{
+    sysCell(tr, r.kind); sysCell(tr, r.label); sysCell(tr, r.start===null ? '(no UTC: offset '+r.offset_state+')' : sysUtc(r.start)); sysCell(tr, r.running ? 'running' : sysUtc(r.end));
+    sysCell(tr, r.kind==='commit' ? 'explicit' : (r.offset ? 'inferred '+r.offset : r.offset_state)); sysCell(tr, r.detail); sysCell(tr, r.near.join(', ')); if(r.near.length) tr.className = 'anom-warn'; };
+  const tl = C.timeline;
+  const det = sysEl('details'); det.appendChild(sysEl('summary', 'Commit and job timeline ('+tl.length+' rows)'));
+  det.appendChild(sysTable(head, tl, fill)); d.appendChild(det);
+}
+// Correlations group: not-running processes linked to kernel crashes by process name
+function sysDetailCrashLink(host, check){
+  const C = SYS.correlations;
+  if(check.status==='no_data'){ sysNoData(host, check, 'Not-running processes vs kernel crashes'); return; }
+  const rule = 'Names are compared lowercase, without a trailing + (truncation) and without (ppid:N); a kernel command name of exactly 15 characters matches a longer name that starts with it. confirmed = one crashed process matches, ambiguous = several, no_match = none in the kernel log. Context only: no flag changes.';
+  const SC = {confirmed:'anom-warn', ambiguous:'anom-warn'};
+  sysBlock(host, 'Not-running processes vs kernel crashes', C.items.length ? sysTable(['Process','Slot / role','State','Status','Crash type','Events','Files'], C.items, (tr,r)=>{
+    sysCell(tr, r.process); sysCell(tr, r.slot===null ? '' : 'Slot '+r.slot+', '+r.role); sysCell(tr, r.state); sysCell(tr, r.status.replace('_',' '));
+    sysCell(tr, r.matches.map(m=>m.process+': '+m.type).join('; ')); sysCell(tr, r.matches.map(m=>m.count.toLocaleString('en-US')).join('; ')); sysCell(tr, r.matches.map(m=>m.files.join(', ')).join('; '));
+    if(SC[r.status]) tr.className = SC[r.status]; }) : null, C.items.length ? rule : 'All processes running - nothing to correlate.');
+}
+// check id -> detail renderer; a later step registers its own here.
+const SYS_DETAIL = {software:sysDetailSoftware, cfg_mem:sysDetailCfg, nat:sysDetailNat, cores:sysDetailCores, kernel:sysDetailKernel, log_errors:sysDetailLogErrors, commits:sysDetailCommits, crash_link:sysDetailCrashLink};
+function renderSysStatic(){
+  if(!hasSamples && !hasDph && !hasMp && !hasPow && !hasIfc) $('#sub').textContent = 'Generated '+D.generated+' UTC';
+  const n = SYS.checks.length, nd = SYS.checks.filter(c=>c.status==='no_data').length;
+  $('#sysinfo').textContent = n+' check(s)'+(nd ? ', '+nd+' without data' : '')+'. Overall: '+(SYS_BADGE[SYS.status] || [SYS.status])[0]+'. Sources: the CLI dump of the TSF, the names of the core files in the archive'+(SYS.logs ? ', var/log/messages and the daemon logs.' : '.');
+  if(SYS.logs && SYS.logs.budgets.length) $('#sysinfo').textContent += ' Limits reached: '+SYS.logs.budgets.join('; ')+'.';
+  const t = $('#syschecks'); t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  ['Group','Check','Source','Status','Value','Note'].forEach(h=>{ const th = sysEl('th', h); th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  SYS.checks.forEach(c=>{
+    const tr = tb.insertRow();
+    sysCell(tr, c.group); sysCell(tr, c.title); sysCell(tr, c.source);
+    tr.insertCell().appendChild(sysBadge(c.status));
+    sysCell(tr, c.value); sysCell(tr, c.note);
+    Array.from(tr.cells).forEach(x=>{ x.className = 'l'; });
+    if(c.status==='critical') tr.className = 'anom-crit'; else if(c.status==='warning') tr.className = 'anom-warn';
+  });
+  const ul = $('#sysbanner'); ul.replaceChildren();
+  if(!SYS.findings.filter(f=>f.level!=='info').length){ ul.appendChild(sysEl('li', 'No system health warnings or critical findings with the current thresholds.')); }
+  const finding = f=>{
+    const li = sysEl('li', null, 'lvl-'+f.level);
+    li.append(sysEl('span', f.code, 'badge b-'+f.level), document.createTextNode(f.text)); return li;
+  };
+  const infos = SYS.findings.filter(f=>f.level==='info');
+  SYS.findings.filter(f=>f.level!=='info').forEach(f=>ul.appendChild(finding(f)));
+  const old = $('#sysinfofind'); if(old) old.remove();
+  if(infos.length){
+    const det = sysEl('details'); det.id = 'sysinfofind'; det.appendChild(sysEl('summary', infos.length+' informational finding(s)'));
+    const il = sysEl('ul', null, 'banner'); infos.forEach(f=>il.appendChild(finding(f))); det.appendChild(il);
+    ul.after(det);
+  }
+  const host = $('#sysdetails'); host.replaceChildren();
+  SYS.checks.forEach(c=>{ if(SYS_DETAIL[c.id]) SYS_DETAIL[c.id](host, c); });
+}
+function renderSys(){}
+if(hasSys) renderSysStatic();
+
+'''
+
+# Source coverage tab and analysis-status badge (what the analysis actually looked at).
+JS_COV = r'''// Source coverage tab and analysis status badge
+const CV = D.coverage || null;
+const hasCov = !!CV;
+const COV_STATE = {
+  absent:['absent','info','No member of this family was found in the input.'],
+  unread:['unread','warn','Members were found but none could be read.'],
+  zero_samples:['0 samples','warn','Files were read but no sample could be extracted.'],
+  truncated:['truncated','warn','At least one member exceeded the read limit: only its last part was analysed.'],
+  error:['read error','crit','At least one member could not be read to the end.'],
+  conflict:['conflict','warn','Samples with the same DP and time but different values were found; the first was kept.'],
+  listed:['listed only','ok','Names and sizes were recorded; the content is never read.'],
+  ok:['ok','ok','Everything found was read.']
+};
+function covBadge(host, st){
+  const d = COV_STATE[st] || [st,'info','']; const b = document.createElement('span');
+  b.className = 'badge b-'+d[1]; b.textContent = d[0]; b.title = d[2]; host.appendChild(b);
+}
+function covMemberState(m){
+  const k = m.state.split(':')[0], b = document.createElement('span');
+  b.className = 'badge b-'+(k==='read'||k==='listed'?'ok':k==='error'?'crit':'warn'); b.textContent = m.state; if(m.detail) b.title = m.detail;
+  return b;
+}
+function covTable(t, head, rows, fill){
+  t.replaceChildren();
+  const hr = t.createTHead().insertRow();
+  head.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; th.className = 'l'; hr.appendChild(th); });
+  const tb = t.createTBody();
+  rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); Array.from(tr.cells).forEach(c=>{ c.className = 'l'; }); });
+}
+function covRange(f, l){ return f===null||f===undefined ? '' : iso(f)+' - '+iso(l)+' UTC'; }
+function renderCov(){
+  const ab = $('#astatus');
+  ab.style.display = ''; ab.className = 'badge astatus b-'+(CV.status==='complete'?'ok':'warn');
+  ab.textContent = 'Analysis: '+CV.status;
+  ab.title = CV.status==='complete' ? 'Every member found was read in full and no samples conflicted.' :
+    'Partial: '+(CV.summary.length ? CV.summary.join('; ') : 'see the Source coverage tab (Advanced view)')+'. Results may miss data; see the Source coverage tab (Advanced view).';
+  ab.onclick = ()=>{ if(ALL_TABS.includes('cov')){ if(!TABS.includes('cov')) setAdvanced(true); showTab('cov'); } };
+  $('#covmsg').textContent = CV.archive ? '' : 'Single-file input: source coverage is only meaningful for archives and directories.';
+  covTable($('#covfam'), ['Family','State','Found','Read','Truncated','Skipped','Samples','Time range (UTC)','Conflicts','Members'], CV.families, (tr,f)=>{
+    tr.insertCell().textContent = f.family;
+    const sc = tr.insertCell(); f.states.forEach(s=>covBadge(sc, s));
+    [f.found, f.read, f.truncated+f.errors, f.skipped].forEach(v=>{ tr.insertCell().textContent = v; });
+    tr.insertCell().textContent = f.samples===null ? 'n/a' : f.samples;
+    tr.insertCell().textContent = covRange(f.first, f.last);
+    tr.insertCell().textContent = f.family==='dp-monitor' ? f.conflicts : 'n/a';
+    const mc = tr.insertCell();
+    if(f.members.length){
+      const d = document.createElement('details'); const sm = document.createElement('summary'); sm.textContent = f.members.length+' member(s)'; d.appendChild(sm);
+      const ul = document.createElement('ul'); ul.className = 'cov-sub';
+      f.members.forEach(m=>{
+        const li = document.createElement('li'); li.appendChild(covMemberState(m));
+        let txt = ' '+m.name+(m.state==='listed' && m.detail ? ' ('+m.detail+')' : ''); if(m.samples!==null) txt += ' - '+m.samples+' samples'+(m.samples ? ', '+covRange(m.first, m.last) : '');
+        li.appendChild(document.createTextNode(txt)); ul.appendChild(li);
+      });
+      d.appendChild(ul); mc.appendChild(d);
+    } else if(f.dirs && f.dirs.length){
+      mc.textContent = 'empty directory: '+f.dirs.join(', ');
+    }
+    if(f.states.some(s=>s!=='ok')) tr.className = 'anom-warn';
+  });
+  $('#covskipmsg').textContent = CV.skipped.length ? CV.skipped.length+' member(s) were rejected before reading.' : 'No member was rejected.';
+  covTable($('#covskip'), ['Member','Reason'], CV.skipped, (tr,s)=>{ tr.insertCell().textContent = s.name; tr.insertCell().textContent = s.reason; });
+  const ul = $('#covnotes');
+  if(!CV.notes.length){ const li = document.createElement('li'); li.textContent = 'No limit was reached.'; ul.appendChild(li); }
+  CV.notes.forEach(n=>{ const li = document.createElement('li'); li.textContent = n; ul.appendChild(li); });
+  const C = CV.conflicts;
+  $('#covconfmsg').textContent = C.total ? (C.total+' conflicting sample(s)'+(C.shown<C.total ? ', first '+C.shown+' shown' : '')+'. The first sample was kept.') : 'No conflicting samples.';
+  covTable($('#covconf'), ['DP','Time (UTC)','Kept (source)','Dropped (source)'], C.items, (tr,c)=>{
+    tr.insertCell().textContent = c.dp; tr.insertCell().textContent = iso(c.t);
+    tr.insertCell().textContent = c.kept; tr.insertCell().textContent = c.dropped;
+  });
+}
+if(hasCov) renderCov();
+
+'''
+
 TEMPLATE = (TEMPLATE_HEAD +
             TEMPLATE_CSS +
             TEMPLATE_BODY +
             JS_CORE +
+            JS_PERCORE +
             JS_POW +
+            JS_IFC +
+            JS_DPH +
+            JS_MP +
+            JS_SYS +
+            JS_COV +
             JS_TABS)

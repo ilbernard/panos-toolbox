@@ -4,7 +4,15 @@ tsf.analyzer - Extracts Throughput (kbps) and related metrics from the
 dp-monitor.* files of a Palo Alto Networks Tech Support File (TSF) and builds a
 standalone HTML report (filterable/exportable table + interactive charts,
 including CPU load by group). The output of `debug dataplane pow performance`
-(tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py).
+(tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py), and the interface
+counters (`show counter interface all`, `show interface ...`) into an "Interface Errors" tab
+(see interface_errors.py). The resource monitor of the same dp-monitor files (session, packet
+buffer and descriptor utilization, CPU load per core) goes into the top of the "Dataplane" tab (see
+dp_health.py). The memory and processes sections of the mp-monitor.* files go into a
+"Management plane" tab (see mp_monitor.py). Four sections of the CLI dump (software status,
+configuration memory, NAT pools) and the names of the core files in the archive go into a
+"System health" tab (see system_health.py); the kernel log, the daemon logs and the job list add
+the check group "Logs" to the same tab (see log_events.py).
 
 Standard library only.
 
@@ -12,15 +20,21 @@ Usage:
     panos-toolbox tsf analyze tsf1.tgz [tsf2.tgz ...] [-o OUTDIR]
     panos-toolbox tsf analyze /path/to/extracted_TSF_dir
     panos-toolbox tsf analyze dp-monitor.log    # single file
-    panos-toolbox tsf analyze cli_output.txt    # single file with POW output
+    panos-toolbox tsf analyze cli_output.txt    # single file with POW / interface output
     python -m panos_toolbox.tsf.analyzer ...    # equivalent
 
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
-data); with multiple inputs a summary index.html is also created. The POW anomaly
-thresholds can be tuned with the --pow-<name> options (see --help).
+data, <name>_interfaces.html when it has only interface data, <name>_dphealth.html /
+<name>_mp.html / <name>_sys.html when it has only dataplane health / management plane / system
+health data, <name>_tsf.html when it has several kinds); with multiple inputs a TSF summary index.html is also created (analysis status, module
+badges and finding counts per TSF). The POW and interface
+anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options, the dataplane
+health ones with --dp-<name>, the management plane ones with --mp-<name> and the system health
+ones with --sys-<name> (see --help).
 """
 import argparse
 import html
+import io
 import json
 import os
 import re
@@ -30,15 +44,31 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import pow_glossary
+from . import archive, correlations, dp_health, if_glossary, log_events, mp_monitor, pow_glossary, system_health
+from .coverage import build_coverage
+from .dp_health import DP_THRESHOLDS, evaluate_dp_health
+from .findings import analysis_status, from_flags, module_status
+from .model import Collected, Inventory
+from .mp_monitor import MP_THRESHOLDS, evaluate_mp_monitor
+from .interface_errors import (
+    IF_THRESHOLDS,
+    evaluate_interfaces,
+    glossary_keys,
+    merge_parsed,
+    parse_interfaces,
+)
+from .interface_errors import has_data as ifc_has_data
+from .log_events import LOG_THRESHOLDS
 from .pow_perf import POW_THRESHOLDS, evaluate, has_data, parse_pow
 from .report_help import render_section_help
 from .report_template import TEMPLATE
+from .system_health import SYS_THRESHOLDS, evaluate_system_health
 
 # --------------------------------------------------------------------------
 # Parsing
 # --------------------------------------------------------------------------
 DP_FILE_RE = re.compile(r'(?:^|/)var/log/pan/(dp-monitor\.[^/]+)$')
+MP_FILE_RE = re.compile(r'(?:^|/)var/log/pan/(mp-monitor\.[^/]+)$')
 CLI_FILE_RE = re.compile(r'(?:^|/)tmp/cli/[^/]+\.txt$')
 HDR_RE = re.compile(
     r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d+))? '
@@ -55,6 +85,20 @@ METRIC_RES = {
 THROUGHPUT_LOOSE = re.compile(r'^:?\s*Throughput:')
 GRP_TITLE_RE = re.compile(r'^:?\s*CPU load sampling by group:')
 GRP_LINE_RE = re.compile(r'^:?\s*([A-Za-z]\w*)\s*:\s*(\d+)\s*%\s*$')
+
+
+CMP_KEYS = ('kbps', 'pps', 'cps', 'sess', 'util', 'grp')
+
+
+def _cmp_val(sample, key):
+    """Value used to compare duplicates: a missing or empty 'grp' is the same thing,
+    while for the numeric fields 0 and a missing value are different."""
+    v = sample.get(key)
+    return (v or None) if key == 'grp' else v
+
+
+def iso_utc(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def dp_label(raw):
@@ -80,14 +124,27 @@ def parse_header(line):
     return int(local.timestamp() * 1000), f'{sign}{oh}{om}', section
 
 
-def parse_lines(lines, src, samples, seen, warnings, offsets):
+def parse_lines(lines, src, samples, seen, warnings, offsets, conflicts=None):
     """Walks the lines of a dp-monitor.* file and collects the samples.
 
     Each '--- <name>' section is processed on its own: the session metrics
     (after 'target-dp:') yield one sample per DP; the 'CPU load sampling by
     group' block is bound to the DP of that same section.
     Returns the number of Throughput samples found (duplicates included).
+
+    Duplicates (same DP and timestamp, e.g. overlapping rotated files) keep the
+    FIRST sample. `seen` is either a set of (dp, t) keys (old behaviour: duplicates
+    dropped silently) or a dict (dp, t) -> kept sample, which also detects conflicts:
+    a duplicate whose kbps/pps/cps/sess/util/grp differ from the kept one is dropped
+    too, but reported. Each conflict is appended to `conflicts` (if given) as a tuple
+    (dp, t, kept_src, dropped_src), and, to avoid flooding, one aggregated warning is
+    added to `warnings` per (kept_src, dropped_src) pair at the end of the call: for a
+    single sample '<dropped>: sample <dp> @ <UTC time> conflicts with <kept> (kept the
+    first)', for N > 1 '<dropped>: N samples conflict with <kept> (kept the first);
+    first: <dp> @ <UTC time>'. A conflict inside one file reads 'conflicts with another
+    sample of the same file'. Identical duplicates are never reported.
     """
+    pairs = {}           # (kept_src, dropped_src) -> [count, first dp, first t]
     ts = None            # timestamp (ms UTC) of the last valid header
     dp = None            # current DP (last target-dp seen in the section)
     rec = None
@@ -127,8 +184,18 @@ def parse_lines(lines, src, samples, seen, warnings, offsets):
             n_found += 1
             key = (r['dp'], r['t'])
             if key not in seen:        # duplicate = overlapping rotated files
-                seen.add(key)
+                if isinstance(seen, dict):
+                    seen[key] = r
+                else:
+                    seen.add(key)
                 samples.append(r)
+            elif isinstance(seen, dict):
+                kept = seen[key]
+                if any(_cmp_val(kept, k) != _cmp_val(r, k) for k in CMP_KEYS):
+                    if conflicts is not None:
+                        conflicts.append((r['dp'], r['t'], kept['src'], src))
+                    pair = pairs.setdefault((kept['src'], src), [0, r['dp'], r['t']])
+                    pair[0] += 1
         sec_recs.clear(); sec_dps.clear(); sec_groups.clear()
         cur_group = None
 
@@ -194,6 +261,15 @@ def parse_lines(lines, src, samples, seen, warnings, offsets):
                 warnings.append(f'{src}:{lineno}: Throughput line in unexpected '
                                 f'format: {line.strip()[:60]!r}')
     end_section()
+    for (kept_src, dropped_src), (count, pdp, pt) in pairs.items():
+        other = ('another sample of the same file' if kept_src == dropped_src
+                 else kept_src)
+        if count == 1:
+            warnings.append(f'{dropped_src}: sample {pdp} @ {iso_utc(pt)} conflicts '
+                            f'with {other} (kept the first)')
+        else:
+            warnings.append(f'{dropped_src}: {count} samples conflict with {other} '
+                            f'(kept the first); first: {pdp} @ {iso_utc(pt)}')
     return n_found
 
 
@@ -202,79 +278,197 @@ def iter_text_lines(fobj):
         yield b.decode('utf-8', errors='replace')
 
 
+def _select_family(logical):
+    """Family of an archive member (logical path, '.gz' dropped), or None."""
+    if DP_FILE_RE.search('/' + logical):
+        return 'dp-monitor'
+    if MP_FILE_RE.search('/' + logical):
+        return 'mp-monitor'
+    if CLI_FILE_RE.search('/' + logical):
+        return 'cli'
+    if log_events.MESSAGES_PATH_RE.search('/' + logical):
+        return 'messages'
+    if log_events.DAEMON_PATH_RE.search('/' + logical):
+        return 'daemon-log'
+    if system_health.core_path_kind(logical):
+        return archive.LIST_ONLY_PREFIX + 'cores'    # names and sizes only, never read
+    return None
+
+
 def collect(path, warnings):
-    """Returns (samples, offsets, n_files, pow_data) for a TSF / directory / file.
+    """Returns a Collected (samples, offsets, n_files, pow_data, ifc_data, inventory,
+    conflicts, status).
 
     pow_data is the parse_pow() result of the first 'debug dataplane pow
     performance' output found (tmp/cli/*.txt, or a single input file), or None.
+    ifc_data is the merged parse_interfaces() result of the interface counter outputs
+    found in the same files, or None. Archives and directories are read with
+    archive.py (in memory, unsafe members skipped); dp-monitor files are parsed in
+    rotation order, oldest to current.
     """
-    samples, seen, offsets = [], set(), set()
+    samples, seen, offsets = [], {}, set()
+    conflicts = []
+    dp_store = dp_health.new_store()
+    mp_store = mp_monitor.new_store()
+    sys_store = system_health.new_store()
+    log_store = log_events.new_store()
+    core_files, core_dirs = [], []
     n_files = 0
     pow_found = []
+    ifc_found = []
+    inventory = Inventory()
 
     def handle(name, fobj):
         nonlocal n_files
         base = os.path.basename(name)
-        if base.endswith('.gz'):
-            warnings.append(f'{base}: compressed file (.gz) not supported, '
-                            f'skipped')
-            return
         n_files += 1
+        decoded = []                      # decoded once, reused by dp_health
+
+        def tee():
+            for ln in log_events.tap_offsets(iter_text_lines(fobj), log_store):
+                decoded.append(ln)
+                yield ln
+
         try:
-            found = parse_lines(iter_text_lines(fobj), base, samples, seen,
-                                warnings, offsets)
+            found = parse_lines(tee(), base, samples, seen, warnings, offsets, conflicts)
         except Exception as exc:  # corrupted/truncated file
             warnings.append(f'{base}: read error ({exc}), '
                             f'partial data kept')
+            found = None
+        try:
+            dp_health.parse_dp_health(decoded, base, dp_store, warnings)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: dataplane health not parsed ({exc})')
+        if found is None:
             return
         if found == 0:
             warnings.append(f'{base}: no Throughput samples found')
 
+    def handle_mp(name, fobj):
+        base = os.path.basename(name)
+        try:
+            mp_monitor.parse_mp_monitor(
+                log_events.tap_offsets(iter_text_lines(fobj), log_store), base, mp_store,
+                warnings)
+        except (OSError, EOFError, tarfile.TarError, ValueError, KeyError, IndexError,
+                TypeError, AttributeError) as exc:  # corrupted/truncated file
+            warnings.append(f'{base}: management plane data not parsed ({exc}), '
+                            f'partial data kept')
+
     def handle_cli(name, fobj):
         base = os.path.basename(name)
         try:
-            parsed = parse_pow(iter_text_lines(fobj), src=base)
+            text_lines = list(iter_text_lines(fobj))
         except (OSError, EOFError, tarfile.TarError) as exc:  # truncated archive
-            warnings.append(f'{base}: POW read error ({exc}), skipped')
+            warnings.append(f'{base}: CLI output read error ({exc}), skipped')
             return
+        try:
+            system_health.parse_system_health(text_lines, base, sys_store, warnings)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: system health not parsed ({exc})')
+        try:
+            log_events.parse_jobs(text_lines, base, log_store, warnings)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: job list not parsed ({exc})')
+        parsed = parse_pow(text_lines, src=base)
         if has_data(parsed):
             pow_found.append((base, parsed))
+        ifc = parse_interfaces(text_lines, src=base)
+        # Files with only context (system info, clock, global counters) are kept too: the
+        # interface counters may sit in another file of the same TSF.
+        if ifc_has_data(ifc) or ifc['system'] or ifc['global'] or ifc['collected_at']:
+            ifc_found.append(ifc)
 
-    if os.path.isdir(path):
-        for root, _dirs, files in os.walk(path):
-            for f in sorted(files):
-                full = os.path.join(root, f)
-                rel = os.path.relpath(full, path).replace(os.sep, '/')
-                if DP_FILE_RE.search('/' + rel):
-                    with open(full, 'rb') as fh:
-                        handle(rel, fh)
-                elif CLI_FILE_RE.search('/' + rel):
-                    with open(full, 'rb') as fh:
-                        handle_cli(rel, fh)
-    elif tarfile.is_tarfile(path):
-        with tarfile.open(path, 'r:*') as tf:
-            for m in tf:                      # single-pass read
-                if not m.isfile():
-                    continue
-                if DP_FILE_RE.search(m.name.lstrip('./')):
-                    handle(m.name, tf.extractfile(m))
-                elif CLI_FILE_RE.search(m.name.lstrip('./')):
-                    handle_cli(m.name, tf.extractfile(m))
+    def handle_daemon(mem):
+        base = os.path.basename(mem.name)
+        daemon = log_events.DAEMON_PATH_RE.search('/' + mem.logical).group(1)
+        try:
+            log_events.parse_daemon_log(mem.data, daemon, base, log_store, warnings)
+        except (OSError, EOFError, tarfile.TarError, ValueError, KeyError, IndexError,
+                TypeError, AttributeError) as exc:  # corrupted/truncated file
+            warnings.append(f'{base}: daemon log not parsed ({exc}), partial data kept')
+
+    def handle_messages(name, fobj):
+        base = os.path.basename(name)
+        try:
+            log_events.parse_messages(iter_text_lines(fobj), base, log_store, warnings)
+        except (OSError, EOFError, tarfile.TarError, ValueError, KeyError, IndexError,
+                TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: kernel log not parsed ({exc}), partial data kept')
+
+    def have_ifc():
+        return any(ifc_has_data(p) for p in ifc_found)
+
+    if os.path.isdir(path) or tarfile.is_tarfile(path):
+        dp_members = []
+        mp_members = []
+        msg_members = []
+        for mem in archive.iter_members(path, _select_family, inventory):
+            base = os.path.basename(mem.name)
+            if mem.error:
+                warnings.append(f'{base}: read error ({mem.error}), partial data kept')
+            if mem.truncated and not mem.error:
+                warnings.append(f'{base}: larger than the read limit, only its last '
+                                f'part was analysed')
+            if mem.family == 'cores':           # list-only: name and size, no content
+                if mem.is_dir:
+                    core_dirs.append(mem.name)
+                else:
+                    core_files.append((mem.name, mem.size))
+            elif mem.family == 'dp-monitor':
+                dp_members.append(mem)
+            elif mem.family == 'mp-monitor':
+                mp_members.append(mem)
+            elif mem.family == 'messages':
+                msg_members.append(mem)
+            elif mem.family == 'daemon-log':
+                handle_daemon(mem)              # error counts do not depend on the order
+            else:
+                handle_cli(mem.name, io.BytesIO(mem.data))
+        order = {n: i for i, n in enumerate(
+            archive.sort_rotations([m.name for m in dp_members]))}
+        for mem in sorted(dp_members, key=lambda m: order[m.name]):
+            handle(mem.name, io.BytesIO(mem.data))
+        mp_order = {n: i for i, n in enumerate(
+            archive.sort_rotations([m.name for m in mp_members]))}
+        for mem in sorted(mp_members, key=lambda m: mp_order[m.name]):
+            handle_mp(mem.name, io.BytesIO(mem.data))
+        msg_order = {n: i for i, n in enumerate(
+            archive.sort_rotations([m.name for m in msg_members]))}
+        for mem in sorted(msg_members, key=lambda m: msg_order[m.name]):
+            handle_messages(mem.name, io.BytesIO(mem.data))
+        system_health.add_core_members(sys_store, core_files, core_dirs)
+        for name, reason in inventory.skipped:
+            if reason == archive.REASON_UNSAFE:
+                warnings.append(f'{name}: unsafe member path, skipped')
+        warnings.extend(inventory.notes)
     else:                                     # single file: POW output or log
         with open(path, 'rb') as fh:
             handle_cli(path, fh)
-        if not pow_found:
+        if not pow_found and not have_ifc() and not system_health.has_data(sys_store) \
+                and not log_events.has_data(log_store):
             with open(path, 'rb') as fh:
-                handle(path, fh)
+                handle_mp(path, fh)
+            if not mp_monitor.has_data(mp_store):    # not an mp-monitor file: dp-monitor log
+                with open(path, 'rb') as fh:
+                    handle(path, fh)
 
-    if n_files == 0 and not pow_found:
+    if n_files == 0 and not pow_found and not have_ifc() and not mp_monitor.has_data(mp_store) \
+            and not system_health.has_data(sys_store) and not log_events.has_data(log_store):
         warnings.append('no dp-monitor.* file found in /var/log/pan')
     if len(pow_found) > 1:
         warnings.append(f'POW output found in {len(pow_found)} files, '
                         f'using {pow_found[0][0]}')
     samples.sort(key=lambda r: (r['t'], r['dp']))
     pow_data = pow_found[0][1] if pow_found else None
-    return samples, offsets, n_files, pow_data
+    ifc_data = merge_parsed(ifc_found) if have_ifc() else None
+    offsets |= mp_store['offsets']
+    return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory, conflicts,
+                     analysis_status(inventory, len(conflicts)),
+                     dp_store if dp_health.has_data(dp_store) else None,
+                     mp_store if mp_monitor.has_data(mp_store) else None,
+                     sys_store if system_health.has_data(sys_store) else None,
+                     log_store if log_events.has_data(log_store) else None)
 
 
 def add_aggregate(samples):
@@ -317,10 +511,13 @@ def utc_str(ms):
 
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
-                  thresholds=None):
+                  thresholds=None, ifc_view=None, if_thresholds=None, coverage=None,
+                  dph_view=None, dp_thresholds=None, mp_view=None, mp_thresholds=None,
+                  sys_view=None, sys_thresholds=None):
     data = {
         'name': name,
-        'kind': 'TSF analysis' if pow_view else 'Throughput',
+        'kind': 'TSF analysis' if (pow_view or ifc_view or dph_view or mp_view
+                                    or sys_view) else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
@@ -328,6 +525,11 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'series': series,
         'samples': samples,
         'pow': pow_view,
+        'ifc': ifc_view,
+        'coverage': coverage,
+        'dph': dph_view,
+        'mp': mp_view,
+        'sys': sys_view,
     }
     groups = []
     for smp in samples:
@@ -351,32 +553,114 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
             names.update(r['name'] for r in v['groups'] + v['funcs'])
             names.update(h['name'] for h in v['hist'])
     names.update(g for g in groups if g in pow_glossary.GLOSSARY)
-    data['gl'] = {'names': pow_glossary.glossary_subset(names),
-                  'fields': pow_glossary.field_entries(),
-                  'conf': pow_glossary.CONF_TEXT}
+    gl_names = pow_glossary.glossary_subset(names)
+    gl_fields = pow_glossary.field_entries()
+    if ifc_view:
+        gl_names.update(if_glossary.glossary_subset(glossary_keys(ifc_view)))
+        gl_fields.update(if_glossary.field_entries())
+    data['gl'] = {'names': gl_names, 'fields': gl_fields, 'conf': pow_glossary.CONF_TEXT}
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     out = tpl
-    for key, val in render_section_help(thresholds).items():
+    for key, val in render_section_help(thresholds, if_thresholds, dp_thresholds,
+                                         mp_thresholds, sys_thresholds).items():
         out = out.replace(key, val)
     return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
                .replace('__TITLE__', html.escape(name)))
 
 
+# Status order for the TSF summary: worst first.
+_STATUS_RANK = {'critical': 0, 'warning': 1, 'ok': 2, 'no_data': 3}
+_STATUS_LABEL = {'critical': 'critical', 'warning': 'warning', 'ok': 'ok', 'no_data': 'no data'}
+_MODULE_ORDER = ('DP health', 'MP', 'System', 'POW', 'Interfaces')
+
+INDEX_CSS = (
+    'body{font:15px system-ui,sans-serif;margin:2rem;color:#1c2530}'
+    'table{border-collapse:collapse}td,th{padding:.4rem .8rem;border-bottom:'
+    '1px solid #d8dde3;text-align:left;vertical-align:top}'
+    '.b{display:inline-block;margin:0 .25rem .2rem 0;padding:1px 7px;border-radius:9px;'
+    'color:#fff;font-size:12px;white-space:nowrap}'
+    '.b-critical{background:#b42318}.b-warning{background:#b7791f}.b-ok{background:#2f855a}'
+    '.b-no_data{background:#5d6b7a}.b-partial{background:#b7791f}.b-complete{background:#2f855a}'
+    '.n{display:inline-block;min-width:1.6em;text-align:center;margin-right:.25rem;'
+    'padding:0 5px;border-radius:4px;font-size:13px}'
+    '.n-crit{background:#fbe3e0;color:#b42318}.n-warn{background:#fff4d6;color:#8a5a00}'
+    '.n-info{background:#e6edf3;color:#44515f}.n.z{background:#eef1f4;color:#8a96a3}')
+
+
+def summarize_views(pow_view, ifc_view, dph_view, mp_view, sys_view):
+    """Compact per-module status and finding counts of one TSF, from the evaluated views.
+
+    Returns (modules, counts): `modules` is a list of (label, status) for the modules present
+    (status: ok / warning / critical / no_data), `counts` is {'crit', 'warn', 'info'} over the
+    flags of all modules. Nothing is re-parsed: it reads the flag lists of the views.
+    """
+    groups = []
+    if dph_view:
+        groups.append(('DP health', dph_view['findings']))
+    if mp_view:
+        groups.append(('MP', mp_view['findings']))
+    if sys_view:
+        groups.append(('System', sys_view['findings']))
+    if pow_view:
+        fl = []
+        for view in [pow_view['global'], *pow_view['cores'].values()]:
+            for r in [*view['groups'], *view['funcs'], *view.get('hist', ())]:
+                fl.extend(r['flags'])
+        for cf in pow_view['core_summary']['flags'].values():
+            fl.extend(cf)
+        groups.append(('POW', fl))
+    if ifc_view:
+        groups.append(('Interfaces', [f for r in ifc_view['rows'] for f in r['flags']]))
+    groups.sort(key=lambda g: _MODULE_ORDER.index(g[0]))
+    counts = {'crit': 0, 'warn': 0, 'info': 0}
+    modules = []
+    for label, flags in groups:
+        found = from_flags(flags)
+        for f in found:
+            counts[{'critical': 'crit', 'warning': 'warn', 'info': 'info'}[f.level]] += 1
+        status = sys_view['status'] if label == 'System' else module_status(found, True)
+        modules.append((label, status))
+    return modules, counts
+
+
+def _row_status(r):
+    sts = [s for _l, s in r.get('modules', ())]
+    return min(sts, key=lambda s: _STATUS_RANK.get(s, 3)) if sts else 'no_data'
+
+
 def render_index(rows):
-    body = ''.join(
-        '<tr><td><a href="{f}">{n}</a></td><td>{s}</td><td>{a}</td><td>{b}</td>'
-        '<td>{p}</td><td>{w}</td></tr>'.format(
-            f=html.escape(r['file']), n=html.escape(r['name']), s=r['samples'],
-            a=r['start'], b=r['end'], p=r['peak'], w=r['warnings'])
-        for r in rows)
-    return ('<!doctype html><meta charset="utf-8"><title>Throughput summary</title>'
-            '<style>body{font:15px system-ui,sans-serif;margin:2rem;color:#1c2530}'
-            'table{border-collapse:collapse}td,th{padding:.4rem .8rem;border-bottom:'
-            '1px solid #d8dde3;text-align:left}</style>'
-            '<h1>Throughput summary</h1><p>Times in UTC.</p>'
-            '<table><tr><th>TSF</th><th>Samples</th><th>Start</th><th>End</th>'
-            f'<th>Peak</th><th>Warnings</th></tr>{body}</table>')
+    """TSF summary page: one row per TSF, worst module status first, then by name."""
+    def badge(cls, text, title=''):
+        t = f' title="{html.escape(title, quote=True)}"' if title else ''
+        return f'<span class="b b-{html.escape(cls, quote=True)}"{t}>{html.escape(text)}</span>'
+
+    ordered = sorted(rows, key=lambda r: (_STATUS_RANK.get(_row_status(r), 3), r['name']))
+    out = []
+    for r in ordered:
+        analysis = r.get('analysis', 'complete')
+        mods = ''.join(badge(s, f'{lbl}: {_STATUS_LABEL.get(s, s)}')
+                       for lbl, s in r.get('modules', ())) or '-'
+        c = r.get('counts') or {}
+        cnt = ''.join(
+            f'<span class="n n-{k}{"" if c.get(k) else " z"}" title="{k}">{int(c.get(k, 0))}</span>'
+            for k in ('crit', 'warn', 'info'))
+        out.append(
+            '<tr><td><a href="{f}">{n}</a></td><td>{an}</td><td>{m}</td><td>{c}</td>'
+            '<td>{s}</td><td>{a}</td><td>{b}</td><td>{p}</td><td>{w}</td></tr>'.format(
+                f=html.escape(r['file'], quote=True), n=html.escape(r['name']),
+                an=badge(analysis, analysis, r.get('analysis_reason', '')), m=mods, c=cnt,
+                s=html.escape(str(r.get('samples', 0))),
+                a=html.escape(str(r.get('start') or '-')), b=html.escape(str(r.get('end') or '-')),
+                p=html.escape(str(r.get('peak') or '-')),
+                w=html.escape(str(r.get('warnings', 0)))))
+    return ('<!doctype html><meta charset="utf-8"><title>TSF summary</title>'
+            f'<style>{INDEX_CSS}</style>'
+            '<h1>TSF summary</h1><p>Times in UTC. Rows are sorted by worst module status. '
+            'Findings: critical / warning / info across all modules.</p>'
+            '<table><tr><th>TSF</th><th>Analysis</th><th>Modules</th><th>Findings</th>'
+            '<th>Samples</th><th>Start</th><th>End</th><th>Peak</th><th>Warnings</th></tr>'
+            f'{"".join(out)}</table>')
 
 
 def main(argv=None):
@@ -384,7 +668,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('inputs', nargs='+',
                     help='TSF (.tgz/.tar.gz), directory, dp-monitor.* file or a text file '
-                         'with `debug dataplane pow performance` output')
+                         'with `debug dataplane pow performance` or interface counter output')
     ap.add_argument('-o', '--outdir', default='output', help='output directory (default: output)')
     ap.add_argument('--open', action='store_true', help='open the report in the default browser')
     grp = ap.add_argument_group(
@@ -394,11 +678,60 @@ def main(argv=None):
     for key, default in POW_THRESHOLDS.items():
         grp.add_argument('--pow-' + key.replace('_', '-'), dest='pow_' + key, metavar='N',
                          type=float, default=None, help=f'{key} [{default:g}]')
+    igrp = ap.add_argument_group(
+        'Interface Errors thresholds',
+        'Tunables of the interface error flags (defaults in brackets; see '
+        'interface_errors.IF_THRESHOLDS and the flag reference in the report help).')
+    for key, default in IF_THRESHOLDS.items():
+        igrp.add_argument('--if-' + key.replace('_', '-'), dest='if_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
+    dgrp = ap.add_argument_group(
+        'Dataplane health thresholds',
+        'Tunables of the dataplane health flags (defaults in brackets; see '
+        'dp_health.DP_THRESHOLDS and the flag reference in the report help). Percent values '
+        'are 0-100.')
+    for key, default in DP_THRESHOLDS.items():
+        dgrp.add_argument('--dp-' + key.replace('_', '-'), dest='dp_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
+    mgrp = ap.add_argument_group(
+        'Management plane thresholds',
+        'Tunables of the management plane memory and process flags (defaults in brackets; '
+        'see mp_monitor.MP_THRESHOLDS and the flag reference in the report help). Percent '
+        'values are 0-100.')
+    for key, default in MP_THRESHOLDS.items():
+        mgrp.add_argument('--mp-' + key.replace('_', '-'), dest='mp_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
+    sgrp = ap.add_argument_group(
+        'System health thresholds',
+        'Tunables of the system health flags (defaults in brackets; see '
+        'system_health.SYS_THRESHOLDS, log_events.LOG_THRESHOLDS and the flag reference in the '
+        'report help). Percent values are 0-100.')
+    for key, default in {**SYS_THRESHOLDS, **LOG_THRESHOLDS}.items():
+        sgrp.add_argument('--sys-' + key.replace('_', '-'), dest='sys_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
     overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
                  if getattr(args, 'pow_' + k) is not None}
     if any(v < 0 for v in overrides.values()):
         ap.error('POW thresholds must be >= 0')
+    if_overrides = {k: getattr(args, 'if_' + k) for k in IF_THRESHOLDS
+                    if getattr(args, 'if_' + k) is not None}
+    if any(v < 0 for v in if_overrides.values()):
+        ap.error('interface thresholds must be >= 0')
+    dp_overrides = {k: getattr(args, 'dp_' + k) for k in DP_THRESHOLDS
+                    if getattr(args, 'dp_' + k) is not None}
+    if any(v < 0 for v in dp_overrides.values()):
+        ap.error('dataplane health thresholds must be >= 0')
+    mp_overrides = {k: getattr(args, 'mp_' + k) for k in MP_THRESHOLDS
+                    if getattr(args, 'mp_' + k) is not None}
+    if any(v < 0 for v in mp_overrides.values()):
+        ap.error('management plane thresholds must be >= 0')
+    sys_overrides = {k: getattr(args, 'sys_' + k) for k in SYS_THRESHOLDS
+                     if getattr(args, 'sys_' + k) is not None}
+    log_overrides = {k: getattr(args, 'sys_' + k) for k in LOG_THRESHOLDS
+                     if getattr(args, 'sys_' + k) is not None}
+    if any(v < 0 for v in [*sys_overrides.values(), *log_overrides.values()]):
+        ap.error('system health thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -408,40 +741,100 @@ def main(argv=None):
         warnings = []
         name = re.sub(r'(\.tar\.gz|\.tgz|\.tar)$', '', os.path.basename(path.rstrip('/')))
         try:
-            samples, offsets, n_files, pow_data = collect(path, warnings)
+            col = collect(path, warnings)
+            samples, offsets, n_files = col.samples, col.offsets, col.n_files
+            pow_data, ifc_data = col.pow_data, col.ifc_data
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
-        if not samples and pow_data is None:
+        if not samples and pow_data is None and ifc_data is None and col.dp_health is None \
+                and col.mp_data is None and col.sys_data is None and col.log_data is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
             continue
         series = add_aggregate(samples) if samples else []
         pow_view = evaluate(pow_data, overrides) if pow_data else None
+        ifc_view = evaluate_interfaces(ifc_data, if_overrides) if ifc_data else None
+        dph_view = evaluate_dp_health(col.dp_health, dp_overrides) if col.dp_health else None
+        mp_view = evaluate_mp_monitor(col.mp_data, mp_overrides) if col.mp_data else None
+        sys_base = col.sys_data if col.sys_data else (
+            system_health.new_store() if col.log_data else None)
+        sys_view = evaluate_system_health(sys_base, sys_overrides) if sys_base else None
+        if sys_view and col.log_data:
+            log_events.apply_to_system_view(sys_view, col.log_data, log_overrides, mp_view,
+                                            dph_view)
+        if sys_view and (col.log_data or sys_view['software']['bad']):
+            correlations.apply_to_system_view(sys_view)
         pow_warnings = pow_data['warnings'] if pow_data else []
-        suffix = '_throughput.html' if samples else '_pow.html'
+        ifc_warnings = ifc_view['warnings'] if ifc_view else []
+        if samples:
+            suffix = '_throughput.html'
+        elif pow_data is None and ifc_view is None:
+            n_kinds = sum(1 for v in (dph_view, mp_view, sys_view) if v)
+            suffix = ('_tsf.html' if n_kinds > 1 else '_dphealth.html' if dph_view
+                      else '_mp.html' if mp_view else '_sys.html')
+        elif pow_data is None:
+            suffix = '_interfaces.html'
+        else:
+            suffix = '_tsf.html' if ifc_view else '_pow.html'
         out = os.path.join(args.outdir, f'{name}{suffix}')
+        coverage = build_coverage(col)
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
-                                   pow_view, overrides))
-        n_warn = len(warnings) + len(pow_warnings)
+                                   pow_view, overrides, ifc_view, if_overrides,
+                                   coverage, dph_view, dp_overrides,
+                                   mp_view, mp_overrides, sys_view,
+                                   {**sys_overrides, **log_overrides}))
+        partial = ''
+        if col.status == 'partial':
+            n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())
+            partial = (f' [analysis partial: {len(col.conflicts)} conflicts, '
+                       f'{n_trunc} truncated members]')
+        dph_warnings = dph_view['warnings'] if dph_view else []
+        mp_warnings = mp_view['warnings'] if mp_view else []
+        sys_warnings = sys_view['warnings'] if sys_view else []
+        n_warn = (len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
+                  + len(mp_warnings) + len(sys_warnings))
+        modules, counts = summarize_views(pow_view, ifc_view, dph_view, mp_view, sys_view)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
-               'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
+               'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn,
+               'analysis': col.status, 'analysis_reason': '; '.join(coverage['summary']),
+               'modules': modules, 'counts': counts}
         if samples:
             base = [s for s in samples if s['dp'] == series[0]]
             peak = max(base, key=lambda s: s['kbps'])
             print(f'[OK] {path}: {len(base)} samples, {len(series) - (series[0] == "ALL")} DP, '
-                  f'{n_warn} warnings -> {out}')
+                  f'{n_warn} warnings{partial} -> {out}')
             row.update(samples=len(base), start=utc_str(base[0]['t']),
                        end=utc_str(base[-1]['t']),
                        peak=f"{fmt_kbps(peak['kbps'])} ({utc_str(peak['t'])})")
-        else:
+        elif pow_data is not None:
             g = pow_data['global']
-            print(f'[OK] {path}: POW performance only ({len(g["funcs"])} functions, '
+            print(f'[OK] {path}: POW performance{" and interface errors" if ifc_view else " only"} '
+                  f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
-                  f'{n_warn} warnings -> {out}')
-        for w in warnings + pow_warnings:
+                  f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None and not dph_view and not mp_view:
+            checks = ', '.join(f'{c["title"]} {c["status"]}' for c in sys_view['checks'])
+            print(f'[OK] {path}: system health only ({checks}), '
+                  f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None and not dph_view:
+            print(f'[OK] {path}: management plane only ({mp_view["n_mem"]} memory and '
+                  f'{mp_view["n_proc"]} processes samples), '
+                  f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None:
+            print(f'[OK] {path}: dataplane health{" and management plane" if mp_view else " only"} '
+                  f'({dph_view["n_samples"]} samples), '
+                  f'{n_warn} warnings{partial} -> {out}')
+        else:
+            print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
+                  f'{n_warn} warnings{partial} -> {out}')
+        if sys_view:
+            print(f'     system health: {sys_view["status"]} ('
+                  + '; '.join(f'{c["title"]}: {c["status"]}' for c in sys_view['checks']) + ')')
+        for w in warnings + pow_warnings + ifc_warnings + dph_warnings + mp_warnings \
+                + sys_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)
 
