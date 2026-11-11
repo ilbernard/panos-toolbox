@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from panos_toolbox.tsf import analyzer, pow_perf, report_template
+from panos_toolbox.tsf import analyzer, dp_health, pow_perf, report_template
 from panos_toolbox.tsf.report_help import SECTION_HELP, SECTION_TITLES, render_section_help
 
 
@@ -17,6 +17,7 @@ def render_help(thresholds=None):
 
 FIXTURE = Path(__file__).parent / 'data' / 'pow_sample.txt'
 PERF_SRC = Path(pow_perf.__file__).read_text(encoding='utf-8')
+DPH_SRC = Path(dp_health.__file__).read_text(encoding='utf-8')
 
 
 def test_template_import_and_pieces():
@@ -68,6 +69,23 @@ def test_every_flag_code_in_pow_perf_is_documented():
     out = render_help()
     missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
     assert not missing, missing
+
+
+def test_every_flag_code_in_dp_health_is_documented():
+    codes = set(re.findall(r"_flag\(\s*r?\w*,\s*'([A-Z_]+)'", DPH_SRC))
+    codes |= set(re.findall(r"'code':\s*'([A-Z_]+)'", DPH_SRC))
+    assert {'SESSION_UTIL', 'PKT_BUFFER', 'CORE_PEAK'} <= codes
+    assert codes <= set(dp_health.FLAG_CODES)
+    out = render_help()
+    missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
+    assert not missing, missing
+
+
+def test_render_help_shows_live_dp_thresholds():
+    out = ''.join(render_section_help(None, None, {'pkt_buffer_warn': 33.5}).values())
+    assert 'pkt_buffer_warn = 33.5%' in out and 'pkt_buffer_warn = 50%' not in out
+    with pytest.raises(ValueError):
+        render_section_help(None, None, {'no_such_key': 1})
 
 
 def test_main_pow_report_has_section_help_and_no_help_tab(tmp_path):

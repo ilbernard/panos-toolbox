@@ -68,6 +68,12 @@ details{margin-top:8px}
 .astatus{font-size:12px;line-height:20px;padding:0 10px;border-radius:10px;margin:0 0 12px;cursor:help}
 .cov-sub{margin:6px 0 0 18px;padding:0;font-size:12px}.cov-sub li{margin:1px 0}
 table.covt td.l,table.covt th.l{text-align:left}
+table.hm{width:auto;margin:0 0 10px}
+table.hm td,table.hm th{text-align:center;min-width:36px;padding:3px 5px;cursor:default;position:static}
+table.hm th:first-child,table.hm td:first-child{text-align:left;min-width:150px}
+table.hm td.hot{outline:2px solid #1c2530;outline-offset:-2px;font-weight:700}
+table.dphs th,table.dphs td{text-align:right}
+table.dphs th:first-child,table.dphs td:first-child{text-align:left}
 tr.anom-crit td{background:#fdecea}
 tr.anom-warn td{background:var(--warn-bg)}
 tr.anom-crit td:first-child{box-shadow:inset 4px 0 0 #b42318}
@@ -139,6 +145,7 @@ TEMPLATE_BODY = r'''</style>
 <div class="tabs" id="tabs" role="tablist" aria-label="Report sections">
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane Throughput</button>
   <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
+  <button type="button" role="tab" id="tab-dph" aria-controls="p-dph" aria-selected="false" tabindex="-1" style="display:none">Dataplane health</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
   <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
@@ -181,6 +188,25 @@ TEMPLATE_BODY = r'''</style>
   <div class="leg" id="gleg" style="margin-bottom:10px"></div>
   <div class="cw" id="gwrap"><svg id="gchart" role="img" aria-label="CPU load by group over time"></svg><div class="tip" id="gtip"></div></div>
   <table class="stats" id="gstats"></table>
+</section>
+
+<section class="panel" id="p-dph" role="tabpanel" aria-labelledby="tab-dph" hidden>
+  <div class="sechead"><h2>Dataplane health</h2>__HB_dph__</div>__HP_dph__
+  <p class="hint" id="dphinfo"></p>
+  <details id="dphwarn" style="display:none;margin:0 0 12px"><summary id="dphwarnsum"></summary><ul id="dphwarnlist"></ul></details>
+  <div class="scroll"><table class="stats dphs" id="dphsum"></table></div>
+  <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_dphflags__</div>__HP_dphflags__
+  <ul class="banner" id="dphbanner"></ul>
+  <div class="sep"><div class="sechead"><h2>Utilization over time</h2>__HB_dphchart__</div>__HP_dphchart__
+  <div class="bar">
+    <label>DP <select id="dphdp"></select></label>
+    <button id="dphreset" type="button">Reset zoom</button>
+    <div class="leg" id="dphleg"></div>
+  </div>
+  <div class="cw" id="dphwrap"><svg id="dphchart" role="img" aria-label="Dataplane health over time chart"></svg><div class="tip" id="dphtip"></div></div>
+  <table class="stats" id="dphstats"></table></div>
+  <div class="sep"><div class="sechead"><h2>CPU peak per core</h2>__HB_dphcores__</div>__HP_dphcores__
+  <div id="dphcores"></div></div>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
@@ -374,7 +400,7 @@ function makeChart(svg, tip, wrap){
     const W=Math.max(480,wrap.clientWidth), H=chartH(), L=70,R=16,T=12,B=34, u=o.u;
     svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.replaceChildren();
     const all=series.flatMap(s=>s.d.map(p=>p.v));
-    const x0=state.range[0]!==null?state.range[0]:TMIN, x1=state.range[1]!==null?state.range[1]:TMAX;
+    const x0=state.range[0]!==null?state.range[0]:(o.t0!==undefined?o.t0:TMIN), x1=state.range[1]!==null?state.range[1]:(o.t1!==undefined?o.t1:TMAX);
     let ymax=niceMax((all.length?maxOf(all):1)/u.div*1.05); if(o.cap) ymax=Math.min(ymax,o.cap);
     const X=t=>L+(x1===x0?0.5:(t-x0)/(x1-x0))*(W-L-R), Y=v=>T+(1-v/u.div/ymax)*(H-T-B);
     view={W,L,R,T,B,x0,x1,X,u};
@@ -467,10 +493,10 @@ function drawGroups(){
 }
 
 let activeTab='chart';
-function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
+function renderActive(){ if(activeTab==='chart'){ drawMain(); renderTable(); } else if(activeTab==='cpu') drawGroups(); else if(activeTab==='dph' && hasDph) renderDph(); else if(activeTab==='pow' && hasPow) renderPow(); else if(activeTab==='ifc' && hasIfc) renderIfc(); }
 function showTab(n){
   activeTab=n;
-  ['chart','cpu','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
+  ['chart','cpu','dph','pow','ifc','cov'].forEach(k=>{ const tab=$('#tab-'+k), pan=$('#p-'+k); tab.setAttribute('aria-selected',String(k===n)); tab.tabIndex=k===n?0:-1; pan.hidden=k!==n; });
   renderActive();   // charts are drawn only when the panel is visible (the real width is needed)
 }
 function refresh(){ renderActive(); }
@@ -935,9 +961,111 @@ if(hasIfc){
 
 '''
 
+# Dataplane health tab (resource monitor of the panio sections: sessions, packet buffer, cores)
+JS_DPH = r'''// Dataplane health tab (session / packet buffer / packet descriptor utilization, CPU per core)
+const DH = D.dph || null;
+const hasDph = !!DH;
+const dphState = {dp:null, hidden:new Set()};
+const DPH_SERIES = [
+  {k:'sess', name:'Session utilization', color:'#1f6f8b', w:1.8},
+  {k:'pb_avg', name:'Packet buffer (avg)', color:'#2f855a', w:1.4},
+  {k:'pb_max', name:'Packet buffer (max)', color:'#c2410c', w:1.4},
+  {k:'core_max', name:'Busiest core', color:'#7c3aed', w:1.4}
+];
+const dphChart = hasDph ? makeChart($('#dphchart'), $('#dphtip'), $('#dphwrap')) : null;
+let DPH_T0 = 0, DPH_T1 = 0;
+const dphPct = v => v===null||v===undefined ? '' : v+'%';
+const dphAt = (v, t) => v===null||v===undefined ? '' : v+'% @ '+iso(t);
+function dphWorst(dp){
+  const fl = DH.findings.filter(f=>f.dp===dp);
+  return fl.some(f=>f.level==='crit') ? 'crit' : (fl.some(f=>f.level==='warn') ? 'warn' : '');
+}
+function renderDphStatic(){
+  const all = DH.dps.flatMap(d=>DH.series[d].t);
+  DPH_T0 = minOf(all); DPH_T1 = maxOf(all);
+  if(!hasSamples){
+    $('#sub').textContent = 'Period '+iso(DPH_T0)+' - '+iso(DPH_T1)+' UTC | dp-monitor files read: '+D.files+' | generated '+D.generated+' UTC';
+    $('#utc').style.display = '';
+  }
+  const dsc = DH.discarded;
+  $('#dphinfo').textContent = DH.n_samples+' sample(s) on '+DH.dps.length+' DP(s). Discarded while reading: '+dsc.bad_rows+' CPU row(s) with a wrong column count, '+dsc.out_of_range+' value(s) outside 0-100; '+dsc.asterisks+' missing (*) CPU/utilization cell(s) ignored.';
+  if(DH.warnings.length){ $('#dphwarn').style.display=''; $('#dphwarnsum').textContent = DH.warnings.length+' note(s)'; DH.warnings.forEach(w=>{ const li=document.createElement('li'); li.textContent=w; $('#dphwarnlist').appendChild(li); }); }
+  const onchip = DH.dps.some(d=>DH.summary[d].pkt_desc_onchip.n>0);
+  const metrics = [['session','Session util'],['pkt_buffer','Packet buffer'],['pkt_desc','Packet descriptor']]
+    .concat(onchip?[['pkt_desc_onchip','Pkt desc on-chip']]:[], [['core','Busiest core']]);
+  const t = $('#dphsum'); t.replaceChildren();
+  const h1 = t.createTHead().insertRow();
+  ['DP','Samples','Period (UTC)'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; th.rowSpan=2; h1.appendChild(th); });
+  metrics.forEach(m=>{ const th=document.createElement('th'); th.textContent=m[1]; th.colSpan=2; th.style.textAlign='center'; h1.appendChild(th); });
+  const h2 = t.tHead.insertRow();
+  metrics.forEach(()=>['Last','Peak'].forEach(x=>{ const th=document.createElement('th'); th.textContent=x; h2.appendChild(th); }));
+  const tb = t.createTBody();
+  DH.dps.forEach(dp=>{
+    const S = DH.summary[dp], ts = DH.series[dp].t, r = tb.insertRow();
+    r.insertCell().textContent = dp; r.insertCell().textContent = ts.length;
+    r.insertCell().textContent = iso(ts[0])+' - '+iso(ts[ts.length-1]);
+    metrics.forEach(m=>{
+      const x = S[m[0]];
+      const core = m[0]==='core';
+      r.insertCell().textContent = x.last===null ? '' : x.last+'%'+(core && S.core.last_core!==null ? ' (core '+S.core.last_core+')' : '');
+      r.insertCell().textContent = x.peak===null ? '' : x.peak+'% @ '+iso(x.peak_t)+(core && x.peak_core!==null ? ' (core '+x.peak_core+')' : '');
+    });
+    const lv = dphWorst(dp); if(lv) r.className = 'anom-'+lv;
+  });
+  const ul = $('#dphbanner'); ul.replaceChildren();
+  if(!DH.findings.length){ const li=document.createElement('li'); li.textContent='No dataplane health flags with the current thresholds.'; ul.appendChild(li); }
+  DH.findings.forEach(f=>{
+    const li = document.createElement('li'); li.className = 'lvl-'+f.level;
+    const b = document.createElement('span'); b.className = 'badge b-'+f.level; b.textContent = f.code;
+    li.append(b, document.createTextNode(f.text)); ul.appendChild(li);
+  });
+  DH.dps.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; $('#dphdp').appendChild(o); });
+  dphState.dp = DH.dps[0];
+  $('#dphdp').onchange = ()=>{ dphState.dp = $('#dphdp').value; renderDph(); };
+  $('#dphreset').onclick = ()=>setRange(null,null);
+  DPH_SERIES.forEach(s=>legendItem($('#dphleg'), s.name, s.color, dphState.hidden, renderDph));
+}
+function dphHeat(v){ return v===null||v===undefined ? '' : 'rgba(180,35,24,'+(0.06+0.94*v/100).toFixed(2)+')'; }
+function renderDphCores(){
+  const host = $('#dphcores'); host.replaceChildren();
+  const C = DH.cores[dphState.dp], warn = DH.thresholds.core_peak_warn;
+  if(!C.ids.length){ const p=document.createElement('p'); p.className='hint'; p.textContent='No CPU load per core was found for this DP.'; host.appendChild(p); return; }
+  const rows = [['Peak, per-second table', C.peak, true], ['Peak, per-minute max', C.peak_m, false]];
+  for(let i=0;i<C.ids.length;i+=16){
+    const t = document.createElement('table'); t.className = 'hm';
+    const hr = t.createTHead().insertRow(); hr.appendChild(document.createElement('th')).textContent = i===0 ? 'Core' : 'Core (cont.)';
+    C.ids.slice(i,i+16).forEach(c=>{ const th=document.createElement('th'); th.textContent=c; hr.appendChild(th); });
+    const tb = t.createTBody();
+    rows.forEach(rw=>{
+      const r = tb.insertRow(); r.insertCell().textContent = rw[0];
+      rw[1].slice(i,i+16).forEach((v,j)=>{
+        const td = r.insertCell(); td.textContent = v===null||v===undefined ? '' : v;
+        if(v!==null&&v!==undefined){
+          td.style.background = dphHeat(v); if(v>=55) td.style.color = '#fff';
+          if(v>=warn) td.classList.add('hot');
+          if(rw[2]) td.title = 'Core '+C.ids[i+j]+': peak '+v+'% at '+iso(C.peak_t[i+j])+' UTC; last '+C.last[i+j]+'%';
+          else td.title = 'Core '+C.ids[i+j]+': highest per-minute maximum '+v+'%';
+        }
+      });
+    });
+    host.appendChild(t);
+  }
+}
+function renderDph(){
+  const S = DH.series[dphState.dp], u = {div:1, unit:'%'};
+  const ser = DPH_SERIES.filter(s=>!dphState.hidden.has(s.name)).map(s=>({name:s.name, color:s.color, w:s.w,
+    d:S.t.map((t,i)=>({t:t, v:S[s.k][i]})).filter(p=>p.v!==null&&p.v!==undefined&&inRange(p.t))}));
+  dphChart.draw(ser, {label:'Utilization', u, cap:100, t0:DPH_T0, t1:DPH_T1});
+  statsTable($('#dphstats'), ser, u);
+  renderDphCores();
+}
+if(hasDph) renderDphStatic();
+
+'''
+
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
-JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
-['chart','cpu','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
+JS_TABS = r'''const TABS=[].concat(hasSamples?['chart']:[], hasG?['cpu']:[], hasDph?['dph']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+['chart','cpu','dph','pow','ifc','cov'].forEach(k=>{ $('#tab-'+k).style.display=TABS.includes(k)?'':'none'; });
 $('#tabs').style.display=TABS.length>1?'':'none';
 TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
 $('#tabs').onkeydown=e=>{
@@ -1034,5 +1162,6 @@ TEMPLATE = (TEMPLATE_HEAD +
             JS_CORE +
             JS_POW +
             JS_IFC +
+            JS_DPH +
             JS_COV +
             JS_TABS)

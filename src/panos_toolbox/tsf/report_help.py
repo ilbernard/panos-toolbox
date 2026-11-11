@@ -5,7 +5,8 @@ that expands a text at the top of that section). There is no global help page.
 
 SECTION_HELP maps a section id to an HTML template. Its {name} placeholders are filled
 with the live values of pow_perf.POW_THRESHOLDS by render_section_help(). The thresholds of
-the Interface Errors tab (interface_errors.IF_THRESHOLDS) are available as {if_<name>}. Literal braces
+the Interface Errors tab (interface_errors.IF_THRESHOLDS) are available as {if_<name>} and those of the
+Dataplane health tab (dp_health.DP_THRESHOLDS) as {dp_<name>}. Literal braces
 in the HTML are doubled. The report template contains the placeholders __HB_<id>__
 (the button) and __HP_<id>__ (the collapsible text) for each id.
 
@@ -14,6 +15,7 @@ Standard library only.
 import html
 
 from . import if_glossary
+from .dp_health import DP_THRESHOLDS
 from .interface_errors import IF_THRESHOLDS
 from .pow_perf import POW_THRESHOLDS
 
@@ -26,6 +28,8 @@ SECTION_TITLES = {
     'ifc': 'Interface errors', 'iflags': 'Interface findings and flag reference',
     'itable': 'Interfaces table', 'ixchk': 'Cross-check with the global counters',
     'coverage': 'Source coverage',
+    'dph': 'Dataplane health', 'dphflags': 'Dataplane health findings and flag reference',
+    'dphchart': 'Dataplane health chart', 'dphcores': 'CPU peak per core',
 }
 
 SECTION_HELP = {
@@ -350,6 +354,47 @@ row sums each core.</p>
 <li>The second table lists the other non-zero drop-related global counters (policy deny, TTL, multicast, broadcast...). They have no interface counter.</li>
 </ul>
 """,
+    'dph': """
+<p>Built from the <code>panio</code> sections of the <code>dp-monitor.*</code> files of the TSF (one section about every 10 minutes on the devices seen). Each section has a <i>resource monitor</i>: the dataplane's own view of how full its session table, packet buffer and packet descriptors are, and how busy each core is. The time is the one of the section header, converted to UTC.</p>
+<h3>Sources</h3>
+<ul>
+<li><b>Per second</b> (<i>Resource monitoring sampling data</i>): the last <b>15 seconds</b>, one value per second. The CPU table has one column per core; devices with many cores split it into several blocks, which are merged by core number. The <i>Resource utilization</i> lines give <code>session</code>, <code>packet buffer</code>, <code>packet descriptor</code> and, where present, <code>packet descriptor (on-chip)</code>.</li>
+<li><b>Per minute</b> (<i>Resource monitoring statistics</i>): the last <b>15 minutes</b>, with the average and the maximum of each minute for the CPU. The per-core maximum of this table is shown as "per-minute max" next to the per-second figures.</li>
+<li><b>Session table utilization</b> in the <code>target-dp</code> block of the same section is used for the session utilization only when the per-second resource block is missing (the notes above the summary count such samples).</li>
+</ul>
+<h3>How a sample is read</h3>
+<ul>
+<li>The value of a sample is the <b>maximum of its 15 per-second values</b>, so a short spike inside the window is not averaged away. For the packet buffer the chart also shows the average of the 15 values.</li>
+<li>A <code>*</code> in a CPU table cell means that the measurement is missing: the cell is ignored (not counted as 0). A value outside 0-100 is discarded. A row whose number of columns differs from the header is discarded. The number of discarded rows and values is shown below the summary.</li>
+<li>Each resource block is bound to the <code>target-dp</code> of the same section, by order of appearance. If the numbers of blocks and DPs differ, nothing is bound and a warning is shown. An explicit <code>DP &lt;name&gt;:</code> line before a block would bind it to that DP, but that layout has not been seen on a real device (unverified). DPs are never added or averaged together; each is evaluated alone.</li>
+<li>When the same section appears in several rotated files, the first copy (the oldest file) is kept.</li>
+</ul>
+<h3>Peak versus last</h3>
+<p>The firewall's own health checks look at the last sample only. A TSF is a history, so the flags here are based on the <b>peak over the whole period</b>. The text of each flag gives the peak (value and UTC time), the last value and how many samples were at or above the threshold, so that you can tell a spike that is over from a condition that is still there.</p>
+<h3>Summary table</h3>
+<p>For each DP: the number of samples and the period, then for the session table, the packet buffer, the packet descriptors and the busiest core the last and the peak value (the peak with its UTC time and, for the CPU, the core). Rows are coloured by the worst flag of the DP.</p>
+""",
+    'dphflags': """
+<p>The heuristics in <code>dp_health.py</code> attach these flags to each DP. Levels: <b>crit</b> = high, <b>warn</b> = medium. The level comes from the <b>peak</b> over the period (see above). The last column shows the live thresholds used for this report.</p>
+<table>
+<tr><th>Code</th><th>Level</th><th>Meaning and suggestion</th><th>Live thresholds</th></tr>
+<tr><td><code>SESSION_UTIL</code></td><td>warn; crit at the crit limit</td><td>The session table utilization reached the limit. A full session table makes the firewall refuse new sessions. Look at the session count and rate, the session timeouts, and whether the traffic is a scan or an attack (zone protection, DoS protection) before raising anything.</td><td>session_util_warn = {dp_session_util_warn}%; session_util_crit = {dp_session_util_crit}%</td></tr>
+<tr><td><code>PKT_BUFFER</code></td><td>warn; crit at the crit limit</td><td>The packet buffer utilization reached the limit. Buffers fill when packets wait longer than the dataplane can process them (overload, a slow function, a burst, a stuck queue), and when they run out new packets are dropped. Compare with the CPU load, the POW tab and the drop counters of the Interface Errors tab.</td><td>pkt_buffer_warn = {dp_pkt_buffer_warn}%; pkt_buffer_crit = {dp_pkt_buffer_crit}%</td></tr>
+<tr><td><code>CORE_PEAK</code></td><td>warn</td><td>At least one core reached the per-second CPU limit. The text names the DP and the cores. One busy core with the others idle points to a single heavy flow (elephant flow) or an unbalanced workload; all cores busy points to a lack of capacity. A single second above the limit is often only a spike: check how many samples were affected.</td><td>core_peak_warn = {dp_core_peak_warn}% (no crit level)</td></tr>
+</table>
+<p class="hint">The thresholds are heuristics defined in <code>dp_health.DP_THRESHOLDS</code>. In code, override them with <code>evaluate_dp_health(store, thresholds={{'pkt_buffer_warn': 40}})</code>. Unknown keys raise an error. On the command line use the <code>--dp-&lt;name&gt;</code> options (for example <code>--dp-pkt-buffer-warn 40</code>; see <code>panos-toolbox tsf analyze --help</code>). The values shown here are the ones used for this report. The packet descriptors have no flag: they are shown for context.</p>
+""",
+    'dphchart': """
+<ul>
+<li><b>DP</b> selects the dataplane. The series are the session table utilization, the packet buffer (average and maximum of the 15 per-second values) and the busiest core. The legend checkboxes show or hide a series.</li>
+<li>Each point is one <code>panio</code> section, about 10 minutes apart: between two points nothing is known, so a short peak can fall between samples.</li>
+<li>The vertical axis runs from 0 to 100 percent. Zoom (drag across the chart), <b>Reset zoom</b> and the stats table work as in the throughput chart. Hover for the values at the nearest sample.</li>
+</ul>
+""",
+    'dphcores': """
+<p>One cell per core of the selected DP, in blocks of 16 cores: the <b>peak</b> of the per-second CPU load over the whole period (the maximum of the 15 values of every sample), and the same figure from the per-minute maximum. The colour goes from white (idle) to red (100%), and cells at or above <code>core_peak_warn</code> ({dp_core_peak_warn}%) have a bold border. Hover a cell for the UTC time of the peak and the last value.</p>
+<p>Cores that show no data at all (always <code>*</code>) are left empty. A core that is always 0 is normally not used by the dataplane (cores reserved for other functions).</p>
+""",
     'coverage': """
 <p>Shows what this analysis actually looked at, so that a missing or partial source is never mistaken for a clean one. The badge in the page header summarises it: <b>Analysis: complete</b> or <b>Analysis: partial</b>.</p>
 <p>A <b>family</b> is a group of files of the same kind inside the TSF: <code>dp-monitor</code> (the <code>var/log/pan/dp-monitor.*</code> logs, including rotated and compressed copies, which give the throughput and CPU series) and <code>cli</code> (the <code>tmp/cli/*.txt</code> command outputs, which give the POW and interface data). The TSF is read in memory; nothing is extracted to disk.</p>
@@ -370,13 +415,13 @@ row sums each core.</p>
 }
 
 
-def render_section_help(thresholds=None, if_thresholds=None):
+def render_section_help(thresholds=None, if_thresholds=None, dp_thresholds=None):
     """Returns {placeholder: html} for every section (buttons and collapsible texts).
 
     thresholds: optional overrides with the keys of pow_perf.POW_THRESHOLDS. Unknown keys
     raise ValueError, as in evaluate(). if_thresholds: the same for
     interface_errors.IF_THRESHOLDS (available as {if_<name>}). The values are escaped before
-    insertion.
+    insertion. dp_thresholds: the same for dp_health.DP_THRESHOLDS (available as {dp_<name>}).
     """
     th = dict(POW_THRESHOLDS)
     unknown = set(thresholds or {}) - set(POW_THRESHOLDS)
@@ -388,7 +433,14 @@ def render_section_help(thresholds=None, if_thresholds=None):
     if unknown:
         raise ValueError('unknown interface threshold(s): ' + ', '.join(sorted(unknown)))
     ith.update(if_thresholds or {})
+    dth = dict(DP_THRESHOLDS)
+    unknown = set(dp_thresholds or {}) - set(DP_THRESHOLDS)
+    if unknown:
+        raise ValueError('unknown dataplane health threshold(s): ' + ', '.join(sorted(unknown)))
+    dth.update(dp_thresholds or {})
     values = {k: html.escape(str(v)) for k, v in th.items()}
+    values.update({'dp_' + k: html.escape(f'{v:g}' if isinstance(v, float) else str(v))
+                   for k, v in dth.items()})
     values.update({'if_' + k: html.escape(str(v)) for k, v in ith.items()})
     values['if_counter_table'] = if_glossary.help_table_html()
     values['core_imbalance_crit'] = html.escape(str(2 * th['core_imbalance_ratio']))

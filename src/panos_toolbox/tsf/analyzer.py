@@ -6,7 +6,9 @@ standalone HTML report (filterable/exportable table + interactive charts,
 including CPU load by group). The output of `debug dataplane pow performance`
 (tmp/cli/*.txt) is analyzed into a "POW performance" tab (see pow_perf.py), and the interface
 counters (`show counter interface all`, `show interface ...`) into an "Interface Errors" tab
-(see interface_errors.py).
+(see interface_errors.py). The resource monitor of the same dp-monitor files (session, packet
+buffer and descriptor utilization, CPU load per core) goes into a "Dataplane health" tab (see
+dp_health.py).
 
 Standard library only.
 
@@ -20,7 +22,8 @@ Usage:
 Each TSF produces <name>_throughput.html (<name>_pow.html when it has only POW
 data, <name>_interfaces.html when it has only interface data, <name>_tsf.html when it has
 both); with multiple inputs a summary index.html is also created. The POW and interface
-anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options (see --help).
+anomaly thresholds can be tuned with the --pow-<name> and --if-<name> options, the dataplane
+health ones with --dp-<name> (see --help).
 """
 import argparse
 import html
@@ -34,8 +37,9 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from . import archive, if_glossary, pow_glossary
+from . import archive, dp_health, if_glossary, pow_glossary
 from .coverage import build_coverage
+from .dp_health import DP_THRESHOLDS, evaluate_dp_health
 from .findings import analysis_status
 from .model import Collected, Inventory
 from .interface_errors import (
@@ -285,6 +289,7 @@ def collect(path, warnings):
     """
     samples, seen, offsets = [], {}, set()
     conflicts = []
+    dp_store = dp_health.new_store()
     n_files = 0
     pow_found = []
     ifc_found = []
@@ -294,12 +299,24 @@ def collect(path, warnings):
         nonlocal n_files
         base = os.path.basename(name)
         n_files += 1
+        decoded = []                      # decoded once, reused by dp_health
+
+        def tee():
+            for ln in iter_text_lines(fobj):
+                decoded.append(ln)
+                yield ln
+
         try:
-            found = parse_lines(iter_text_lines(fobj), base, samples, seen,
-                                warnings, offsets, conflicts)
+            found = parse_lines(tee(), base, samples, seen, warnings, offsets, conflicts)
         except Exception as exc:  # corrupted/truncated file
             warnings.append(f'{base}: read error ({exc}), '
                             f'partial data kept')
+            found = None
+        try:
+            dp_health.parse_dp_health(decoded, base, dp_store, warnings)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            warnings.append(f'{base}: dataplane health not parsed ({exc})')
+        if found is None:
             return
         if found == 0:
             warnings.append(f'{base}: no Throughput samples found')
@@ -360,7 +377,8 @@ def collect(path, warnings):
     pow_data = pow_found[0][1] if pow_found else None
     ifc_data = merge_parsed(ifc_found) if have_ifc() else None
     return Collected(samples, offsets, n_files, pow_data, ifc_data, inventory, conflicts,
-                     analysis_status(inventory, len(conflicts)))
+                     analysis_status(inventory, len(conflicts)),
+                     dp_store if dp_health.has_data(dp_store) else None)
 
 
 def add_aggregate(samples):
@@ -403,10 +421,11 @@ def utc_str(ms):
 
 
 def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_view=None,
-                  thresholds=None, ifc_view=None, if_thresholds=None, coverage=None):
+                  thresholds=None, ifc_view=None, if_thresholds=None, coverage=None,
+                  dph_view=None, dp_thresholds=None):
     data = {
         'name': name,
-        'kind': 'TSF analysis' if pow_view or ifc_view else 'Throughput',
+        'kind': 'TSF analysis' if pow_view or ifc_view or dph_view else 'Throughput',
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'offsets': sorted(offsets),
         'files': n_files,
@@ -416,6 +435,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
         'pow': pow_view,
         'ifc': ifc_view,
         'coverage': coverage,
+        'dph': dph_view,
     }
     groups = []
     for smp in samples:
@@ -447,7 +467,7 @@ def render_report(name, samples, series, offsets, warnings, n_files, tpl, pow_vi
     data['gl'] = {'names': gl_names, 'fields': gl_fields, 'conf': pow_glossary.CONF_TEXT}
     blob = json.dumps(data, separators=(',', ':')).replace('</', '<\\/')
     out = tpl
-    for key, val in render_section_help(thresholds, if_thresholds).items():
+    for key, val in render_section_help(thresholds, if_thresholds, dp_thresholds).items():
         out = out.replace(key, val)
     return (out.replace('__DATA__', blob)
                .replace('__KIND__', data['kind'])
@@ -492,6 +512,14 @@ def main(argv=None):
     for key, default in IF_THRESHOLDS.items():
         igrp.add_argument('--if-' + key.replace('_', '-'), dest='if_' + key, metavar='N',
                           type=float, default=None, help=f'{key} [{default:g}]')
+    dgrp = ap.add_argument_group(
+        'Dataplane health thresholds',
+        'Tunables of the dataplane health flags (defaults in brackets; see '
+        'dp_health.DP_THRESHOLDS and the flag reference in the report help). Percent values '
+        'are 0-100.')
+    for key, default in DP_THRESHOLDS.items():
+        dgrp.add_argument('--dp-' + key.replace('_', '-'), dest='dp_' + key, metavar='N',
+                          type=float, default=None, help=f'{key} [{default:g}]')
     args = ap.parse_args(argv)
     overrides = {k: getattr(args, 'pow_' + k) for k in POW_THRESHOLDS
                  if getattr(args, 'pow_' + k) is not None}
@@ -501,6 +529,10 @@ def main(argv=None):
                     if getattr(args, 'if_' + k) is not None}
     if any(v < 0 for v in if_overrides.values()):
         ap.error('interface thresholds must be >= 0')
+    dp_overrides = {k: getattr(args, 'dp_' + k) for k in DP_THRESHOLDS
+                    if getattr(args, 'dp_' + k) is not None}
+    if any(v < 0 for v in dp_overrides.values()):
+        ap.error('dataplane health thresholds must be >= 0')
 
     tpl = TEMPLATE
     os.makedirs(args.outdir, exist_ok=True)
@@ -516,7 +548,7 @@ def main(argv=None):
         except Exception as exc:
             print(f'[ERROR] {path}: {exc}', file=sys.stderr)
             continue
-        if not samples and pow_data is None and ifc_data is None:
+        if not samples and pow_data is None and ifc_data is None and col.dp_health is None:
             print(f'[WARNING] {path}: no samples extracted', file=sys.stderr)
             for w in warnings:
                 print('  -', w, file=sys.stderr)
@@ -524,10 +556,13 @@ def main(argv=None):
         series = add_aggregate(samples) if samples else []
         pow_view = evaluate(pow_data, overrides) if pow_data else None
         ifc_view = evaluate_interfaces(ifc_data, if_overrides) if ifc_data else None
+        dph_view = evaluate_dp_health(col.dp_health, dp_overrides) if col.dp_health else None
         pow_warnings = pow_data['warnings'] if pow_data else []
         ifc_warnings = ifc_view['warnings'] if ifc_view else []
         if samples:
             suffix = '_throughput.html'
+        elif pow_data is None and ifc_view is None:
+            suffix = '_dphealth.html'
         elif pow_data is None:
             suffix = '_interfaces.html'
         else:
@@ -536,13 +571,14 @@ def main(argv=None):
         with open(out, 'w', encoding='utf-8') as fh:
             fh.write(render_report(name, samples, series, offsets, warnings, n_files, tpl,
                                    pow_view, overrides, ifc_view, if_overrides,
-                                   build_coverage(col)))
+                                   build_coverage(col), dph_view, dp_overrides))
         partial = ''
         if col.status == 'partial':
             n_trunc = sum(len(f.truncated) for f in col.inventory.families.values())
             partial = (f' [analysis partial: {len(col.conflicts)} conflicts, '
                        f'{n_trunc} truncated members]')
-        n_warn = len(warnings) + len(pow_warnings) + len(ifc_warnings)
+        dph_warnings = dph_view['warnings'] if dph_view else []
+        n_warn = len(warnings) + len(pow_warnings) + len(ifc_warnings) + len(dph_warnings)
         row = {'file': os.path.basename(out), 'name': name, 'samples': 0,
                'start': '-', 'end': '-', 'peak': '-', 'warnings': n_warn}
         if samples:
@@ -559,10 +595,13 @@ def main(argv=None):
                   f'({len(g["funcs"])} functions, '
                   f'{len(g["groups"])} workgroups, {len(pow_data["cores"])} cores), '
                   f'{n_warn} warnings{partial} -> {out}')
+        elif pow_data is None and ifc_view is None:
+            print(f'[OK] {path}: dataplane health only ({dph_view["n_samples"]} samples), '
+                  f'{n_warn} warnings{partial} -> {out}')
         else:
             print(f'[OK] {path}: interface errors only ({len(ifc_view["rows"])} interfaces, '
                   f'{n_warn} warnings{partial} -> {out}')
-        for w in warnings + pow_warnings + ifc_warnings:
+        for w in warnings + pow_warnings + ifc_warnings + dph_warnings:
             print('  -', w, file=sys.stderr)
         index_rows.append(row)
 
