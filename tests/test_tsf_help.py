@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from panos_toolbox.tsf import analyzer, dp_health, pow_perf, report_template
+from panos_toolbox.tsf import analyzer, dp_health, mp_monitor, pow_perf, report_template
 from panos_toolbox.tsf.report_help import SECTION_HELP, SECTION_TITLES, render_section_help
 
 
@@ -18,6 +18,7 @@ def render_help(thresholds=None):
 FIXTURE = Path(__file__).parent / 'data' / 'pow_sample.txt'
 PERF_SRC = Path(pow_perf.__file__).read_text(encoding='utf-8')
 DPH_SRC = Path(dp_health.__file__).read_text(encoding='utf-8')
+MP_SRC = Path(mp_monitor.__file__).read_text(encoding='utf-8')
 
 
 def test_template_import_and_pieces():
@@ -79,6 +80,23 @@ def test_every_flag_code_in_dp_health_is_documented():
     out = render_help()
     missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
     assert not missing, missing
+
+
+def test_every_flag_code_in_mp_monitor_is_documented():
+    codes = set(re.findall(r"_flag\(\s*(?:\w+|'\w+'),\s*'([A-Z_]+)'", MP_SRC))
+    codes |= set(re.findall(r"'code':\s*'([A-Z_]+)'", MP_SRC))
+    assert {'MP_MEMORY', 'MP_MEMORY_PAST_PEAK', 'PROC_CPU', 'PROC_ZOMBIE'} <= codes
+    assert codes <= set(mp_monitor.FLAG_CODES)
+    out = render_help()
+    missing = sorted(c for c in codes if f'<code>{c}</code>' not in out)
+    assert not missing, missing
+
+
+def test_render_help_shows_live_mp_thresholds():
+    out = ''.join(render_section_help(None, None, None, {'mem_warn': 60.5}).values())
+    assert 'mem_warn = 60.5%' in out and 'mem_warn = 75%' not in out
+    with pytest.raises(ValueError):
+        render_section_help(None, None, None, {'no_such_key': 1})
 
 
 def test_render_help_shows_live_dp_thresholds():
