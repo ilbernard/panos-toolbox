@@ -50,11 +50,16 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
         'PANGP virtual adapter driver disabled',
         ('The newest PANGP event of setupapi.dev.log is a device problem (for example Code 22). '
          'Windows problem code 22 means "device disabled": this meaning comes from Windows '
-         'documentation, not from the file. Critical when no PANGP adapter is present in the '
-         'collection snapshot (ipconfig, route print, systeminfo), warning when the adapter is '
-         'present. Check Device Manager (Network adapters, PANGP Virtual Ethernet Adapter), '
-         'whether the adapter was disabled by a person, a script or a reinstall, and whether '
-         'the client can enable it again.')),
+         'documentation, not from the file. The GlobalProtect virtual adapter is normally '
+         'disabled while the client is not connected, so the level depends on the client state. '
+         'Info: the client was not connected at collection; the entry matters only if '
+         'connections fail at tunnel creation. Warning: in the recent window login attempts '
+         'failed during tunnel creation or adapter setup and a driver problem event exists. '
+         'Critical: the client was connected at collection (snapshot or last service state) '
+         'while the newest driver event is a problem code or the PANGP adapter is absent. '
+         'Check Device Manager (Network adapters, PANGP Virtual Ethernet Adapter), whether the '
+         'adapter was disabled by a person, a script or a reinstall, and whether the client can '
+         'enable it again.')),
     'NOT_CONNECTED_AT_COLLECTION': (
         'Client not connected at collection',
         ('The connection state rebuilt from the status XML, service start/stop records and the '
@@ -238,25 +243,59 @@ def _gateways(items: list) -> str:
 
 
 # ------------------------------------------------------------------------------ checks
-def _driver(config: Any, **_: Any) -> list[GpFinding]:
-    events = [e for e in _data(config).get('driver_events') or []
+_TUNNEL_SETUP_ERRORS = ('Tunnel creation failed', 'PANGP virtual adapter not found')
+
+
+def _tunnel_setup_failures(fails: list) -> list:
+    """Recent failed logins that stopped at tunnel creation or adapter setup."""
+    return [a for a in fails if getattr(a, 'error_stage', '') == 'tunnel'
+            or _err(a) in _TUNNEL_SETUP_ERRORS]
+
+
+def _driver(config: Any, fails: list | None = None, **_: Any) -> list[GpFinding]:
+    data = _data(config)
+    events = [e for e in data.get('driver_events') or []
               if isinstance(e, dict) and e.get('kind') in ('problem', 'line') and _dt(e.get('ts'))]
-    if not events:
+    newest = max(enumerate(events), key=lambda p: (_dt(p[1]['ts']), p[0]))[1] if events else None
+    problem = newest is not None and newest.get('kind') == 'problem'
+    adapter = data.get('pangp_adapter') or {}
+    present = bool(adapter.get('present'))
+    absent = adapter.get('present') is False
+    conn = data.get('connection') or {}
+    connected = conn.get('connected')
+    if connected is None:
+        connected = str(conn.get('last_state') or '').lower() == 'connected' or None
+    if not problem and not (connected is True and absent):
         return []
-    newest = max(enumerate(events), key=lambda p: (_dt(p[1]['ts']), p[0]))[1]
-    if newest.get('kind') != 'problem':
-        return []
-    ts = _dt(newest['ts'])
-    present = bool((_data(config).get('pangp_adapter') or {}).get('present'))
-    code = newest.get('code')
-    meaning = ' (device disabled)' if code == 22 else ''
-    n = sum(1 for e in events if e.get('kind') == 'problem' and e.get('code') == code)
-    text = (f"The newest PANGP driver event is Windows problem code {code}{meaning} on device "
-            f"{newest.get('device') or '?'} at {_fmt(ts)} ({n} event(s) with this code in "
-            f"setupapi.dev.log). The PANGP adapter is "
-            f"{'present' if present else 'not present'} in the collection snapshot.")
-    return [_mk('DRIVER_DISABLED', WARNING if present else CRITICAL, text, 'driver', ts,
-                ['driver'], n)]
+    ts = _dt(newest['ts']) if problem else None
+    snapshot = 'present' if present else 'not present'
+    if problem:
+        code = newest.get('code')
+        meaning = ' (device disabled)' if code == 22 else ''
+        n = sum(1 for e in events if e.get('kind') == 'problem' and e.get('code') == code)
+        text = (f"The newest PANGP driver event is Windows problem code {code}{meaning} on device "
+                f"{newest.get('device') or '?'} at {_fmt(ts)} ({n} event(s) with this code in "
+                f"setupapi.dev.log). The PANGP adapter is {snapshot} in the collection snapshot.")
+    else:
+        n = 0
+        text = ('The client was connected at collection, but the PANGP adapter is not present '
+                'in the collection snapshot.')
+    setup = _tunnel_setup_failures(fails or [])
+    if connected is True:
+        level = CRITICAL
+        text += ' The client was connected, so the adapter should be enabled and present.'
+    elif setup and problem:
+        level = WARNING
+        first, last = _span(setup)
+        text += (f" {len(setup)} login attempt(s) failed during tunnel creation or adapter setup "
+                 f"in the recent window ({_range(first, last)}).")
+    else:
+        level = INFO
+        text += (' The client was not connected at collection: the GlobalProtect virtual adapter '
+                 'is normally disabled while GlobalProtect is disconnected, so this entry matters '
+                 'only if connections fail at tunnel creation.')
+    refs = ['driver'] + _ids(setup, 10) if level == WARNING else ['driver']
+    return [_mk('DRIVER_DISABLED', level, text, 'driver', ts, refs, n)]
 
 
 def _not_connected(config: Any, **_: Any) -> list[GpFinding]:

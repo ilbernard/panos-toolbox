@@ -108,6 +108,13 @@ summary{cursor:pointer}
 table.cfg td.k{color:var(--mute);width:26%}
 table.cfg td.key{width:20%}
 table.cfg td.val{overflow-wrap:anywhere;white-space:pre-wrap}
+table.keyt td.k{width:14%;white-space:nowrap}
+table.keyt td.val{width:44%;min-width:16em;overflow-wrap:break-word}
+table.keyt td.src{width:24%;min-width:9em;color:var(--mute);overflow-wrap:break-word}
+.cols.sumcols{grid-template-columns:minmax(0,2fr) minmax(0,3fr)}
+@media(max-width:1100px){.cols.sumcols{grid-template-columns:minmax(0,1fr)}}
+.cfgtog{font:inherit;font-size:12px;padding:1px 8px;cursor:pointer}
+.cfgbody[hidden]{display:none}
 .emp{color:var(--mute);font-style:italic}
 .hl{background:#fff2a8}
 .cfgp{border:1px solid var(--line);border-radius:4px;margin:0 0 12px;padding:8px 12px}
@@ -144,6 +151,8 @@ tr.det>td{background:#fafbfc;padding:8px 14px 12px 40px;white-space:normal}
   body{min-width:0;background:#fff}
   .tabs,.bar,.helpbtn,.help,.pg,.xp,.cfgnav,.astatus{display:none!important}
   section.panel[hidden]{display:block!important}
+  .cfgbody[hidden]{display:block!important}
+  .cfgtog{display:none}
   section.panel{break-inside:auto;border:none;overflow:visible}
   .scroll{max-height:none;overflow:visible}
   th{position:static}
@@ -286,12 +295,12 @@ JS_SUMMARY = r'''
 function keyTable(){
   const rows = D.key_settings || [];
   if(!rows.length) return E('p', {class:'hint', text:'No key settings were found in the bundle.'});
-  const t = E('table', {class:'cfg'}, E('thead', null, E('tr', null, E('th', {text:'Setting'}), E('th', {text:'Value'}), E('th', {text:'Currency'}), E('th', {text:'Source'}))));
+  const t = E('table', {class:'cfg keyt'}, E('thead', null, E('tr', null, E('th', {text:'Setting'}), E('th', {text:'Value'}), E('th', {text:'Currency'}), E('th', {text:'Source'}))));
   const tb = E('tbody'); t.appendChild(tb);
   for(const r of rows){
     tb.appendChild(E('tr', null, E('td', {class:'k', text:r.label}),
       E('td', {class:'val'}, r.value === '' ? emptyVal() : r.value), E('td', {class:'nw'}, freshBadge(r.freshness)),
-      E('td', {class:'dim', text:r.source || ''})));
+      E('td', {class:'src', text:r.source || ''})));
   }
   return t;
 }
@@ -329,7 +338,7 @@ function renderSummary(){
   left.appendChild(dl);
   const right = E('div', {class:'subpanel'}, E('div', {class:'sechead'}, E('h3', {text:'Key settings'})));
   addHelp(right.firstChild, 'keysettings'); right.appendChild(keyTable());
-  root.appendChild(E('div', {class:'cols'}, left, right));
+  root.appendChild(E('div', {class:'cols sumcols'}, left, right));
   const lo = ANCHOR - PRESETS['7d'];
   const cp = E('div', {class:'subpanel'}, E('div', {class:'sechead'}, E('h3', {text:'Attempts in the last 7 days'}), E('span', {class:'meta', text:sec(isoOf(lo)) + ' to ' + sec(META.anchor) + ' (7 days before the newest log record)'})));
   addHelp(cp.firstChild, 'sum_counters');
@@ -353,6 +362,14 @@ function renderSummary(){
 JS_CONFIG = r'''
 // ================= Client configuration
 const cfgPanels = [];
+const CFG_COLLAPSE_ROWS = 40;
+function paintCfgPanel(p, forced){
+  const show = forced || p.open;
+  p.body.hidden = !show;
+  p.tog.textContent = show ? 'Collapse' : 'Expand (' + p.nrows + ' rows)';
+  p.tog.setAttribute('aria-expanded', show ? 'true' : 'false');
+  p.tog.title = forced && !p.open ? 'Shown because it contains matches of the filter' : '';
+}
 function longVal(v){ return v.length > 200 || v.split('\n').length > 3; }
 function valueCell(v){
   const td = E('td', {class:'val'});
@@ -371,7 +388,11 @@ function buildCfgPanel(cs){
     E('span', {class:'meta', text:'Source: ' + (cs.sources && cs.sources.length ? cs.sources.join(', ') : 'n/a') + ' | Data time: ' + (cs.timestamp ? sec(cs.timestamp) : 'none')}));
   const box = E('section', {class:'cfgp'}, head);
   addHelp(head, 'cfg_' + cs.id);
-  if(cs.note) box.appendChild(E('p', {class:'note', text:cs.note}));
+  const body = E('div', {class:'cfgbody'});
+  const nrows = cs.groups.reduce((n, g) => n + g.rows.length, 0);
+  const tog = E('button', {type:'button', class:'cfgtog'});
+  head.insertBefore(tog, head.firstChild.nextSibling);
+  if(cs.note) body.appendChild(E('p', {class:'note', text:cs.note}));
   const groups = [];
   for(const g of cs.groups){
     const gt = E('div', null, E('h4', {text:g.title, style:'margin:8px 0 4px'}));
@@ -384,9 +405,12 @@ function buildCfgPanel(cs){
     }
     if(!g.rows.length) gt.appendChild(E('p', {class:'hint', text:'(no rows)'}));
     else gt.appendChild(E('table', {class:'cfg'}, E('thead', null, E('tr', null, E('th', {text:'Setting'}), E('th', {text:'Value'}), E('th', {text:'Raw key'}))), tb));
-    box.appendChild(gt); groups.push({gt, rows});
+    body.appendChild(gt); groups.push({gt, rows});
   }
-  return {sec:cs, box, groups, title:(cs.title + ' ' + cs.id).toLowerCase(), nrows:cs.groups.reduce((n, g) => n + g.rows.length, 0)};
+  box.appendChild(body);
+  const p = {sec:cs, box, body, tog, groups, title:(cs.title + ' ' + cs.id).toLowerCase(), nrows, open:nrows <= CFG_COLLAPSE_ROWS};
+  tog.addEventListener('click', () => { p.open = !p.open; paintCfgPanel(p, false); });
+  return p;
 }
 function applyCfgFilter(){
   const q = ST.cfg.trim().toLowerCase(); let total = 0;
@@ -397,7 +421,7 @@ function applyCfgFilter(){
       for(const r of g.rows){ const show = !q || p.title.includes(q) || r.s.includes(q); r.tr.hidden = !show; if(show) gv++; }
       g.gt.hidden = gv === 0 && !!q; vis += gv;
     }
-    p.box.hidden = !!q && vis === 0; total += vis;
+    p.box.hidden = !!q && vis === 0; total += vis; paintCfgPanel(p, !!q && vis > 0);
   }
   $('#cfg-count').textContent = q ? total + ' matching setting(s)' : cfgPanels.reduce((n, p) => n + p.nrows, 0) + ' settings in ' + cfgPanels.length + ' sections';
 }
@@ -411,7 +435,7 @@ function renderConfig(){
   const nav = E('div', {class:'cfgnav'});
   for(const sec of (CF.sections || [])){
     const p = buildCfgPanel(sec); cfgPanels.push(p);
-    const b = E('button', {type:'button', class:'lnk', text:sec.title}); b.addEventListener('click', () => { if(p.box.hidden){ ST.cfg = ''; inp.value = ''; applyCfgFilter(); } p.box.scrollIntoView({block:'start'}); });
+    const b = E('button', {type:'button', class:'lnk', text:sec.title}); b.addEventListener('click', () => { if(p.box.hidden){ ST.cfg = ''; inp.value = ''; applyCfgFilter(); } p.open = true; paintCfgPanel(p, false); p.box.scrollIntoView({block:'start'}); });
     nav.appendChild(b);
   }
   root.appendChild(nav);
@@ -423,6 +447,7 @@ function gotoSection(id){
   showTab('config');
   const p = cfgPanels.find(x => x.sec.id === id); if(!p) return;
   if(p.box.hidden){ ST.cfg = ''; const i = $('#b-config input[type=search]'); if(i) i.value = ''; applyCfgFilter(); saveState(); }
+  p.open = true; paintCfgPanel(p, false);
   p.box.scrollIntoView({block:'start'});
 }
 '''

@@ -73,17 +73,53 @@ def test_healthy_inputs_give_no_findings():
     assert f == [] and status(f) == 'ok'
 
 
-def test_driver_disabled_levels():
-    ev = [{'ts': datetime(2026, 11, 14, 1, 1), 'kind': 'problem', 'device': 'ROOT\\PANGPD\\0000',
-           'code': 22, 'meaning': 'device is disabled'}]
-    crit = evaluate(healthy_config(driver_events=ev, pangp_adapter={'present': False}),
-                    healthy_timeline())
-    f = get(crit, 'DRIVER_DISABLED')[0]
-    assert f.level == 'critical' and 'code 22 (device disabled)' in f.text
-    assert '2026-11-14 01:01:00' in f.text and status(crit) == 'critical'
-    warn = evaluate(healthy_config(driver_events=ev), healthy_timeline())
-    assert get(warn, 'DRIVER_DISABLED')[0].level == 'warning'
-    ok = ev + [{'ts': datetime(2026, 11, 14, 2, 0), 'kind': 'line', 'code': None}]
+DRIVER_EV = [{'ts': datetime(2026, 11, 14, 1, 1), 'kind': 'problem', 'device': 'ROOT\\PANGPD\\0000',
+              'code': 22, 'meaning': 'device is disabled'}]
+NOT_CONN = {'connected': False, 'last_state': 'Disconnected'}
+
+
+def tunnel_failure(n, start):
+    a = attempt(n, start, 'failed', error='Tunnel creation failed')
+    a.error_stage = 'tunnel'
+    return a
+
+
+def test_driver_disabled_info_when_not_connected():
+    cfg = healthy_config(driver_events=DRIVER_EV, pangp_adapter={'present': False},
+                         connection=NOT_CONN)
+    f = get(evaluate(cfg, healthy_timeline()), 'DRIVER_DISABLED')[0]
+    assert f.level == 'info' and 'code 22 (device disabled)' in f.text
+    assert '2026-11-14 01:01:00' in f.text
+    assert 'normally disabled while GlobalProtect is disconnected' in f.text
+    assert 'only if connections fail at tunnel creation' in f.text
+    cfg = healthy_config(driver_events=DRIVER_EV, connection=NOT_CONN)
+    assert get(evaluate(cfg, healthy_timeline()), 'DRIVER_DISABLED')[0].level == 'info'
+    assert status(evaluate(cfg, healthy_timeline([attempt(1, at(hours=1))]))) != 'critical'
+
+
+def test_driver_disabled_warning_with_tunnel_failures():
+    cfg = healthy_config(driver_events=DRIVER_EV, connection=NOT_CONN)
+    tl = healthy_timeline([tunnel_failure(1, at(days=1)), attempt(2, at(hours=1))])
+    f = get(evaluate(cfg, tl), 'DRIVER_DISABLED')[0]
+    assert f.level == 'warning' and 'a0001' in f.ref_ids
+    old = healthy_timeline([tunnel_failure(1, at(days=30)), attempt(2, at(hours=1))])
+    assert get(evaluate(cfg, old), 'DRIVER_DISABLED')[0].level == 'info'
+    other = healthy_timeline([attempt(1, at(days=1), 'failed', error=ERR_GW_CERT)])
+    assert get(evaluate(cfg, other), 'DRIVER_DISABLED')[0].level == 'info'
+    no_driver = healthy_config(connection=NOT_CONN)
+    assert 'DRIVER_DISABLED' not in codes(evaluate(no_driver, tl))
+
+
+def test_driver_disabled_critical_when_connected():
+    cfg = healthy_config(driver_events=DRIVER_EV, pangp_adapter={'present': False})
+    f = evaluate(cfg, healthy_timeline())
+    assert get(f, 'DRIVER_DISABLED')[0].level == 'critical' and status(f) == 'critical'
+    cfg = healthy_config(driver_events=DRIVER_EV,
+                         connection={'connected': None, 'last_state': 'Connected'})
+    assert get(evaluate(cfg, healthy_timeline()), 'DRIVER_DISABLED')[0].level == 'critical'
+    gone = healthy_config(pangp_adapter={'present': False})
+    assert get(evaluate(gone, healthy_timeline()), 'DRIVER_DISABLED')[0].level == 'critical'
+    ok = DRIVER_EV + [{'ts': datetime(2026, 11, 14, 2, 0), 'kind': 'line', 'code': None}]
     assert 'DRIVER_DISABLED' not in codes(evaluate(healthy_config(driver_events=ok),
                                                    healthy_timeline()))
 

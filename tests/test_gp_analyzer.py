@@ -117,6 +117,44 @@ def test_exit_code_zero_when_one_input_works(tmp_path, bundle):
     assert analyzer.main([str(bad), str(bundle)]) == 0
 
 
+def _boom_on(monkeypatch, marker):
+    real = analyzer.analyze
+
+    def fake(path, *a, **kw):
+        if marker in str(path):
+            raise RuntimeError("synthetic failure")
+        return real(path, *a, **kw)
+    monkeypatch.setattr(analyzer, "analyze", fake)
+
+
+def test_unexpected_error_does_not_abort_other_inputs(tmp_path, monkeypatch, capsys):
+    (tmp_path / "good").mkdir()
+    (tmp_path / "bad").mkdir()
+    good = make_zip(tmp_path / "good" / "ok.zip")
+    bad = make_zip(tmp_path / "bad" / "boom.zip")
+    _boom_on(monkeypatch, "boom")
+    assert analyzer.main([str(bad), str(good)]) == 0
+    cap = capsys.readouterr()
+    assert f"[ERROR] {bad}: RuntimeError: synthetic failure" in cap.err
+    assert "Traceback" not in cap.err
+    assert (tmp_path / "good" / "ok_gp.html").exists()
+    assert not (tmp_path / "bad" / "boom_gp.html").exists()
+
+
+def test_unexpected_error_on_every_input_returns_one(tmp_path, monkeypatch, capsys):
+    bad = make_zip(tmp_path / "boom.zip")
+    _boom_on(monkeypatch, "boom")
+    assert analyzer.main([str(bad)]) == 1
+    assert "RuntimeError: synthetic failure" in capsys.readouterr().err
+
+
+def test_debug_flag_reraises(tmp_path, monkeypatch):
+    bad = make_zip(tmp_path / "boom.zip")
+    _boom_on(monkeypatch, "boom")
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        analyzer.main(["--debug", str(bad)])
+
+
 def test_threshold_options_generated_from_gp_thresholds():
     ap = analyzer.build_parser()
     for key in checks.GP_THRESHOLDS:

@@ -11,7 +11,7 @@ HTML report (no external resources) with:
 * the findings of the automatic checks and the coverage of the bundle.
 
 Usage:
-    panos-toolbox gp analyze GlobalProtectLogs.zip [more.zip ...] [-o OUTDIR] [--open]
+    panos-toolbox gp analyze GlobalProtectLogs.zip [more.zip ...] [-o OUTDIR] [--open] [--debug]
 
 Output: ``<bundle name>_gp.html`` next to the input, or in OUTDIR. The report holds everything
 found in the logs in clear text (user names, addresses, host names): handle it accordingly.
@@ -245,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-o", "--outdir", default=None,
                     help="output directory (default: next to each input)")
     ap.add_argument("--open", action="store_true", help="open the report in the default browser")
+    ap.add_argument("--debug", action="store_true",
+                    help="do not catch unexpected errors: show the full traceback and stop")
     ap.add_argument("--chain-gap", type=float, default=None, metavar="S",
                     help=f"seconds within which login cycles are chained into one attempt [{CHAIN_GAP_S:g}]")
     grp = ap.add_argument_group("finding thresholds",
@@ -293,6 +295,11 @@ def main(argv=None) -> int:
             target.write_text(render(blob), encoding="utf-8")
         except (BundleError, OSError, ValueError, KeyError) as exc:
             print(f"[ERROR] {raw}: {exc}", file=sys.stderr)
+            continue
+        except Exception as exc:  # one bad input must not abort the others
+            if args.debug:
+                raise
+            print(f"[ERROR] {raw}: {type(exc).__name__}: {exc}", file=sys.stderr)
             continue
         ok += 1
         last = target

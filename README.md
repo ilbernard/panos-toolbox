@@ -8,6 +8,7 @@ Strata Cloud Manager (SCM), exposed through one CLI: `panos-toolbox <area> <tool
 | `firewall/` | PAN-OS firewall and Panorama automation   | `pan-os-python` (+ `PySide6` for the console) |
 | `scm/`      | Strata Cloud Manager automation           | `pan-scm-sdk`    |
 | `tsf/`      | Offline Tech Support File analysis        | none (stdlib)    |
+| `gp/`       | Offline GlobalProtect client log analysis | none (stdlib)    |
 
 ## Quick start (no install)
 
@@ -35,6 +36,8 @@ To use `panos-toolbox` from anywhere without managing a venv, install it with
 |---------|-------------|
 | `panos-toolbox firewall console [--profiles-file FILE]` | Desktop GUI (Windows/macOS/Linux, needs `.[console]`): log in to Panorama with username/password, list the managed firewalls (filter by any column) and run actions on the selection, all proxied through Panorama. First action: Reboot. Saved connection profiles never contain passwords. See [docs/console/](docs/console/) |
 | `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open] [--pow-*] [--if-*]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags); an Interface Errors tab from `show counter interface all` / `show interface ...` output (per-interface physical, hardware and flow drop counters, link state, flags, cross-check with the global counters); every tab and panel has its own collapsible help and counter names show a glossary tooltip; output goes to `./output/` by default |
+
+| `panos-toolbox gp analyze <GlobalProtectLogs.zip ...> [-o DIR] [--open] [--chain-gap S] [--gp-*] [--debug]` | Interactive HTML report from the "Collect Logs" bundle of a GlobalProtect Windows client: client configuration with a freshness badge per source, connection attempt timeline (logins and auto-restores, outcomes, error texts, phase steps where detailed logs exist, retry storms), automatic findings and source coverage; every tab has its own collapsible help. The report contains user and host names in clear text. See [docs/gp/analyzer.md](docs/gp/analyzer.md) |
 
 Run `panos-toolbox` with no arguments for the full list.
 
@@ -128,9 +131,10 @@ src/panos_toolbox/
     console/      Panorama desktop GUI (core/ logic, actions/ plugins, gui/ Qt)
   scm/            SCM tools + client.py
   tsf/            offline TSF tools (analyzer.py, pow_perf.py, pow_glossary.py, interface_errors.py, if_glossary.py, report_*.py)
+  gp/             offline GlobalProtect log tools (bundle.py, logs.py, client_config.py, timeline.py, checks.py, analyzer.py, report_*.py)
 scripts/          zero-install launchers (run from a checkout)
 tests/            pytest suite (no real devices)
-docs/             contributor docs (docs/console/ for the console tool)
+docs/             contributor docs (docs/console/ for the console tool, docs/gp/ for the GlobalProtect analyzer)
 CLAUDE.md         context file for Claude Code sessions
 ```
 

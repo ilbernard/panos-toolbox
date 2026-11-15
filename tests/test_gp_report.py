@@ -48,6 +48,12 @@ def test_no_placeholders_left():
         assert token not in out
 
 
+def test_config_panels_are_collapsible_and_key_table_has_room():
+    assert "CFG_COLLAPSE_ROWS = 40" in TEMPLATE and "cfgtog" in TEMPLATE
+    assert "aria-expanded" in TEMPLATE and "paintCfgPanel(p, !!q && vis > 0)" in TEMPLATE
+    assert "table.keyt td.val" in TEMPLATE and "table.keyt td.src" in TEMPLATE
+
+
 def test_template_has_no_dangerous_constructs():
     js = script_of(TEMPLATE)
     assert "innerHTML" not in js and "outerHTML" not in js and "insertAdjacentHTML" not in js
