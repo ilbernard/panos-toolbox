@@ -233,7 +233,8 @@ def _summary_line(name: str, blob: dict, out: Path) -> str:
     sev = {lv: sum(1 for f in blob["findings"] if f["level"] == lv) for lv in ("critical", "warning", "info")}
     return (f"{name}: {blob['timeline']['summary']['total']} attempts "
             f"(connected {by.get('connected', 0)}, failed {by.get('failed', 0)}, "
-            f"cancelled {by.get('cancelled', 0)}, abandoned {by.get('abandoned', 0)}); "
+            f"cancelled {by.get('cancelled', 0)}, abandoned {by.get('abandoned', 0)}, "
+            f"expired {by.get('expired', 0)}); "
             f"findings: {sev['critical']} critical, {sev['warning']} warning, {sev['info']} info; "
             f"status {blob['status']}, analysis {blob['analysis']['status']} -> {out}")
 

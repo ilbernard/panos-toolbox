@@ -128,6 +128,17 @@ def test_every_section_id_has_help():
         assert m.group(1) in report_help.SECTION_HELP
 
 
+def test_expired_outcome_is_supported_in_the_page_and_help():
+    for needle in ("'expired'", "expired:'Expired'", "expired:'#2b6cb0'", ".b-expired",
+                   ".chip.o-expired", "cancel_evidence", "gateway_switches"):
+        assert needle in TEMPLATE, needle
+    # five outcomes: the chart lanes follow OUTS, no hard-coded four lanes
+    assert "LANE * 4" not in TEMPLATE
+    text = report_help.render_help().lower()
+    for word in ("expired", "inferred", "never crosses portals", "grace period"):
+        assert word in text, word
+
+
 def test_help_explains_key_concepts():
     text = report_help.render_help().lower()
     for word in ("cycles", "credential prompt", "auto-restore", "last seen in logs",

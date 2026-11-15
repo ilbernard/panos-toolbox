@@ -38,7 +38,8 @@ GP_THRESHOLDS: dict[str, float] = {
     'repeated_failure_min': 3,     # same error text on at least N login failures
     'class_failure_min': 1,        # gateway certificate / unreachable failures needed
     'auth_failure_min': 1,         # authentication failures needed
-    'restore_grace_min': 1,        # grace-period restore failures needed
+    'restore_grace_min': 1,        # expired (grace period) restores needed
+    'restore_failed_min': 1,       # auto-restores with a real failed retry needed
     'success_rate_min_pct': 70,    # login success rate below this percentage is low
     'success_rate_min_attempts': 5,  # attempts (cancelled excluded) needed to judge the rate
     'log_gap_s': 3600,             # event log ends this long before the detailed logs
@@ -69,8 +70,8 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
     'LAST_ATTEMPT_FAILED': (
         'Most recent login attempt failed',
         ('The newest login attempt of the timeline ended failed or abandoned (cancelled by the '
-         'user is not reported). Computed from the attempts sorted by start; auto-restores are '
-         'not login attempts. Check the error text and stage of the attempt and the gateway or '
+         'user is not reported). Computed from the login attempts sorted by start; '
+         'auto-restores, expired or not, are not login attempts. Check the error text and stage of the attempt and the gateway or '
          'portal it names.')),
     'RETRY_STORM': (
         'Retry storm',
@@ -103,16 +104,28 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
          'token, the authentication profile and the identity provider logs.')),
     'RESTORE_GRACE_EXCEEDED': (
         'Auto-restore refused: downtime over the grace period',
-        ('Automatic tunnel restores in the recent window failed because the tunnel downtime '
-         'exceeded the retry grace period configured on the gateway. This normally means the '
-         'PC slept or was offline for longer than the grace period; the user then has to '
-         'connect again. No action is needed unless it happens while the PC is awake and '
+        ('Automatic tunnel restores in the recent window ended "expired": the log says the '
+         'tunnel downtime exceeded the retry grace period and no reconnection was attempted '
+         '(the final line is still "Tunnel retry done: failed retry"). This normally means the '
+         'PC slept (often "Wait in modern standby until wakeup") or was offline for longer '
+         'than the grace period; the user then has to connect again. It is not a VPN '
+         'malfunction: no action is needed unless it happens while the PC is awake and '
          'online.')),
+    'RESTORE_FAILED': (
+        'Auto-restore retry attempted and failed',
+        ('In the recent window the client really tried to restore the tunnel automatically '
+         '(at least one "Retry connect failed" in the event log) and did not succeed. '
+         'Restores that only expired because of the grace period are not counted here (see '
+         'RESTORE_GRACE_EXCEEDED). Check the error breakdown: a certificate verification '
+         'error points to the gateway certificate or a TLS inspection on the path, others to '
+         'the network the PC was on when it tried.')),
     'LOW_SUCCESS_RATE': (
         'Low login success rate',
         ('In the recent window, connected login attempts divided by all login attempts '
-         '(cancelled excluded) is below success_rate_min_pct, with at least '
-         'success_rate_min_attempts attempts. Auto-restores are not counted. Check the most '
+         '(cancelled excluded; a cancelled outcome is often only inferred from a user '
+         'disconnect) is below success_rate_min_pct, with at least '
+         'success_rate_min_attempts attempts. Auto-restores, expired or failed, are not '
+         'counted. Check the most '
          'frequent error texts of the window.')),
     'STALE_TRB_REPORT': (
         'Troubleshooting report is historical',
@@ -390,10 +403,8 @@ def _restore_grace(attempts: list, anchor: datetime | None, thr: dict, **_: Any)
     if anchor is None:
         return []
     lo = anchor - timedelta(days=_num(thr, 'recent_days'))
-    items = sorted((a for a in attempts if a.kind == 'auto-restore' and a.outcome == 'failed'
-                    and _dt(a.start) >= lo
-                    and (_err(a) == ERR_RESTORE_GRACE
-                         or (a.details or {}).get('grace_exceeded'))),
+    items = sorted((a for a in attempts if a.kind == 'auto-restore' and a.outcome == 'expired'
+                    and _dt(a.start) >= lo),
                    key=lambda a: _dt(a.start))
     if len(items) < _num(thr, 'restore_grace_min') or not items:
         return []
@@ -403,16 +414,41 @@ def _restore_grace(attempts: list, anchor: datetime | None, thr: dict, **_: Any)
     downs = [(a.details or {}).get('grace_exceeded', {}).get('downtime_ms') for a in items]
     downs = [d for d in downs if isinstance(d, (int, float))]
     extra = ''
+    asleep = sum(1 for a in items if (a.details or {}).get('modern_standby'))
+    if asleep:
+        extra += f" {asleep} of them waited in modern standby."
     if graces:
         extra += f" Grace period: {', '.join(str(g) for g in graces)} s."
     if downs:
         extra += f" Longest downtime: {max(downs) / 3600000:.1f} h."
     cap = int(_num(thr, 'refs_cap'))
     return [_mk('RESTORE_GRACE_EXCEEDED', INFO,
-                f"{len(items)} automatic restore(s) in the recent window failed because the "
-                f"tunnel downtime exceeded the retry grace period, between {_fmt(first)} and "
-                f"{_fmt(last)}.{extra} This normally means the PC slept or was offline longer "
+                f"{len(items)} automatic restore(s) in the recent window expired: the tunnel "
+                f"downtime exceeded the retry grace period and no reconnection was attempted, "
+                f"between {_fmt(first)} and {_fmt(last)}.{extra} This normally means the PC slept or was offline longer "
                 f"than the grace period. Attempts: {', '.join(_ids(items, cap))}"
+                f"{_more(len(items), cap)}.", 'attempts', last, _ids(items, cap), len(items))]
+
+
+def _restore_failed(attempts: list, anchor: datetime | None, thr: dict,
+                    **_: Any) -> list[GpFinding]:
+    if anchor is None:
+        return []
+    lo = anchor - timedelta(days=_num(thr, 'recent_days'))
+    items = sorted((a for a in attempts if a.kind == 'auto-restore' and a.outcome == 'failed'
+                    and _dt(a.start) >= lo), key=lambda a: _dt(a.start))
+    if not items or len(items) < _num(thr, 'restore_failed_min'):
+        return []
+    first, last = _span(items)
+    errors: dict[str, int] = {}
+    for a in items:
+        errors[_err(a) or '(no error text)'] = errors.get(_err(a) or '(no error text)', 0) + 1
+    breakdown = '; '.join(f'{t}: {c}' for t, c in sorted(errors.items(), key=lambda kv: -kv[1]))
+    cap = int(_num(thr, 'refs_cap'))
+    return [_mk('RESTORE_FAILED', WARNING,
+                f"{len(items)} automatic restore(s) in the recent window attempted to reconnect "
+                f"and failed, {_range(first, last)} (gateway(s): {_gateways(items)}). Errors: "
+                f"{breakdown}. Attempts: {', '.join(_ids(items, cap))}"
                 f"{_more(len(items), cap)}.", 'attempts', last, _ids(items, cap), len(items))]
 
 
@@ -542,7 +578,7 @@ def evaluate(config, timeline, thresholds=None) -> list[Finding]:
                             c['thr'], 'gateway unreachable or unresponsive'), ctx),
         (lambda **c: _class('AUTH_FAILURE', c['fails'], _is_auth, c['thr'],
                             'authentication failed'), ctx),
-        (_restore_grace, ctx), (_success_rate, ctx), (_stale_trb, ctx), (_log_gap, ctx),
+        (_restore_grace, ctx), (_restore_failed, ctx), (_success_rate, ctx), (_stale_trb, ctx), (_log_gap, ctx),
         (_truncated, ctx), (_partial, ctx),
     ]
     out: list[Finding] = []

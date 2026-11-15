@@ -84,6 +84,13 @@ def test_main_writes_report_next_to_input(bundle, capsys):
     assert "https://" not in text
 
 
+def test_summary_line_reports_expired(bundle):
+    blob = analyzer.analyze(bundle)
+    blob["timeline"]["summary"]["by_outcome"]["expired"] = 4
+    line = analyzer._summary_line("x", blob, bundle)
+    assert "expired 4)" in line and "abandoned" in line
+
+
 def test_main_outdir_and_folder_input(tmp_path):
     make_zip(tmp_path / "b.zip")
     folder = tmp_path / "extracted"

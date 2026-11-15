@@ -161,10 +161,10 @@ name, `<portal>` a portal FQDN, `<N>` an integer.
 | `In timeout handling, tunnel downtime is <N> miliseconds` | Variant |
 | `User was logged out of Gateway <gw>.` / `User could not be logged out of Gateway <gw>.` | Logout; also appears at the start of a manual reconnect |
 | `Gateway <name>: Checking network availability and restoring VPN connection when network is available.` | Automatic restore starts (short gateway name) |
-| `Retry connect failed first time` / `second time` / `third time` | Restore retries |
-| `Tunnel retry done: failed retry` | Restore failed |
+| `Retry connect failed first time` / `second time` / `third time` | Restore retries; an `[Error]` such as `Failed to verify certificate` may follow |
+| `Tunnel retry done: failed retry` | End of a restore that did not succeed: `expired` when only the grace-period line precedes it (no retry attempted), `failed` when `Retry connect failed` lines precede it |
 | `Tunnel is restored.` | Restore succeeded |
-| `Tunnel downtime (<N> milliseconds) exceeds retry grace period (<N> seconds)` (also with trailing `.`) | Restore abandoned (grace period 1800 s in the sample) |
+| `Tunnel downtime (<N> milliseconds) exceeds retry grace period (<N> seconds)` (also with trailing `.`) | The downtime is over the grace period, so no retry is attempted (restore `expired`; grace period 1800 s in the sample; often preceded by `Wait in modern standy until wakeup`) |
 | `No tunnel retry since tunnel downtime (<N> miliseconds) exceeds configured timeout (<N> seconds)` | Variant (typo) |
 | `Wait in modern standy until wakeup` | Sleep (typo `standy`) |
 | `Troubleshooting log is generated with the error stage (<stage>) and the error detail (<detail>).` | Troubleshooting report written; stage seen: `Portal pre-login`, `Gateway pre-login`; details `Authentication Failed. No retries.`, `Authentication Failed.`, `TCP connection timed-out` |
@@ -198,7 +198,9 @@ counting tunnel-creation lines ignores failures.
      cycle, use the last: IPSec to SSL failover).
    - `failed to create tunnel with gateway G` -> FAIL_TUNNEL.
    - `Failed to verify server certificate of gateway G.` (+ the matching `[Error]`) -> FAIL_GW_CERT.
-   - `User canceled login to gateway G.` or `User disconnecting tunnel starts` before any tunnel -> CANCELLED.
+   - `User canceled login to gateway G.` (explicit) or `User disconnecting tunnel starts` before any tunnel
+     (inferred) -> CANCELLED; the attempt records which one (`cancel_evidence`). In the sample only 6 of 50
+     cancelled attempts have the explicit line.
    - `Troubleshooting log is generated ...` right after `Portal pre-login result received` and without
      `Portal Login starts` -> FAIL_PRELOGIN_TS (stage and detail are the error text).
    - `portal status is User authentication failed.` -> non-terminal AUTH_PROMPT if `Auth failed empty password
@@ -211,8 +213,11 @@ counting tunnel-creation lines ignores failures.
    - Portal login stopping at `Failed to open file ...PanPUAC_<id>.dat`, at `Unserialized empty cookie ...
      and user ...` without `Logging into portal`, or at `Logging into portal` with nothing after ->
      non-terminal AWAITING_USER (INFERENCE: interactive password or SAML/browser step outside the log).
-3. **Attempt** = chain: cycle N+1 joins the attempt when cycle N ended non-terminal and
-   `start(N+1) - last_event(N) <= 600 s`. The attempt outcome is the outcome of its last cycle; an attempt
+3. **Attempt** = chain: cycle N+1 joins the attempt when cycle N ended non-terminal,
+   `start(N+1) - last_event(N) <= 600 s` and the portal of N+1 is the same as the portal of the chain
+   (case-insensitive) or unknown. The portal of a cycle is read from the first cookie, pre-login failure,
+   portal-completed or configuration-failure line, a few lines after the start; if it differs, cycle N closes
+   as ABANDONED and N+1 starts a new attempt (7 such splits in the sample). The attempt outcome is the outcome of its last cycle; an attempt
    ending non-terminal is ABANDONED. Measured on one sample bundle, the outcome counts are insensitive to the
    gap (60 s to 3600 s gives 836 to 781 attempts, SUCCESS 590 in every case; only ABANDONED moves).
 4. **Fields**: portal = first FQDN in cookie lines, `Portal login completed with address` or `Failed to pre -
@@ -455,8 +460,12 @@ Two kinds of attempt exist; a parser must model both.
 - START: `Show Gateway <gw>: Checking network availability and restoring VPN connection` (after `Network
   changed, break from ProcMonitor` and `--Set state to Restoring VPN Connection`).
 - END SUCCESS: `Retry start succeeded` ... `Retry finished SetupNetwork` + `--Set state to Connected`.
-- END FAILURE: `Tunnel downtime (<ms> milliseconds) exceeds retry grace period (1800 seconds)` + `Tunnel
-  retry done: failed retry` + `Before ProcMonitor quit, disconnect vpn` + `Disconnect(Network change)
+- END EXPIRED (not a failure): `Tunnel downtime (<ms> milliseconds) exceeds retry grace period (1800 seconds)`
+  (often after `Wait in modern standy until wakeup`) + `Tunnel retry done: failed retry`; no `Retry connect
+  failed` line, no reconnection attempted. In the sample 218 of 232 restores that end with `failed retry`.
+- END FAILURE: `Retry connect failed first/second time` (+ optional `[Error]`, for example `Failed to verify
+  certificate`) + `Tunnel retry done: failed retry` (14 of 232 in the sample; one of them, a 4 h sleep, has
+  neither a retry line nor a grace line and keeps the literal `failed`). The service log then also has `Before ProcMonitor quit, disconnect vpn` + `Disconnect(Network change)
   called` (+ `--Set state to Disconnected`).
 
 Disconnect events of an established session (`Disconnect(Network change) called`, `Disconnect() called`,

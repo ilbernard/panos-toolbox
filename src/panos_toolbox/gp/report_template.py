@@ -24,7 +24,7 @@ TEMPLATE_HEAD = r"""<!doctype html>
 
 TEMPLATE_CSS = r"""
 :root{--ink:#1c2530;--mute:#5d6b7a;--line:#d8dde3;--bg:#f4f6f8;--card:#fff;--acc:#1f6f8b;--warn-bg:#fff4d6;--warn-bd:#c98a00;
---c-ok:#2f855a;--c-fail:#b42318;--c-warn:#b7791f;--c-mute:#5d6b7a}
+--c-ok:#2f855a;--c-fail:#b42318;--c-warn:#b7791f;--c-mute:#5d6b7a;--c-exp:#2b6cb0}
 *{box-sizing:border-box}
 body{margin:0;min-width:1200px;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:3200px;margin:0 auto;padding:20px 24px 48px}
@@ -72,6 +72,7 @@ td.r,th.r{text-align:right}
 .b-warning,.b-warn,.b-cancelled,.b-last_seen{background:#b7791f}
 .b-info,.b-abandoned,.b-no_data{background:#5d6b7a}
 .b-ok,.b-connected,.b-current{background:#2f855a}
+.b-expired{background:#2b6cb0}
 .b-historical{background:#fff;color:#5d6b7a;border:1px solid #5d6b7a;line-height:15px}
 .astatus{display:inline-block;font-size:12px;line-height:20px;padding:0 10px;border-radius:10px;margin:0 0 12px;cursor:pointer;color:#fff}
 .astatus.complete{background:#2f855a}.astatus.partial{background:#b7791f}
@@ -96,7 +97,7 @@ summary{cursor:pointer}
 .chip b{display:block;font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums}
 .chip span{font-size:12px;color:var(--mute)}
 .chip.o-connected{border-left:4px solid var(--c-ok)}.chip.o-failed{border-left:4px solid var(--c-fail)}
-.chip.o-cancelled{border-left:4px solid var(--c-warn)}.chip.o-abandoned{border-left:4px solid var(--c-mute)}
+.chip.o-cancelled{border-left:4px solid var(--c-warn)}.chip.o-abandoned{border-left:4px solid var(--c-mute)}.chip.o-expired{border-left:4px solid var(--c-exp)}
 .lnk{color:var(--acc);cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font:inherit}
 .fnd{border-left:4px solid var(--line);background:#f7f9fb;padding:6px 10px;margin:0 0 6px;border-radius:2px}
 .fnd.s-critical{border-color:#b42318;background:#fdecea}.fnd.s-warning{border-color:var(--warn-bd);background:var(--warn-bg)}
@@ -127,6 +128,7 @@ tr.att.o-failed td:first-child{box-shadow:inset 4px 0 0 var(--c-fail)}
 tr.att.o-connected td:first-child{box-shadow:inset 4px 0 0 var(--c-ok)}
 tr.att.o-cancelled td:first-child{box-shadow:inset 4px 0 0 var(--c-warn)}
 tr.att.o-abandoned td:first-child{box-shadow:inset 4px 0 0 var(--c-mute)}
+tr.att.o-expired td:first-child{box-shadow:inset 4px 0 0 var(--c-exp)}
 tr.att.in-grp td:nth-child(2){padding-left:26px}
 tr.grp td{background:#fdf6e3;cursor:pointer;font-weight:600}
 tr.flash td{animation:flash 2.2s}
@@ -188,14 +190,14 @@ __HELPSTORE__
 JS_CORE = r'''<script>
 const D = __DATA__;
 const META = D.meta, CF = D.config, TL = D.timeline, FND = D.findings || [], ATT = TL.attempts || [];
-const OUTS = ['connected','failed','cancelled','abandoned'], KINDS = ['login','auto-restore'];
-const OUTLBL = {connected:'Connected',failed:'Failed',cancelled:'Cancelled',abandoned:'Abandoned'};
-const OUTCOL = {connected:'#2f855a',failed:'#b42318',cancelled:'#b7791f',abandoned:'#5d6b7a'};
+const OUTS = ['connected','failed','cancelled','abandoned','expired'], KINDS = ['login','auto-restore'];
+const OUTLBL = {connected:'Connected',failed:'Failed',cancelled:'Cancelled',abandoned:'Abandoned',expired:'Expired'};
+const OUTCOL = {connected:'#2f855a',failed:'#b42318',cancelled:'#b7791f',abandoned:'#5d6b7a',expired:'#2b6cb0'};
 const KINDLBL = {login:'Login','auto-restore':'Auto-restore'};
 const FRESHLBL = {current:'At collection',last_seen:'Last seen in logs',historical:'Historical'};
 const LEVELS = ['critical','warning','info'];
 const TABS = ['summary','config','timeline','findings','coverage'];
-const STORE_KEY = 'panosToolbox.gpReport.v1';
+const STORE_KEY = 'panosToolbox.gpReport.v2';
 const PRESETS = {'24h':864e5,'7d':7*864e5,'30d':30*864e5,'all':null,'custom':null};
 const $ = s => document.querySelector(s);
 
@@ -515,7 +517,9 @@ function detRow(a){
   const box = E('div', {class:'det'}), dl = E('dl', {class:'kv'});
   kvRow(dl, 'Attempt', a.id + ' (' + (KINDLBL[a.kind] || a.kind) + ')'); kvRow(dl, 'Start', a.start); kvRow(dl, 'End', a.end);
   kvRow(dl, 'User', a.user); kvRow(dl, 'Tunnel IP', a.tunnel_ip); kvRow(dl, 'Sources', (a.sources || []).join(', '));
-  if(a.error){ kvRow(dl, 'Error', a.error.text); kvRow(dl, 'Logged message', a.error.raw); kvRow(dl, 'Failed at stage', a.error.stage); }
+  if(a.outcome === 'cancelled'){ const ce = (a.details || {}).cancel_evidence; kvRow(dl, 'Cancelled', ce === 'explicit' ? 'explicit user cancel (the log has a cancel line)' : ce === 'inferred' ? 'inferred from a user disconnect during the attempt (no explicit cancel line)' : 'evidence not recorded'); }
+  if(a.outcome === 'expired') kvRow(dl, 'Expired', 'downtime over the retry grace period; no reconnection was attempted' + ((a.details || {}).modern_standby ? ' (the PC waited in modern standby)' : ''));
+  if(a.error){ kvRow(dl, 'Error', a.error.text); kvRow(dl, 'Logged message', a.error.raw); kvRow(dl, a.outcome === 'failed' ? 'Failed at stage' : 'Stage', a.error.stage); }
   const dc = a.disconnect;
   if(dc){ kvRow(dl, 'Disconnect', sec(dc.time) + (dc.reason ? ' - ' + dc.reason : '') + (dc.by_user ? ' (by the user)' : ''));
     if(dc.session_ms != null) kvRow(dl, 'Session duration', fmtMs(dc.session_ms));
@@ -523,7 +527,9 @@ function detRow(a){
   else if(a.outcome === 'connected') kvRow(dl, 'Disconnect', 'not found in the logs (still connected, or logs end first)');
   if(a.storm != null) kvRow(dl, 'Retry storm', '#' + a.storm);
   const dd = a.details || {};
-  for(const k of Object.keys(dd)){ const v = dd[k]; kvRow(dl, k.replace(/_/g, ' '), v !== null && typeof v === 'object' ? JSON.stringify(v) : v); }
+  const sw = Array.isArray(dd.gateway_switches) ? dd.gateway_switches : [];
+  if(sw.length) kvRow(dl, 'Manual gateway switches', sw.length + ' in this session: ' + sw.map(g => sec(g.time) + ' ' + (g.gateway || '?') + (g.protocol ? ' (' + g.protocol + ')' : '')).join('; '));
+  for(const k of Object.keys(dd)){ if(k === 'gateway_switches' || k === 'cancel_evidence') continue; const v = dd[k]; kvRow(dl, k.replace(/_/g, ' '), v !== null && typeof v === 'object' ? JSON.stringify(v) : v); }
   box.appendChild(dl);
   if(a.has_detail && a.steps && a.steps.length){ box.appendChild(E('h4', {text:'Phase steps (' + a.steps.length + ')', style:'margin:10px 0 0'})); box.appendChild(stepsTable(a)); }
   else { const w = (TL.coverage || {}).detail_window;
@@ -571,7 +577,7 @@ function tickStep(range){
 function drawStrip(){
   const host = clear(ui.stripHost), list = CUR.list;
   if(!list.length){ host.appendChild(E('p', {class:'hint', text:'No attempts to draw for these filters.'})); return; }
-  const W = Math.max(640, host.clientWidth || 1100), H = PT + LANE * 4 + PB, [wl, wh] = win();
+  const W = Math.max(640, host.clientWidth || 1100), H = PT + LANE * OUTS.length + PB, [wl, wh] = win();
   let lo = Math.min(...list.map(a => a._t)), hi = Math.max(...list.map(a => a._t));
   if(isFinite(wl)) lo = wl; if(isFinite(wh)) hi = wh; else if(ST.tl.preset !== 'all' && ST.tl.preset !== 'custom') hi = ANCHOR;
   if(hi - lo < 36e5){ const c = (hi + lo) / 2; lo = c - 18e5; hi = c + 18e5; }
@@ -581,7 +587,7 @@ function drawStrip(){
     const t = S('text', {x:PL - 8, y:y + 4, 'text-anchor':'end', class:'ax'}); t.textContent = OUTLBL[o]; svg.appendChild(t); });
   const step = tickStep(hi - lo), long = step >= 864e5;
   for(let t = Math.ceil(lo / step) * step; t <= hi; t += step){
-    const px = x(t); svg.appendChild(S('line', {x1:px, x2:px, y1:PT, y2:PT + LANE * 4 + 4, class:'ln'}));
+    const px = x(t); svg.appendChild(S('line', {x1:px, x2:px, y1:PT, y2:PT + LANE * OUTS.length + 4, class:'ln'}));
     const d = isoOf(t), tx = S('text', {x:px, y:H - 10, 'text-anchor':'middle', class:'ax'}); tx.textContent = long ? d.slice(0, 10) : d.slice(5, 16); svg.appendChild(tx); }
   list.forEach(a => {
     const oi = OUTS.indexOf(a.outcome); if(oi < 0) return;

@@ -206,22 +206,47 @@ def test_auth_failure_ignores_chained_credential_prompt():
     assert 'AUTH_FAILURE' not in codes(evaluate(healthy_config(), tl))
 
 
-def restore(n, days, error=ERR_RESTORE_GRACE, outcome='failed'):
+def restore(n, days, error=ERR_RESTORE_GRACE, outcome='expired'):
     a = attempt(n, at(days=days), outcome, kind='auto-restore', error=error)
     a.details = {'grace_exceeded': {'downtime_ms': 7200000, 'grace_s': 1800}}
     return a
 
 
-def test_restore_grace_exceeded():
+def test_restore_grace_exceeded_counts_expired_only():
     tl = healthy_timeline([restore(2, 1), restore(3, 2), attempt(1, at(hours=1))])
+    tl.attempts[0].details['modern_standby'] = True
     f = get(evaluate(healthy_config(), tl), 'RESTORE_GRACE_EXCEEDED')[0]
     assert f.level == 'info' and f.count == 2 and 'slept' in f.text and '1800 s' in f.text
+    assert '1 of them waited in modern standby' in f.text
     out = healthy_timeline([restore(2, 20), attempt(1, at(hours=1))])
     assert 'RESTORE_GRACE_EXCEEDED' not in codes(evaluate(healthy_config(), out))
-    other = healthy_timeline([restore(2, 1, error='Tunnel restore retries failed'),
-                              attempt(1, at(hours=1))])
-    other.attempts[0].details = {}
-    assert 'RESTORE_GRACE_EXCEEDED' not in codes(evaluate(healthy_config(), other))
+    failed = healthy_timeline([restore(2, 1, error='Server certificate verification failed',
+                                       outcome='failed'), attempt(1, at(hours=1))])
+    assert 'RESTORE_GRACE_EXCEEDED' not in codes(evaluate(healthy_config(), failed))
+
+
+def test_restore_failed_needs_a_real_failed_retry():
+    real = restore(2, 1, error='Server certificate verification failed', outcome='failed')
+    real2 = restore(3, 2, error='Tunnel restore ended with a failed retry', outcome='failed')
+    tl = healthy_timeline([real, real2, restore(4, 1), attempt(1, at(hours=1))])
+    f = get(evaluate(healthy_config(), tl), 'RESTORE_FAILED')[0]
+    assert f.level == 'warning' and f.count == 2 and sorted(f.ref_ids) == ['a0002', 'a0003']
+    assert 'Server certificate verification failed: 1' in f.text
+    # expired restores alone raise no RESTORE_FAILED, old ones are outside the window
+    only_expired = healthy_timeline([restore(2, 1), attempt(1, at(hours=1))])
+    assert 'RESTORE_FAILED' not in codes(evaluate(healthy_config(), only_expired))
+    old = healthy_timeline([restore(2, 20, outcome='failed'), attempt(1, at(hours=1))])
+    assert 'RESTORE_FAILED' not in codes(evaluate(healthy_config(), old))
+    assert 'RESTORE_FAILED' not in codes(evaluate(healthy_config(), tl,
+                                                  {'restore_failed_min': 3}))
+
+
+def test_restores_never_count_as_login_failures():
+    tl = healthy_timeline([attempt(1, at(hours=1))] + [restore(10 + i, 1) for i in range(8)]
+                          + [restore(30 + i, 2, outcome='failed', error='x') for i in range(8)])
+    found = codes(evaluate(healthy_config(), tl))
+    assert 'LOW_SUCCESS_RATE' not in found and 'LAST_ATTEMPT_FAILED' not in found
+    assert 'REPEATED_FAILURE' not in found
 
 
 def test_low_success_rate_thresholds():

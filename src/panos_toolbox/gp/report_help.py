@@ -73,9 +73,14 @@ skipped, truncated or missing; click it for the reasons.</li>
 <p>Number of attempts that started in the period, by outcome and by kind. The same filter is
 available, with more options, in the Connection timeline tab (button below the counters).</p>
 <ul>
-<li><b>Connected</b>: the tunnel came up. <b>Failed</b>: a terminal error ended the attempt.
-<b>Cancelled</b>: the user cancelled. <b>Abandoned</b>: the attempt stopped at a credential prompt
-or while waiting for the user and never completed.</li>
+<li><b>Connected</b>: the tunnel came up. <b>Failed</b>: a terminal error ended the attempt
+(for an auto-restore: a reconnection was really attempted and failed). <b>Cancelled</b>: the user
+cancelled; most often this is <i>inferred</i> from a user disconnect during the attempt, not read
+from an explicit cancel line (the details say which). <b>Abandoned</b>: the attempt stopped at a
+credential prompt or while waiting for the user and never completed. <b>Expired</b>
+(auto-restores only): the tunnel downtime exceeded the retry grace period, so no reconnection was
+attempted (the PC slept or was offline); the log still ends with "failed retry", but it is not a
+VPN malfunction and not a failure.</li>
 <li>A credential prompt in the middle of an attempt is <b>not</b> a failure: the client first
 tries without a password and asks for one when the portal wants it.</li>
 <li>"In retry storms" counts the attempts of the period that belong to an automatic retry loop;
@@ -156,7 +161,12 @@ sleep: no portal contact, only the gateway.</li>
 <li><b>Cycles.</b> The client first tries to log in without a password; when the portal asks for
 credentials the cycle ends at a prompt and a new cycle starts once the user answers. Cycles that
 follow each other within {chain_gap_s} s are chained into ONE attempt; "cycles" is how many
-were chained. A prompt is therefore not a failure.</li>
+were chained. A prompt is therefore not a failure. Chaining never crosses portals: a cycle for
+another portal than the previous one starts a new attempt and the earlier one is abandoned.</li>
+<li><b>Outcomes.</b> <i>Connected</i>, <i>failed</i>, <i>cancelled</i> (often inferred from a
+user disconnect, see the details), <i>abandoned</i> (never completed) and, for auto-restores
+only, <i>expired</i>: the downtime exceeded the retry grace period and no reconnection was
+attempted, typically because the PC slept or was offline.</li>
 <li><b>Retry storms.</b> {storm_min_failures} or more failed logins, each starting at most
 {storm_max_gap_s} s after the previous one, are collapsed into one group row that expands.</li>
 <li><b>Detail.</b> Phase steps exist only where the detailed logs (service and agent logs, which
@@ -167,7 +177,7 @@ first and last record of the attempt.</li>
 </ul>""",
     "tl_chart": """
 <p>Attempts over time for the filtered period. Each mark is one attempt: the row (lane) is its
-<b>outcome</b> (connected, failed, cancelled, abandoned) and the colour repeats it; the
+<b>outcome</b> (connected, failed, cancelled, abandoned, expired) and the colour repeats it; the
 <b>shape</b> is its kind (circle = login, diamond = auto-restore). Click a mark to jump to its
 row in the table. Hover for a short description. Dense stretches (a retry storm) overlap into a
 solid band.</p>""",
@@ -180,7 +190,10 @@ details.</p>
 <code>restore</code> (auto-restore), <code>unknown</code> (event log only: a click and an
 automatic retry look the same).</li>
 <li><b>Error</b>: the short normalised text; the logged message and the stage are in the
-details.</li>
+details. An <i>expired</i> restore shows the grace-period text; the details give the downtime and
+whether the PC waited in modern standby. A <i>cancelled</i> attempt says whether the cancel was
+explicit or inferred from a user disconnect. Manual gateway switches inside a session are listed
+in the details of that session.</li>
 <li><b>Details</b> list the ordered phase steps (time, offset from the start, phase, text,
 source file) when detailed logs exist for the period, the disconnect reason and session duration
 of successful attempts, and any disagreement between the event log and the detailed logs.</li>

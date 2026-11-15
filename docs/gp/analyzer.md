@@ -41,7 +41,8 @@ the other inputs are still processed; use `--debug` to get the traceback of an u
 | `--gp-repeated-failure-min` | 3 | Same error text on at least N login failures. |
 | `--gp-class-failure-min` | 1 | Gateway certificate / unreachable failures needed. |
 | `--gp-auth-failure-min` | 1 | Authentication failures needed. |
-| `--gp-restore-grace-min` | 1 | Grace-period restore failures needed. |
+| `--gp-restore-grace-min` | 1 | Expired (grace period) restores needed. |
+| `--gp-restore-failed-min` | 1 | Auto-restores with a failed retry needed. |
 | `--gp-success-rate-min-pct` | 70 | Login success rate below this percentage is low. |
 | `--gp-success-rate-min-attempts` | 5 | Attempts (cancelled excluded) needed to judge the rate. |
 | `--gp-log-gap-s` | 3600 | Event log ends this many seconds before the detailed logs. |
@@ -62,7 +63,8 @@ Every tab and panel has its own collapsed help (a "Help" button) written in `rep
 - **Connection timeline**: all attempts of the bundle, with period presets (24 h, 7 d, 30 d,
   All, custom range), outcome and kind filters, text search and a chart of attempts over time.
   A row opens the details: ordered phase steps (where detailed logs exist), error text and
-  stage, disconnect reason and session duration. Retry storms are collapsed into one group row.
+  stage, disconnect reason and session duration, why an attempt is `cancelled` or `expired`, and
+  the manual gateway switches of a session. Retry storms are collapsed into one group row.
 - **Findings**: the automatic checks grouped by level, with links to the attempts and
   configuration sections they refer to, and the flag reference with the thresholds in use.
 - **Source coverage**: the bundle inventory (every file, whether it was read, skipped or
@@ -77,11 +79,22 @@ Implemented in `gp/timeline.py` (the module docstring is the authority).
   gateway certificate failure, cancel, authentication rejected, portal or gateway error.
 - **Chaining**: the client first tries without a password, so a cycle that ends at a credential
   prompt is chained to the next cycle when that starts within `--chain-gap` seconds. Chained
-  cycles are ONE attempt (`cycles` counts them). A prompt is not a failure.
+  cycles are ONE attempt (`cycles` counts them). A prompt is not a failure. Chaining never
+  crosses portals: when the next cycle names another portal (case-insensitive; an unknown portal
+  does not split) the earlier cycle closes as `abandoned` and a new attempt starts, so portal and
+  gateway of an attempt always come from the same chain.
 - **Auto-restore** (`kind = auto-restore`): an automatic tunnel restore after a network change
   or sleep, with no portal contact. It is not a login attempt and is not counted in login rates.
-- **Outcomes**: `connected`, `failed`, `cancelled`, `abandoned` (a chain never completed). The
-  log level never decides an outcome; only the markers do.
+- **Outcomes**: `connected`, `failed`, `cancelled`, `abandoned` (a chain never completed) and,
+  for auto-restores only, `expired`. The log level never decides an outcome; only the markers do.
+  - `expired`: the restore ended with `Tunnel retry done: failed retry` but the log says the
+    downtime exceeded the retry grace period and no retry was attempted (the PC slept, often
+    with modern standby, or was offline). `details` carry `downtime_ms` and `modern_standby`.
+    It is not a failure: not in failure counters, storms or failure findings.
+  - `failed` (restore): a retry was really attempted and failed, with its specific error when
+    the log has one (for example certificate verification), or the log gives no reason.
+  - `cancelled` carries `details.cancel_evidence`: `explicit` (a `User canceled login` line) or
+    `inferred` (deduced from a user disconnect during the attempt).
 - **Retry storms**: 10 or more failed logins, each starting at most 30 s after the previous one.
 
 Where the verbose service/agent logs overlap an attempt it gets ordered phase steps; the
@@ -109,14 +122,15 @@ table mirrors them. The newest wording is always the "Flag reference" of the Fin
 |---|---|---|
 | `DRIVER_DISABLED` | info / warning / critical | Newest PANGP driver event is a problem code (for example 22, device disabled). The adapter is normally disabled while the client is disconnected: info when the client was not connected at collection; warning when, in the recent window, logins failed during tunnel creation or adapter setup and a driver problem event exists; critical when the client was connected at collection while the newest driver event is a problem or the adapter is absent. |
 | `NOT_CONNECTED_AT_COLLECTION` | info | The tunnel was not up when the logs were collected. A state, not an error. |
-| `LAST_ATTEMPT_FAILED` | warning | The newest login attempt failed or was abandoned (cancelled is not reported). |
+| `LAST_ATTEMPT_FAILED` | warning | The newest login attempt failed or was abandoned (cancelled is not reported; restores are never considered). |
 | `RETRY_STORM` | critical / warning | Many failed logins in quick succession; critical when it ended inside the recent window. |
 | `REPEATED_FAILURE` | warning | The same normalised error on at least `repeated_failure_min` logins in the window. |
 | `GW_CERT_FAILURE` | warning | Logins failed because the gateway certificate could not be verified. |
 | `GW_UNREACHABLE` | warning | Logins failed with the gateway unreachable or unresponsive. |
 | `AUTH_FAILURE` | warning | Logins rejected at authentication; prompts followed by success are not counted. |
-| `RESTORE_GRACE_EXCEEDED` | info | Auto-restores refused because the downtime exceeded the retry grace period (PC slept or offline). |
-| `LOW_SUCCESS_RATE` | warning | Login success rate in the window below `success_rate_min_pct`. |
+| `RESTORE_GRACE_EXCEEDED` | info | `expired` auto-restores: the downtime exceeded the retry grace period and no retry was attempted (PC slept or offline). |
+| `RESTORE_FAILED` | warning | Auto-restores in the recent window where a retry was attempted and failed, with the error breakdown. |
+| `LOW_SUCCESS_RATE` | warning | Login success rate in the window below `success_rate_min_pct` (logins only; restores never count). |
 | `STALE_TRB_REPORT` | info | `pan_gp_trb.log` is the report of the last failure and can be much older than the other logs. |
 | `LOG_GAP` | info | The event log ends more than `log_gap_s` before the detailed logs. |
 | `CONFIG_TRUNCATED` | info | A configuration block was cut by the logger or could not be parsed. |

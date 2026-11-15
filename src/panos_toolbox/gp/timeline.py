@@ -16,8 +16,12 @@ What is an attempt
     failure, cancel, authentication rejected, portal or gateway error. The client first tries
     without a password, so a cycle that ends at a credential prompt (or while waiting for the
     user) is *chained* to the next cycle when that one starts within ``chain_gap_s`` seconds
-    (default ``CHAIN_GAP_S``): chained cycles are ONE attempt (``cycles`` counts them). A chain
-    that is never completed is ``abandoned``.
+    (default ``CHAIN_GAP_S``): chained cycles are ONE attempt (``cycles`` counts them). Chaining
+    never crosses portals: the portal of a cycle is known a few lines after its start, and when
+    it differs (case-insensitive) from the portal of the chain, the earlier cycles close as
+    ``abandoned`` and the cycle starts a new attempt (an unknown portal does not split). Portal
+    and gateway of an attempt therefore always come from the same chain. A chain that is never
+    completed is ``abandoned``.
 ``kind="auto-restore"``
     An automatic tunnel restore after a network change or sleep (no portal contact). The event
     log carries it for the whole history (start ``Gateway <name>: Checking network availability
@@ -26,7 +30,16 @@ What is an attempt
     log. After the end of the event log they come from the service log alone (``Show Gateway``
     start, ``Retry start succeeded`` / ``Tunnel retry done: failed retry`` end).
 
-Outcomes: ``connected``, ``failed``, ``cancelled``, ``abandoned``. The log level never decides
+Outcomes: ``connected``, ``failed``, ``cancelled``, ``abandoned`` and, only for
+``auto-restore``, ``expired``. A restore ends with ``Tunnel retry done: failed retry`` in both
+cases; it is ``expired`` when the log says the tunnel downtime exceeded the retry grace period
+and no ``Retry connect failed`` was logged (no reconnection was attempted: the PC slept or was
+offline; ``details.downtime_ms`` and ``details.modern_standby`` say how long and whether
+``Wait in modern standy`` was seen) and ``failed`` when a retry was really attempted and failed
+(the error text keeps the specific reason) or the log gives no reason. ``expired`` is never a
+failure (not in the failure counters, storms or findings about failures). A ``cancelled`` login
+carries ``details.cancel_evidence``: ``explicit`` (a ``User canceled login`` line) or
+``inferred`` (deduced from a user disconnect during the attempt). The log level never decides
 an outcome (``Unable to verify server cert`` and the benign ``Error`` records of the service log
 are not failures); the user-visible ``[Error]`` lines of the event log are the error *text* of
 a failure that a marker already established, or the evidence of a gateway failure after the
@@ -114,7 +127,7 @@ TOP_ERRORS = 10
 
 KIND_LOGIN = "login"
 KIND_RESTORE = "auto-restore"
-OUTCOMES = ("connected", "failed", "cancelled", "abandoned")
+OUTCOMES = ("connected", "failed", "cancelled", "abandoned", "expired")
 PHASES = (
     "trigger", "portal-prelogin", "portal-auth", "network-discovery", "gateway-selection",
     "gateway-prelogin", "gateway-login", "tunnel", "connected", "hip", "disconnect",
@@ -285,8 +298,19 @@ _ERROR_NORMALISE = [
      "Gateway certificate could not be verified"),
     (re.compile(r"^Tunnel downtime .* exceeds retry grace period", re.IGNORECASE),
      "Tunnel not restored within the retry grace period"),
-    (re.compile(r"^Tunnel retry done: failed retry", re.IGNORECASE), "Tunnel restore retries failed"),
+    (re.compile(r"^Tunnel retry done: failed retry", re.IGNORECASE),
+     "Tunnel restore ended with a failed retry"),
 ]
+def restore_outcome(retries: int, grace_seen: bool) -> str:
+    """Outcome of an auto-restore that ended with ``Tunnel retry done: failed retry``.
+
+    ``expired``: the downtime exceeded the retry grace period and no retry was attempted (the PC
+    slept or was offline). ``failed``: at least one ``Retry connect failed`` was logged, or the
+    log gives no reason at all (the literal ``failed retry`` stands).
+    """
+    return "expired" if grace_seen and retries == 0 else "failed"
+
+
 _TRB_RE = re.compile(r"^Troubleshooting log is generated with the error stage \((.*?)\) "
                      r"and the error detail \((.*)\)\.?$")
 _GW_PREFIX = re.compile(r"^Gateway [^:]+: ")
@@ -409,6 +433,7 @@ class _Restore:
         "cause",
         "downtime_ms",
         "end",
+        "errors",
         "grace",
         "result",
         "retries",
@@ -426,6 +451,7 @@ class _Restore:
         self.retries = 0
         self.slept = False
         self.grace: tuple[int, int] | None = None
+        self.errors: list[str] = []
         self.steps: list[Step] = []
         self.end: datetime | None = None
         self.result = ""
@@ -560,6 +586,23 @@ class _EventEngine:
         result, ts, raw, stage, _ = cyc.prov
         self._terminal(cyc, ts, result, raw, stage)
 
+    def _set_portal(self, cyc: _Cycle, portal: str) -> None:
+        """Record the portal of a cycle; a cycle for ANOTHER portal never joins the chain.
+
+        The portal of a cycle is known only a few lines after its start. When the first portal
+        seen differs (case-insensitive) from the portal of the chain so far, the chain is closed
+        as ``abandoned`` and the cycle starts a new attempt. An unknown portal never splits.
+        """
+        if cyc.portal:
+            return
+        cyc.portal = portal
+        if len(self.chain) < 2 or self.chain[-1] is not cyc:
+            return
+        prev = next((c.portal for c in reversed(self.chain[:-1]) if c.portal), "")
+        if prev and portal and prev.rstrip(".").lower() != portal.rstrip(".").lower():
+            self._finalise(self.chain[:-1], "abandoned")
+            self.chain = [cyc]
+
     def _close_cycle(self) -> None:
         """Close the open cycle without a rescuing tunnel (next start, service line, EOF)."""
         cyc = self.cur
@@ -607,7 +650,7 @@ class _EventEngine:
         elif code == "PRELOGIN_FAIL":
             cyc.phase = "portal-prelogin"
             fl.add("prelogin_fail")
-            cyc.portal = cyc.portal or m.group(1).rstrip(".")
+            self._set_portal(cyc, m.group(1).rstrip("."))
             step(cyc.steps, ts, "portal-prelogin", f"Portal pre-login failed ({m.group(1)})",
                  "warn")
         elif code == "PORTAL_LOGIN":
@@ -616,7 +659,7 @@ class _EventEngine:
         elif code == "LOGGING_IN":
             fl.add("logging_in")
         elif code == "COOKIE":
-            cyc.portal = cyc.portal or m.group(2).rstrip(".")
+            self._set_portal(cyc, m.group(2).rstrip("."))
             if m.group(3) and m.group(1) == "empty":
                 fl.add("cookie_empty")
             if m.group(3) and not cyc.user:
@@ -626,7 +669,8 @@ class _EventEngine:
         elif code == "AUTH_EMPTY":
             fl.add("empty_pw")
             fl.add("awaiting")
-            step(cyc.steps, ts, "portal-auth", "No stored password: credentials requested", "warn")
+            step(cyc.steps, ts, "portal-auth",
+                 "Authentication with an empty password failed: credentials requested", "warn")
         elif code == "AUTH_REJECT":
             fl.add("auth_reject")
             fl.add("awaiting")
@@ -646,12 +690,13 @@ class _EventEngine:
                 self._provisional(cyc, ts, "failed", msg, "portal-auth")
         elif code == "PORTAL_DONE":
             fl.add("portal_ok")
+            self._set_portal(cyc, m.group(1))
             cyc.portal = m.group(1)
             cyc.phase = "portal-auth"
             step(cyc.steps, ts, "portal-auth",
                  f"Portal login completed ({m.group(1)}, connect method {m.group(2)})", "ok")
         elif code == "PORTAL_CFG_FAIL":
-            cyc.portal = cyc.portal or m.group(1)
+            self._set_portal(cyc, m.group(1))
             step(cyc.steps, ts, "portal-auth", "Latest portal configuration could not be fetched",
                  "warn")
         elif code == "ND_START":
@@ -676,7 +721,7 @@ class _EventEngine:
             fl.add("gw_prompt")
             cyc.gateway = m.group(1)
             step(cyc.steps, ts, "gateway-login",
-                 f"Gateway {m.group(1)} asks for credentials again", "warn")
+                 f"Gateway {m.group(1)} reported an invalid user credential", "warn")
         elif code == "GW_LOGIN_OK":
             cyc.gateway = m.group(2)
             cyc.user = unquote(m.group(3)).strip().rstrip(".") or cyc.user
@@ -684,6 +729,7 @@ class _EventEngine:
             step(cyc.steps, ts, "gateway-login",
                  f"Gateway login finished ({m.group(1).lower()}, user {cyc.user})", "ok")
         elif code == "GW_CANCEL":
+            fl.add("explicit_cancel")
             step(cyc.steps, ts, "gateway-login", "Login to the gateway cancelled by the user",
                  "warn")
             self._provisional(cyc, ts, "cancelled", msg, "gateway-login")
@@ -703,7 +749,7 @@ class _EventEngine:
             step(cyc.steps, ts, "tunnel", f"Creating tunnel to {m.group(1)}")
         elif code == "TUN_TYPE_CHG":
             cyc.ssl_fallback = True
-            step(cyc.steps, ts, "tunnel", "Connection type changed due to network conditions",
+            step(cyc.steps, ts, "tunnel", "GlobalProtect changed the connection type",
                  "warn")
         elif code == "TUN_OK":
             cyc.protocol, cyc.gateway, cyc.tunnel_ts = m.group(1), m.group(2), ts
@@ -756,6 +802,8 @@ class _EventEngine:
             att.set_error(last.err_raw or "attempt failed", last.stage)
         elif result == "cancelled":
             att.outcome, att.end = "cancelled", last.end
+            att.details["cancel_evidence"] = (
+                "explicit" if "explicit_cancel" in last.flags else "inferred")
         else:   # the chain was never completed
             att.outcome, att.end = "abandoned", last.last
             att.details["abandon_reason"] = {
@@ -827,7 +875,10 @@ class _EventEngine:
         rst = self.restore
         if rst is None:
             return
-        if code == "RESTORE_RETRY":
+        if is_err:
+            rst.errors.append(msg)
+            self._step(rst.steps, ts, "restore", f"Error shown to the user: {msg}", "error")
+        elif code == "RESTORE_RETRY":
             rst.retries += 1
             self._step(rst.steps, ts, "restore", f"Retry failed ({m.group(1)} time)", "warn")
         elif code == "STANDBY":
@@ -837,13 +888,14 @@ class _EventEngine:
             rst.grace = (int(m.group(1)), int(m.group(2)))
             self._step(rst.steps, ts, "restore",
                        f"Tunnel downtime {int(m.group(1)) // 1000} s exceeds the retry grace "
-                       f"period ({m.group(2)} s)", "error")
+                       f"period ({m.group(2)} s)", "warn")
         elif code == "RESTORE_OK":
             self._step(rst.steps, ts, "connected", "Tunnel restored", "ok")
             self._end_restore(ts, "connected", "")
         elif code == "RESTORE_DONE":
-            self._step(rst.steps, ts, "restore", "Tunnel retry done: failed retry", "error")
-            self._end_restore(ts, "failed", "")
+            self._step(rst.steps, ts, "restore", "Log: tunnel retry done, failed retry",
+                       "error" if rst.retries else "warn")
+            self._end_restore(ts, restore_outcome(rst.retries, rst.grace is not None), "")
 
     def _end_restore(self, ts: datetime, result: str, note: str) -> None:
         rst = self.restore
@@ -864,13 +916,19 @@ class _EventEngine:
         att.details["gateway_short"] = rst.short
         att.details["cause"] = rst.cause or "unknown"
         att.details["retries"] = rst.retries
-        att.details["slept"] = rst.slept
+        att.details["modern_standby"] = rst.slept
         if rst.downtime_ms is not None:
             att.details["downtime_at_start_ms"] = rst.downtime_ms
         if rst.grace:
             att.details["grace_exceeded"] = {"downtime_ms": rst.grace[0], "grace_s": rst.grace[1]}
-        if result == "failed":
-            if rst.grace:
+        if rst.grace:
+            att.details["downtime_ms"] = rst.grace[0]
+        elif rst.downtime_ms is not None:
+            att.details["downtime_ms"] = rst.downtime_ms
+        if result in ("failed", "expired"):
+            if result == "failed" and rst.errors:
+                att.set_error(rst.errors[-1], "restore")
+            elif rst.grace:
                 att.set_error(f"Tunnel downtime ({rst.grace[0]} milliseconds) exceeds retry "
                               f"grace period ({rst.grace[1]} seconds)", "restore")
             else:
@@ -895,7 +953,7 @@ class _Detail:
     kind: str
     start: datetime
     end: datetime | None = None
-    outcome: str = ""             # connected | failed | cancelled | abandoned | "" (unknown)
+    outcome: str = ""             # connected | failed | cancelled | abandoned | expired | ""
     trigger: str = ""
     portal: str = ""
     gateway: str = ""
@@ -941,7 +999,7 @@ _SVC_RULES = [
     (r"----Portal Login starts----", "portal-auth", "info", "Portal login starts"),
     (r"Portal auth method: (.*)$", "portal-auth", "info", "Portal authentication: {0}"),
     (r"Auth failed empty password for portal", "portal-auth", "warn",
-     "No stored password: the user is asked for credentials"),
+     "Authentication with an empty password failed: credentials requested"),
     (r"Auth failed for portal", "portal-auth", "error", "Portal rejected the credentials"),
     (r"portal status is (.*?)\.?$", "portal-auth", "info", "Portal status: {0}"),
     (r"Restored cached portal config", "portal-auth", "info",
@@ -949,11 +1007,11 @@ _SVC_RULES = [
     (r"Connect method is (.*)$", "portal-auth", "info", "Connect method: {0}"),
     (r"----Network Discover starts----", "network-discovery", "info", "Network discovery starts"),
     (r"Discover external gateway: gateway count is (\d+)", "gateway-selection", "info",
-     "External gateways to probe: {0}"),
+     "External gateway count: {0}"),
     (r"One external gateway (\S+), priority=(\d+)", "gateway-selection", "info",
-     "Gateway {0} selected (priority {1})"),
+     "External gateway {0} found (priority {1})"),
     (r"pretunnel latency \(([^)]*)\) is (\d+)", "gateway-selection", "info",
-     "TCP latency to the gateway: {1} ms ({0})"),
+     "Pre-tunnel latency to the gateway: {1} ms ({0})"),
     (r"----Gateway Pre-login starts----", "gateway-prelogin", "info", "Gateway pre-login starts"),
     (r"Auth message is (.*)", "gateway-prelogin", "info", "Gateway prompt: {0}"),
     (r"----Gateway Login starts----", "gateway-login", "info", "Gateway login starts"),
@@ -963,7 +1021,7 @@ _SVC_RULES = [
     (r"Actual user for gateway login is (\S+)", "gateway-login", "info",
      "Gateway login user: {0}"),
     (r"----Tunnel Creation starts----", "tunnel", "info", "Tunnel creation starts"),
-    (r"Set preferred IP (\S+) for gateway", "tunnel", "info", "Tunnel IP assigned: {0}"),
+    (r"Set preferred IP (\S+) for gateway", "tunnel", "info", "Preferred IP set: {0}"),
     (r"Configured MTU is (\d+)", "tunnel", "info", "MTU {0}"),
     (r"Encryption method is (\S+)", "tunnel", "info", "Encryption: {0}"),
     (r"Trying to do ipsec connection to", "tunnel", "info", "IPSec tunnel: connecting"),
@@ -984,18 +1042,18 @@ _SVC_RULES = [
      "Waiting in modern standby until wake-up"),
     (r"NetworkConnectionMonitorThread: route change detected", "restore", "info",
      "Network route change detected"),
-    (r"Network changed, break from ProcMonitor", "restore", "warn", "Network change: tunnel lost"),
+    (r"Network changed, break from ProcMonitor", "restore", "warn", "Network changed: connection monitor interrupted"),
     (r"Show Gateway (.+?): Checking network availability", "restore", "info",
      "Restoring the tunnel to gateway {0} when the network is available"),
     (r"Received network change event during retry network checking", "restore", "info",
      "Network change during the retry check"),
-    (r"failed to receive keep alive", "restore", "warn", "Keep-alive lost"),
+    (r"failed to receive keep alive", "restore", "warn", "Keep-alive not received"),
     (r"Retry connect failed (\w+) time", "restore", "warn", "Retry failed ({0} time)"),
     (r"Retry start succeeded", "restore", "ok", "Retry succeeded"),
     (r"Retry finished SetupNetwork", "restore", "ok", "Network setup finished"),
     (r"Tunnel downtime \((\d+) milliseconds\) exceeds retry grace period \((\d+) seconds\)",
-     "restore", "error", "Tunnel downtime exceeds the retry grace period ({1} s)"),
-    (r"Tunnel retry done: failed retry", "restore", "error", "Restore failed: retries exhausted"),
+     "restore", "warn", "Tunnel downtime exceeds the retry grace period ({1} s)"),
+    (r"Tunnel retry done: failed retry", "restore", "warn", "Log: tunnel retry done, failed retry"),
     (r"Before ProcMonitor quit, disconnect vpn", "disconnect", "info", "Disconnecting the VPN"),
 ]
 _SVC_RULES = [(re.compile("^(?:" + p + ")"), ph, lv, tx) for p, ph, lv, tx in _SVC_RULES]
@@ -1163,6 +1221,8 @@ def _scan_service(recs: list[Record], chain_gap_s: float, hip_window_s: float) -
             d.details["service_cause"] = blk.msgtype
             d.details["gateway_short"] = blk.short
             retries = 0
+            standby = False
+            last_err = ""
             lo = blk.a
             while lo > 0 and (blk.ts - recs[lo - 1].ts).total_seconds() <= 5 and \
                     recs[lo - 1].pid == blk.pid:
@@ -1171,6 +1231,10 @@ def _scan_service(recs: list[Record], chain_gap_s: float, hip_window_s: float) -
                 rr = recs[j]
                 if rr.msg.startswith("Retry connect failed"):
                     retries += 1
+                if rr.msg.startswith("Wait in modern standy"):
+                    standby = True
+                if rr.level == "Error" and rr.msg.startswith("Failed to verify"):
+                    last_err = rr.msg
                 dm = _RE_DOWNTIME.match(rr.msg)
                 if dm:
                     d.details["downtime_at_start_ms"] = int(dm.group(1))
@@ -1182,12 +1246,24 @@ def _scan_service(recs: list[Record], chain_gap_s: float, hip_window_s: float) -
                 if st is not None and st.phase in ("restore", "connected", "disconnect"):
                     d.steps.append(st)
             d.details["retries"] = retries
+            d.details["modern_standby"] = standby
             d.outcome = {"connected": "connected", "failed": "failed"}.get(blk.result, "abandoned")
             if d.outcome == "failed":
+                d.outcome = restore_outcome(retries, "grace_exceeded" in d.details)
+            g0 = d.details.get("grace_exceeded")
+            if g0:
+                d.details["downtime_ms"] = g0["downtime_ms"]
+            elif "downtime_at_start_ms" in d.details:
+                d.details["downtime_ms"] = d.details["downtime_at_start_ms"]
+            if d.outcome in ("failed", "expired"):
                 g = d.details.get("grace_exceeded")
-                d.error_raw = (f"Tunnel downtime ({g['downtime_ms']} milliseconds) exceeds retry "
-                               f"grace period ({g['grace_s']} seconds)") if g else \
-                    "Tunnel retry done: failed retry"
+                if d.outcome == "failed" and last_err:
+                    d.error_raw = last_err
+                elif g:
+                    d.error_raw = (f"Tunnel downtime ({g['downtime_ms']} milliseconds) exceeds "
+                                   f"retry grace period ({g['grace_s']} seconds)")
+                else:
+                    d.error_raw = "Tunnel retry done: failed retry"
             details.append(d)
             continue
         # kind A
@@ -1615,8 +1691,10 @@ def _from_detail(d: _Detail) -> Attempt:
     att.details = dict(d.details)
     if d.kind == KIND_RESTORE:
         att.details.setdefault("cause", att.details.get("service_cause", "unknown"))
-    if att.outcome == "failed":
+    if att.outcome in ("failed", "expired"):
         att.set_error(d.error_raw or "attempt failed")
+    if att.outcome == "cancelled" and att.kind == KIND_LOGIN:
+        att.details.setdefault("cancel_evidence", "inferred")
     return att
 
 

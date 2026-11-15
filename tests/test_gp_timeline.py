@@ -376,3 +376,159 @@ def test_agent_click_enriches_attempt(tmp_path):
     assert x["details"]["click_time"] == "2026-03-02T09:08:19.800"
     texts = [s["text"] for s in x["steps"]]
     assert any("Connecting" in t for t in texts)
+
+
+# ------------------------------------------------------------------ portals are never mixed
+def prompt_cycle(t: float, portal: str, cookie: bool = True):
+    out = [ev(t, "Started the Portal pre-login")]
+    if cookie:
+        out.append(ev(t + 0.1, f"Unserialized empty cookie for portal {portal} and user {USER}"))
+    out += [ev(t + 0.3, "Portal Login starts"),
+            ev(t + 0.4, f"Auth failed empty password for portal {portal}")]
+    return out
+
+
+def connect_cycle(t: float, portal: str, gw: str):
+    return [
+        ev(t, "Started the Portal pre-login"),
+        ev(t + 0.1, f"Unserialized empty cookie for portal {portal} and user {USER}"),
+        ev(t + 0.2, "Portal pre-login result received"),
+        ev(t + 0.3, "Portal Login starts"),
+        ev(t + 0.4, "portal status is Connected"),
+        ev(t + 0.5, f"Portal login completed with address {portal} and conect method of "
+                    "on-demand."),
+        ev(t + 0.7, f"Gateway pre-Login Starts to {gw}"),
+        ev(t + 0.9, f"Auto Gateway login finished with address {gw} and user {USER}"),
+        ev(t + 1.0, f"Trying to create tunnel with gateway {gw}"),
+        ev(t + 2.0, f"IPSec tunnel creation finished with Gateway {gw}."),
+    ]
+
+
+def test_cycles_of_different_portals_are_not_chained(tmp_path):
+    lines = prompt_cycle(0, "portal-a.example.test") + \
+        connect_cycle(200, "portal-b.example.test", "gw-b.example.test")
+    a = logins(build(tmp_path, event=lines))
+    assert [x["outcome"] for x in a] == ["abandoned", "connected"]
+    assert a[0]["portal"] == "portal-a.example.test" and a[0]["gateway"] == ""
+    assert a[0]["details"]["abandon_reason"]
+    assert a[1]["portal"] == "portal-b.example.test" and a[1]["gateway"] == "gw-b.example.test"
+    assert all(x["cycles"] == 1 for x in a)
+    assert a[1]["start"] == "2026-03-02T09:03:20.000"
+
+
+def test_same_portal_in_other_case_or_unknown_portal_is_chained(tmp_path):
+    lines = prompt_cycle(0, "Portal-A.Example.Test") + \
+        connect_cycle(60, "portal-a.example.test", GW)
+    a = logins(build(tmp_path, event=lines))
+    assert len(a) == 1 and a[0]["cycles"] == 2 and a[0]["outcome"] == "connected"
+    # the first cycle never names its portal: the next one cannot be told apart, so it chains
+    lines = prompt_cycle(0, "ignored", cookie=False) + connect_cycle(60, "portal-b.example.test", GW)
+    a = logins(build(tmp_path, event=lines))
+    assert len(a) == 1 and a[0]["cycles"] == 2
+
+
+def test_portal_split_keeps_three_cycle_chain_of_one_portal(tmp_path):
+    lines = (prompt_cycle(0, "portal-a.example.test") + prompt_cycle(30, "portal-a.example.test")
+             + prompt_cycle(60, "portal-b.example.test")
+             + connect_cycle(90, "portal-b.example.test", "gw-b.example.test"))
+    a = logins(build(tmp_path, event=lines))
+    assert [(x["outcome"], x["cycles"], x["portal"]) for x in a] == [
+        ("abandoned", 2, "portal-a.example.test"), ("connected", 2, "portal-b.example.test")]
+    assert a[1]["start"] == "2026-03-02T09:01:00.000"
+
+
+# ------------------------------------------------------------------ cancelled evidence
+def test_cancel_evidence_explicit_and_inferred(tmp_path):
+    explicit = prelogin(0) + [ev(1.0, f"User canceled login to gateway {GW}.")]
+    inferred = [ev(100, "Started the Portal pre-login"), ev(100.3, "Portal Login starts"),
+                ev(105, "User disconnecting tunnel starts")]
+    a = logins(build(tmp_path, event=explicit + inferred))
+    assert [x["outcome"] for x in a] == ["cancelled", "cancelled"]
+    assert [x["details"]["cancel_evidence"] for x in a] == ["explicit", "inferred"]
+    other = logins(build(tmp_path, event=success(0)))
+    assert "cancel_evidence" not in other[0]["details"]
+
+
+# ------------------------------------------------------------------ restore outcomes
+def restore_lines(t: float, *middle: str, end: str = "Tunnel retry done: failed retry"):
+    return ([ev(t, f"Gateway {GW}: Checking network availability and restoring VPN connection...")]
+            + [ev(t + 1 + i, m) for i, m in enumerate(middle)] + [ev(t + 10, end)])
+
+
+GRACE = "Tunnel downtime (7200000 milliseconds) exceeds retry grace period (1800 seconds)"
+
+
+def restores(tl):
+    return [a for a in attempts(tl) if a["kind"] == "auto-restore"]
+
+
+def test_restore_over_grace_period_is_expired(tmp_path):
+    lines = success(0) + restore_lines(100, "Wait in modern standy until wakeup", GRACE)
+    r = restores(build(tmp_path, event=lines))[0]
+    assert r["outcome"] == "expired"
+    assert r["details"]["downtime_ms"] == 7200000 and r["details"]["modern_standby"] is True
+    assert r["details"]["retries"] == 0
+    assert r["error"]["text"] == "Tunnel not restored within the retry grace period"
+
+
+def test_restore_with_real_retry_failure_is_failed(tmp_path):
+    lines = success(0) + restore_lines(
+        100, "Retry connect failed first time", "Failed to verify certificate of the server")
+    r = restores(build(tmp_path, event=lines))[0]
+    assert r["outcome"] == "failed" and r["details"]["retries"] == 1
+    assert r["details"]["modern_standby"] is False
+    # a retry that failed before the grace period ran out is still a failure
+    lines = success(0) + restore_lines(100, "Retry connect failed first time", GRACE)
+    assert restores(build(tmp_path, event=lines))[0]["outcome"] == "failed"
+    # no reason in the log: the literal "failed retry" stands
+    assert restores(build(tmp_path, event=success(0) + restore_lines(100)))[0]["outcome"] == \
+        "failed"
+
+
+def test_expired_is_counted_apart_and_never_a_storm_failure(tmp_path):
+    lines = success(0)
+    for i in range(12):
+        lines += restore_lines(100 + i * 20, GRACE)
+    d = build(tmp_path, event=lines).to_dict()
+    s = d["summary"]
+    assert s["by_outcome"]["expired"] == 12 and s["by_outcome"]["failed"] == 0
+    assert s["by_kind"]["auto-restore"]["expired"] == 12
+    assert s["by_kind"]["login"]["expired"] == 0
+    assert s["per_day"][0]["auto-restore"]["expired"] == 12
+    assert d["storms"] == []
+
+
+def test_service_only_restore_outcome_and_step_wording(tmp_path):
+    def blk(t, middle):
+        return ([svc(t, f"Show Gateway {GW}: Checking network availability and restoring...")]
+                + [svc(t + 1 + i, m) for i, m in enumerate(middle)]
+                + [svc(t + 9, "Tunnel retry done: failed retry"),
+                   svc(t + 9.1, "--Set state to Disconnected")])
+    sv = blk(0, ["Wait in modern standy until wakeup", GRACE]) + \
+        blk(100, ["Retry connect failed first time"])
+    r = restores(build(tmp_path, service=sv))
+    assert [x["outcome"] for x in r] == ["expired", "failed"]
+    assert r[0]["details"]["modern_standby"] is True and r[0]["details"]["downtime_ms"] == 7200000
+    texts = [s["text"] for s in r[0]["steps"]]
+    assert "Log: tunnel retry done, failed retry" in texts
+    assert not any("retries exhausted" in t for t in texts)
+
+
+def test_preferred_ip_step_is_not_called_an_assignment(tmp_path):
+    tl = build(tmp_path, event=success(0.2), service=service_login(0))
+    texts = [s["text"] for s in logins(tl)[0]["steps"]]
+    assert "Preferred IP set: 10.0.0.9" in texts
+    assert not any("IP assigned" in t for t in texts)
+
+
+def test_failed_restore_keeps_the_specific_error(tmp_path):
+    lines = success(0) + [
+        ev(100, f"Gateway {GW}: Checking network availability and restoring VPN connection..."),
+        ev(105, "Retry connect failed first time"),
+        ev(108, "Failed to verify certificate", "Error"),
+        ev(109, "Retry connect failed second time"),
+        ev(109.1, "Tunnel retry done: failed retry"),
+    ]
+    r = restores(build(tmp_path, event=lines))[0]
+    assert r["outcome"] == "failed" and r["details"]["retries"] == 2
+    assert r["error"]["text"] == "Server certificate verification failed"
