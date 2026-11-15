@@ -59,7 +59,7 @@ HISTORICAL = "historical"
 STALE_AFTER = timedelta(days=1)
 MAX_DRIVER_EVENTS = 500
 _MARKER = "ResponseToClient.txt_output: "
-_STATUS_CODE = 8450          # source number of the chunked status dumps (keep_codes)
+MAX_COMPACT_GATEWAYS = 12    # longer gateway lists are shown as one compact group
 _PANGP_RE = re.compile(r"pangp|palo alto|globalprotect", re.IGNORECASE)
 
 
@@ -395,18 +395,6 @@ class _Doc:
     type: str
 
 
-_ECHOES = [
-    ("connect_method", re.compile(r"^Connect method is (.+)$")),
-    ("portal_auth", re.compile(r"^Portal auth method: (.+)$")),
-    ("gateway_auth", re.compile(r"^Gateway auth method: (.+)$")),
-    ("grace", re.compile(r"^Tunnel retry grace period is (.+)$")),
-    ("hip_interval", re.compile(r"^Hip check interval is (.+)$")),
-    ("mtu", re.compile(r"^Configured MTU is (\d+)")),
-    ("encryption", re.compile(r"^Encryption method is (\S+)")),
-    ("timeouts", re.compile(r"^Timeout value: (.+)$")),
-    ("region", re.compile(r"^REGION-PRIO, (?:cached )?region code is (\S+)")),
-    ("prelogon", re.compile(r"PrelogonEnabled is (\d)")),
-]
 _ECHO_LABELS = {
     "connect_method": "Connect method", "portal_auth": "Portal authentication",
     "gateway_auth": "Gateway authentication", "grace": "Tunnel retry grace period",
@@ -414,7 +402,46 @@ _ECHO_LABELS = {
     "encryption": "Tunnel encryption", "timeouts": "Timeouts (seconds)",
     "region": "Region code", "prelogon": "Pre-logon enabled (0 = no)",
 }
-_PORTAL_RE = re.compile(r"^Portal (\S+), user (\S*), logonDomain (\S*)")
+# Further facts echoed by the service log. The patterns are anchored on the message text only:
+# the source number in the record prefix changes between client builds. All echoes (this list
+# and the basic settings) are matched with ONE alternation: the name of the matched value
+# group says which fact it is.
+_AUTH_ECHOES = [
+    ("saml_method", r"Portal's saml auth method (?P<saml_method>\S+)"),
+    ("saml_browser_support", r"Portal's saml default browser support = (?P<saml_browser_support>\S+)"),
+    ("use_default_browser", r"Prelogin use-default-browser = (?P<use_default_browser>\S+)"),
+    ("saml_timeout", r"Portal's saml request timeout is (?P<saml_timeout>\d+)"),
+    ("sso", r"SSO enable status is (?P<sso>\d+)"),
+    ("allow_cached_portal", r"allow-cached-portal is (?P<allow_cached_portal>\S+)"),
+    ("network_type", r"NetworkDiscoverThread: network type is (?P<network_type>\w+)"),
+    ("tunnel_up", r"Connected (?P<tunnel_up>(?:ipsec|ssl) to \S+)"),
+    ("last_disconnect", r"Disconnect\((?P<last_disconnect>[^)]*)\) called"),
+    ("external_gw_count", r"Discover external gateway: gateway count is (?P<external_gw_count>\d+)"),
+    ("internal_gw_count", r"Gateway count is (?P<internal_gw_count>\d+) for internal network"),
+]
+_AUTH_LABELS = {
+    "saml_method": "Portal SAML method", "saml_browser_support": "Portal supports the default browser",
+    "use_default_browser": "Prelogin uses the default browser (no = embedded browser)",
+    "saml_timeout": "SAML request timeout (s)", "sso": "SSO enabled (1 = yes)",
+    "allow_cached_portal": "Cached portal allowed",
+}
+_ECHO_PATTERNS = [
+    r"Connect method is (?P<connect_method>.+)",
+    r"Portal auth method: (?P<portal_auth>.+)",
+    r"Gateway auth method: (?P<gateway_auth>.+)",
+    r"Tunnel retry grace period is (?P<grace>.+)",
+    r"Hip check interval is (?P<hip_interval>.+)",
+    r"Configured MTU is (?P<mtu>\d+)",
+    r"Encryption method is (?P<encryption>\S+)",
+    r"Timeout value: (?P<timeouts>.+)",
+    r"REGION-PRIO, (?:cached )?region code is (?P<region>\S+)",
+    *[pat for _, pat in _AUTH_ECHOES],
+]
+_ECHO_RE = re.compile("(?:" + "|".join(_ECHO_PATTERNS) + ")")
+_PRELOGON_RE = re.compile(r"PrelogonEnabled is (\d)")
+_GWPROBE_RE = re.compile(
+    r"^gateway (.+?) \((\S+)\), priority=(-?\d+), duration=(\d+) ms, assign (\d+) as its weight")
+_PORTAL_RE = re.compile(r"^Portal (\S+), user (\S*), logonDomain ?(\S*)")
 _UA_RE = re.compile(r"PAN GlobalProtect/([\d.\-]+) \(([^)]*)\)")
 _BANNER_RE = re.compile(r"Start PanGPS service \(ver: ([\d.\-]+)\)")
 _GWCFG_RE = re.compile(r"^gateway (\S+)'s config is(.*)$")
@@ -438,6 +465,12 @@ class _LogScan:
         self.service_start: tuple[datetime, str] | None = None
         self.service_stop: datetime | None = None
         self.versions: dict[str, tuple[datetime, str]] = {}
+        self.starts: list[tuple[datetime, str, int, str]] = []   # ts, version, pid, file
+        self.stops: list[tuple[datetime, int]] = []
+        self.portals: dict[str, list] = {}         # name -> [first, last, count]
+        self.methods: dict[str, list] = {}         # connect method -> [first, last, count]
+        self.probes: dict[str, dict[str, Any]] = {}
+        self.prelogon_user_seen = False
         self.user: tuple[datetime, str, str] | None = None
         self.portal: tuple[datetime, str, str] | None = None
         self.domain = ""
@@ -479,6 +512,8 @@ class _LogScan:
         if user and (self.user is None or ts >= self.user[0]):
             self.user = (ts, user, src)
         portal = _text(root, "portal")
+        if portal:
+            self._seen(self.portals, portal, ts)
         if portal and (self.portal is None or ts >= self.portal[0]):
             self.portal = (ts, portal, src)
         ver = _text(root, "product-version")
@@ -498,8 +533,7 @@ class _LogScan:
     def feed_service(self, rec: Record) -> None:
         self.records += 1
         msg = rec.msg
-        if rec.code == _STATUS_CODE or msg.startswith(_MARKER) or (
-                rec.extra and rec.extra[0].startswith(_MARKER)):
+        if msg.startswith(_MARKER) or (rec.extra and rec.extra[0].startswith(_MARKER)):
             self._chunk(rec)
             return
         m = _STATE_RE.match(msg)
@@ -511,10 +545,13 @@ class _LogScan:
             m = _BANNER_RE.search(msg)
             if m:
                 self._version("service banner", rec, m.group(1))
+                self.starts.append((rec.ts, m.group(1), rec.pid, rec.src))
                 if self.service_start is None or rec.ts >= self.service_start[0]:
                     self.service_start = (rec.ts, rec.src)
             return
         if msg.startswith(("PanGPS service exits", "Received shutdown message")):
+            if msg.startswith("PanGPS service exits"):
+                self.stops.append((rec.ts, rec.pid))
             if self.service_stop is None or rec.ts >= self.service_stop:
                 self.service_stop = rec.ts
             return
@@ -536,11 +573,20 @@ class _LogScan:
                 "gateway": m.group(1), "description": m.group(2), "ipv4": m.group(3),
                 "ipv6": m.group(4), "fqdn": m.group(5), "ts": rec.ts}
             return
+        if msg.startswith("gateway "):
+            m = _GWPROBE_RE.match(msg)
+            if m:
+                self.probes[m.group(2)] = {"region": m.group(1), "priority": m.group(3),
+                                           "ms": m.group(4), "weight": m.group(5), "ts": rec.ts}
+                return
         m = _PORTAL_RE.match(msg)
         if m:
             if self.portal is None or rec.ts >= self.portal[0]:
                 self.portal = (rec.ts, m.group(1), rec.src)
-            if m.group(2) and (self.user is None or rec.ts >= self.user[0]):
+            self._seen(self.portals, m.group(1), rec.ts)
+            if m.group(2) == "pre-logon":
+                self.prelogon_user_seen = True
+            elif m.group(2) and (self.user is None or rec.ts >= self.user[0]):
                 self.user = (rec.ts, m.group(2), rec.src)
             self.domain = m.group(3) or self.domain
             return
@@ -550,11 +596,25 @@ class _LogScan:
                 self._version("user agent", rec, m.group(1))
                 self.os_agent = m.group(2)
             return
-        for key, rx in _ECHOES:
-            m = rx.search(msg) if key == "prelogon" else rx.match(msg)
+        m = _ECHO_RE.match(msg)
+        if m and m.lastgroup:
+            value = m.group(m.lastgroup).strip()
+            self._note(m.lastgroup, rec, value)
+            if m.lastgroup == "connect_method":
+                self._seen(self.methods, value, rec.ts)
+            return
+        if "PrelogonEnabled is" in msg:
+            m = _PRELOGON_RE.search(msg)
             if m:
-                self._note(key, rec, m.group(1).strip())
-                return
+                self._note("prelogon", rec, m.group(1))
+
+    @staticmethod
+    def _seen(store: dict[str, list], key: str, ts: datetime) -> None:
+        cur = store.get(key)
+        if cur is None:
+            store[key] = [ts, ts, 1]
+        else:
+            cur[0], cur[1], cur[2] = min(cur[0], ts), max(cur[1], ts), cur[2] + 1
 
     def _chunk(self, rec: Record) -> None:
         """Reassemble the status XML that the service logs in chunks of about 2 KB."""
@@ -563,7 +623,7 @@ class _LogScan:
         elif rec.extra and rec.extra[0].startswith(_MARKER):
             text = "\n".join([rec.extra[0][len(_MARKER):], *rec.extra[1:]])
         else:
-            return          # code 8450 without the marker: not a status chunk
+            return          # not a status chunk
         key = (rec.pid, rec.tid)
         head = text.lstrip()
         if head.startswith(("<?xml", "<response")):
@@ -624,7 +684,7 @@ def _scan_logs(bundle: Bundle) -> tuple[_LogScan, dict[str, datetime | None]]:
         text = bundle.read_text(name, "client configuration")
         if not text:
             continue
-        for rec in iter_records(text, name, skip_levels={"Dump"}, keep_codes={_STATUS_CODE}):
+        for rec in iter_records(text, name, skip_levels={"Dump"}, keep_msgs=(_MARKER,)):
             scan.feed_service(rec)
         ts = _tail_ts(text, _TS_TAIL_RE, True)
         if ts and (newest.get("service") is None or ts > newest["service"]):
@@ -927,10 +987,97 @@ def _category_summary(entry: ET.Element) -> str:
     return "; ".join(parts) if parts else "no items"
 
 
+# ------------------------------------------------------------ installer log
+_MSI_START_RE = re.compile(r"^=== Logging started: (\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d\d:\d\d)")
+_MSI_STOP_RE = re.compile(r"^=== Logging stopped: (\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d\d:\d\d)")
+_MSI_RESULT_RE = re.compile(
+    r"^MSI \(\w\) \([^)]*\) \[(\d\d:\d\d:\d\d)[:.]?\d*\]: Product: (.+?) -- (.+)$")
+_MSI_DONE_RE = re.compile(
+    r"Windows Installer (installed|removed|reconfigured|updated|repaired)[^.]* the product\."
+    r"(?: Product Name: ([^.]*)\.)?(?: Product Version: ([^.]*(?:\.\d+)*)\. Product Language)?")
+_MSI_PROP_RE = re.compile(r"^Property\(S\): (ProductVersion|ProductCode|ProductName|PORTAL) = (.*)$")
+_MSI_KINDS = (("install", "Installation"), ("remove", "Removal"), ("configure", "Configuration"),
+              ("update", "Update"), ("repair", "Repair"))
+
+
+def parse_msi_log(text: str, ref: datetime | None = None) -> list[dict[str, Any]]:
+    """Install, upgrade, repair and remove events of ``PanGPMsi.log`` (one per installer session).
+
+    The file is a Windows Installer verbose log: sessions between ``=== Logging started: ===``
+    and ``=== Logging stopped: ===`` (dates are DD/MM/YYYY, times 24 h), the outcome in
+    ``Product: <name> -- Installation|Removal|... completed successfully`` and the version in
+    the ``ProductVersion`` property. The MSI log carries no build number.
+    """
+    events: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
+
+    def close() -> None:
+        nonlocal cur
+        if cur is not None and (cur.get("kind") or cur.get("version")):
+            cur.setdefault("kind", "other")
+            events.append(cur)
+        cur = None
+
+    for line in text.replace("\r", "").split("\n"):
+        m = _MSI_START_RE.match(line)
+        if m:
+            close()
+            ts, _ = parse_datetime(f"{m.group(1)} {m.group(2)}", "dmy", ref)
+            cur = {"ts": ts, "started": ts, "kind": "", "result": "", "result_text": "",
+                   "product": "", "version": "", "product_code": "", "portal": ""}
+            continue
+        if cur is None:
+            continue
+        if _MSI_STOP_RE.match(line):
+            close()
+            continue
+        m = _MSI_PROP_RE.match(line)
+        if m:
+            key = {"ProductVersion": "version", "ProductCode": "product_code",
+                   "ProductName": "product", "PORTAL": "portal"}[m.group(1)]
+            cur[key] = m.group(2).strip()
+            continue
+        m = _MSI_RESULT_RE.match(line)
+        if m and not cur["kind"]:
+            text_ = m.group(3).strip()
+            for kind, word in _MSI_KINDS:
+                if text_.startswith(word):
+                    cur["kind"] = kind
+                    break
+            else:
+                cur["kind"] = "other"
+            low = text_.lower()
+            cur["result"] = ("success" if "completed successfully" in low
+                             else "failed" if "fail" in low or "error" in low
+                             else "cancelled" if "cancel" in low else "unknown")
+            cur["result_text"] = text_.rstrip(".")
+            cur["product"] = cur["product"] or m.group(2).strip()
+            if cur["started"] is not None:
+                hh, mi, ss = (int(x) for x in m.group(1).split(":"))
+                ts = cur["started"].replace(hour=hh, minute=mi, second=ss, microsecond=0)
+                cur["ts"] = ts if ts >= cur["started"] else ts + timedelta(days=1)
+            continue
+        m = _MSI_DONE_RE.search(line)
+        if m and not cur["version"] and m.group(3):
+            cur["version"] = m.group(3).strip()
+    close()
+    for prev, ev in zip(events, events[1:]):
+        if (ev["kind"] == "install" and prev["kind"] == "remove" and ev["ts"] and prev["ts"]
+                and ev["ts"] - prev["ts"] <= timedelta(minutes=15)):
+            ev["after_removal"] = True
+            ev["same_version_as_removed"] = bool(ev["version"] and ev["version"] == prev["version"])
+    return events
+
+
+def _version_key(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v))
+
+
 # ------------------------------------------------------------------- builders
 def _zip_collection_time(bundle: Bundle) -> tuple[datetime | None, str]:
     """Collection time and user from ``GlobalProtectLogs_<user>_<MMDDYYYYHHMMSS>[.zip]``."""
-    m = re.search(r"GlobalProtectLogs_(.+)_(\d{14})(?:\.zip)?$", bundle.path.name, re.IGNORECASE)
+    m = re.search(r"GlobalProtectLogs_(.+)_(\d{14})(?:\.(?:zip|tgz|tar(?:\.\w+)?))?$",
+                  bundle.path.name, re.IGNORECASE)
     if not m:
         return None, ""
     stamp = m.group(2)
@@ -971,6 +1118,10 @@ class _Builder:
         self.cfg.newest_record = max(times) if times else None
         self.cfg.collected_at, self.zip_user = _zip_collection_time(bundle)
         self.ref = self.cfg.newest_record or self.cfg.collected_at
+        self.collected_basis = "file name" if self.cfg.collected_at else ""
+        if self.cfg.collected_at is None and self.cfg.newest_record is not None:
+            self.cfg.collected_at = self.cfg.newest_record       # the name carries no timestamp
+            self.collected_basis = "newest log record"
         self.reg = parse_regval(bundle.read_bytes("regval.txt", "client configuration") or b"") \
             if bundle.has("regval.txt") else None
         self.sysinfo = self._text_file("SystemInfo.txt", parse_systeminfo, {})
@@ -978,6 +1129,7 @@ class _Builder:
         self.ip_general, self.adapters = ip if ip is not None else ({}, None)
         self.adapter_info = [adapter_info(a) for a in self.adapters] if self.adapters is not None else None
         self.routes = self._text_file("RoutePrint.txt", parse_route_print, None)
+        self.msi = self._msi()
         self.hip_root = self._hip()
         self.trb, self.trb_cut = self._trb()
         self.driver = self._driver()
@@ -996,6 +1148,19 @@ class _Builder:
         except (ValueError, IndexError, KeyError, re.error):      # defensive: never raise
             self.cfg.warnings.append(f"{name}: could not be parsed")
             return default
+
+    def _msi(self) -> list[dict[str, Any]] | None:
+        name = next((m.name for m in self.b.members.values() if m.family == "msi_log"), "")
+        if not name or not self.b.has(name):
+            return None
+        text = self.b.read_text(name, "client configuration")
+        if not text or not text.strip():
+            return None
+        try:
+            return parse_msi_log(text, self.ref)
+        except (ValueError, IndexError, KeyError, re.error):
+            self.cfg.warnings.append(f"{name}: could not be parsed")
+            return None
 
     def _hip(self) -> ET.Element | None:
         if not self.b.has("pan_gp_hrpt.xml"):
@@ -1043,11 +1208,16 @@ class _Builder:
         evidence = present or [f"not listed in {', '.join(checked)}"] if checked else []
         if present:
             state: bool | None = True
+        elif self.adapter_info is None:
+            # Without IpConfig.txt the absence of the adapter cannot be told: unknown.
+            state = None
+            evidence = [*present, "IpConfig.txt is not in the bundle: adapter state unknown"]
         elif checked:
             state = False
         else:
             state = None
-        return {"present": state, "evidence": evidence, "checked": checked}
+        return {"present": state, "evidence": evidence, "checked": checked,
+                "status": {True: "present", False: "absent", None: "unknown"}[state]}
 
     def _service_state(self) -> tuple[str, datetime | None, str]:
         """(state, when, source) of the newest service state (log line or status XML)."""
@@ -1088,18 +1258,22 @@ class _Builder:
                    else "PANGP adapter present but the last service state is not Connected "
                         "or unknown: evidence disagrees")
         elif log_connected is not None:
-            connected = log_connected
-            why = "from the last service state only (no network snapshot in the bundle)"
+            connected = None
+            why = (f"unknown: no network snapshot in the bundle (IpConfig.txt); the last service "
+                   f"state in the logs is '{state}'")
         else:
-            connected, why = None, "no service state and no network snapshot in the bundle"
-        return {"connected": connected, "last_state": state, "last_state_at": when,
+            connected, why = None, "unknown: no service state and no network snapshot in the bundle"
+        return {"connected": connected, "log_connected": log_connected,
+                "status": {True: "connected", False: "not connected", None: "unknown"}[connected], "last_state": state, "last_state_at": when,
                 "last_state_source": src, "service_stopped_after": stopped,
                 "service_started_at": start, "service_stopped_at": stop,
                 "adapter_present": adapter, "evidence": lines, "conclusion": why}
 
     def _effective_version(self) -> tuple[str, str, list[str]]:
         cands: list[tuple[str, str, str]] = []     # (label, version, when)
-        for src in ("status XML", "service banner", "user agent"):
+        # The service banner ("Start PanGPS service (ver: ...)") is the authority; the status XML
+        # follows; the user-agent string can show a stale build, so it comes last.
+        for src in ("service banner", "status XML", "user agent"):
             if src in self.scan.versions:
                 ts, v = self.scan.versions[src]
                 cands.append((src, v, _fmt(ts)))
@@ -1116,6 +1290,26 @@ class _Builder:
             return "", "", []
         others = [f"{lab} {v}" + (f" ({w})" if w else "") for lab, v, w in cands if v != cands[0][1]]
         return cands[0][1], f"{cands[0][0]} {cands[0][2]}".strip(), others
+
+    def _version_history(self) -> dict[str, Any]:
+        """Versions seen at the service starts, oldest first, and the runs of equal versions."""
+        starts = sorted(self.scan.starts, key=lambda x: x[0])
+        out_starts = [{"ts": ts, "version": v, "pid": pid, "file": f} for ts, v, pid, f in starts]
+        runs: list[dict[str, Any]] = []
+        for ts, v, _pid, _f in starts:
+            if runs and runs[-1]["version"] == v:
+                runs[-1]["last_start"] = ts
+                runs[-1]["starts"] += 1
+                continue
+            run = {"version": v, "first_start": ts, "last_start": ts, "starts": 1, "change": ""}
+            if runs:
+                a, b = _version_key(runs[-1]["version"]), _version_key(v)
+                run["change"] = "newer" if b > a else "older" if b < a else "different"
+                run["previous"] = runs[-1]["version"]
+            runs.append(run)
+        distinct = sorted({r["version"] for r in runs})
+        return {"starts": out_starts, "runs": runs, "distinct": distinct,
+                "changed_in_bundle": len(runs) > 1}
 
     def _hip_time(self) -> datetime | None:
         if self.hip_root is None:
@@ -1138,7 +1332,14 @@ class _Builder:
             self.sec_summary(), self.sec_registry(), self.sec_status(), self.sec_portal_settings(),
             self.sec_gateways(), self.sec_hip(), self.sec_trb(), self.sec_host(), self.sec_driver(),
         ]
+        if self.msi is not None:
+            self.cfg.sections.append(self.sec_installer())
         d = self.data
+        d["client_versions"] = self._version_history()
+        d["portals"] = [{"portal": k, "first": v[0], "last": v[1], "seen": v[2]}
+                        for k, v in sorted(self.scan.portals.items(), key=lambda kv: kv[1][0])]
+        d["installer"] = {"present": self.msi is not None, "events": self.msi or []}
+        d["service_stops"] = [{"ts": ts, "pid": pid} for ts, pid in sorted(self.scan.stops)]
         d["connection"] = self.conn
         d["pangp_adapter"] = self.pangp
         d["scan"] = {"service_records": self.scan.records, "xml_errors": self.scan.xml_errors,
@@ -1168,6 +1369,24 @@ class _Builder:
         if portal_reg and portal_log and portal_reg.lower() != portal_log.lower():
             client.rows.append(_row("Portal in the logs", portal_log, "",
                                     "differs from the registry LastUrl"))
+        vh = self._version_history()
+        if vh["changed_in_bundle"]:
+            lines = []
+            for r in vh["runs"]:
+                tail = f", {r['change']} than {r['previous']}" if r["change"] else ""
+                lines.append(f"{r['version']}: {r['starts']} service start(s), "
+                             f"{_fmt(r['first_start'])} .. {_fmt(r['last_start'])}{tail}")
+            client.rows.append(_row("Version history", "\n".join(lines), "",
+                                    "'Start PanGPS service (ver: ...)' lines; the version changed "
+                                    "inside the bundle"))
+        if sc.portals and len(sc.portals) > 1:
+            client.rows.append(_row("Portals seen", "\n".join(
+                f"{n}: {_fmt(v[0])} .. {_fmt(v[1])}" for n, v in sorted(sc.portals.items(),
+                                                                        key=lambda kv: kv[1][0])),
+                "", "service log and status XML"))
+        if self.msi:
+            client.rows.append(_row("Installer events", "\n".join(
+                self._msi_line(e) for e in self.msi), "", "PanGPMsi.log"))
         user, user_src = self._user()
         client.rows.append(_row("User", user or "not found", "", user_src))
         host = Group("Host")
@@ -1196,10 +1415,14 @@ class _Builder:
         time.rows.append(_row("Log timestamps", "local wall-clock time of the client, no offset",
                               hint="not converted by this analyzer"))
         coll = (_fmt(cfg.collected_at) if cfg.collected_at else "not available")
-        time.rows.append(_row("Bundle collected", coll, "",
-                              ("zip name GlobalProtectLogs_<user>_<MMDDYYYYHHMMSS>"
-                               + (f", collected by {self.zip_user}" if self.zip_user else ""))
-                              if cfg.collected_at else "no zip name pattern"))
+        if self.collected_basis == "newest log record":
+            coll_hint = "the file name carries no timestamp: newest log record used"
+        elif cfg.collected_at:
+            coll_hint = ("zip name GlobalProtectLogs_<user>_<MMDDYYYYHHMMSS>"
+                         + (f", collected by {self.zip_user}" if self.zip_user else ""))
+        else:
+            coll_hint = "no zip name pattern"
+        time.rows.append(_row("Bundle collected", coll, "", coll_hint))
         newest_src = ", ".join(f"{k} log {_fmt(v)}" for k, v in sorted(self.newest.items()) if v)
         if self.events.newest:
             newest_src += (", " if newest_src else "") + f"event log {_fmt(self.events.newest)}"
@@ -1220,9 +1443,47 @@ class _Builder:
         cgroup.rows.append(_row("PANGP virtual adapter", self._pangp_text(), "",
                                 "; ".join(self.pangp["evidence"])))
         ts = cfg.collected_at or cfg.newest_record
-        return Section("summary", "Summary", files, ts, CURRENT,
-                       "Identity and state at collection time; each row names where it comes from.",
-                       [client, host, time, cgroup])
+        note = "Identity and state at collection time; each row names where it comes from."
+        groups = [client, host, time, cgroup]
+        fresh = CURRENT
+        if self.adapters is None:
+            groups.append(self._end_group())
+            fresh = LAST_SEEN
+            note = ("No network snapshot in the bundle: the state is the one at the end of the "
+                    "logs. " + note)
+        missing = [f for f in files if f != "pan_gp_event.log" and not self.b.has(f)]
+        if missing:
+            note += " Not in bundle: " + ", ".join(missing) + "."
+        return Section("summary", "Summary", files, ts, fresh, note, groups)
+
+    def _msi_line(self, e: dict[str, Any], with_ts: bool = True) -> str:
+        extra = ""
+        if e.get("after_removal"):
+            extra = (", reinstall of the same MSI version" if e.get("same_version_as_removed")
+                     else ", after a removal (upgrade)")
+        text = f"{e['kind']} {e['result'] or '?'}, version {e['version'] or 'unknown'}{extra}"
+        return f"{_fmt(e['ts'])} {text}" if with_ts else text
+
+    def _end_group(self) -> Group:
+        """State at the end of the logs (used when there is no network snapshot)."""
+        g = Group("State at the end of the logs")
+        conn, sc = self.conn, self.scan
+        g.rows.append(_row("Last service state", conn["last_state"] or "not found", "",
+                           f"{_fmt(conn['last_state_at'])} ({conn['last_state_source']})"
+                           if conn["last_state_at"] else ""))
+        for key, label in (("network_type", "Network type (last discovery)"),
+                           ("tunnel_up", "Last tunnel set up"), ("last_disconnect", "Last disconnect reason")):
+            hit = sc.echoes.get(key)
+            if hit:
+                g.rows.append(_row(label, hit[1] or "(none logged)", "", f"{_fmt(hit[0])} ({hit[2]})"))
+        doc = sc.complete.get("status")
+        if doc is not None:
+            for tag, label in (("status", "Status XML status"), ("state", "Status XML state"),
+                               ("portal-status", "Status XML portal status")):
+                if _text(doc.root, tag):
+                    g.rows.append(_row(label, _text(doc.root, tag), tag, _fmt(doc.ts)))
+        g.rows.append(_row("Connected", conn["status"], "", conn["conclusion"]))
+        return g
 
     def _pangp_text(self) -> str:
         p = self.pangp["present"]
@@ -1366,12 +1627,19 @@ class _Builder:
         groups: list[Group] = []
         note = ("Settings delivered by the portal, from the last 'hip'-type block that the service "
                 "sent to the UI (it carries the portal configuration, not the HIP report).")
+        cm["seen"] = {k: {"first": v[0], "last": v[1], "count": v[2]}
+                      for k, v in self.scan.methods.items()}
         cmg = Group("Connect method")
         if cm["basis"] == "unknown":
             cmg.rows.append(_row("Connect method", "not derivable", "",
                                  "no 'Connect method is' line and no on-demand setting found"))
         else:
             cmg.rows.append(_row("Connect method", cm["value"], "", cm["source"]))
+        if len(self.scan.methods) > 1:
+            cmg.rows.append(_row("Connect methods seen", "\n".join(
+                f"{k}: {v[2]} time(s), {_fmt(v[0])} .. {_fmt(v[1])}"
+                for k, v in sorted(self.scan.methods.items(), key=lambda kv: kv[1][0])), "",
+                "service log; a second portal can use a different method"))
         groups.append(cmg)
         flat: dict[str, str] = {}
         if doc is not None:
@@ -1402,9 +1670,37 @@ class _Builder:
                 echo.rows.append(_row(label, hit[1], "", f"{_fmt(hit[0])} ({hit[2]})"))
         if echo.rows:
             groups.append(echo)
+        auth = self._auth_group(flat)
+        if auth is not None:
+            groups.append(auth)
         self.data["portal_settings"] = flat
         ts = doc.ts if doc else None
         return Section("portal_settings", title, files, ts, LAST_SEEN, note, groups)
+
+    def _auth_group(self, flat: dict[str, str]) -> Group | None:
+        """Authentication settings visible in the logs and in the portal-pushed block."""
+        g = Group("Authentication (logs and portal settings)")
+        data: dict[str, Any] = {}
+        for key, label in _AUTH_LABELS.items():
+            hit = self.scan.echoes.get(key)
+            if hit:
+                g.rows.append(_row(label, hit[1], "", f"{_fmt(hit[0])} ({hit[2]})"))
+                data[key] = hit[1]
+        for key, label in (("portal_auth", "Portal authentication"),
+                           ("gateway_auth", "Gateway authentication")):
+            hit = self.scan.echoes.get(key)
+            if hit:
+                data[key] = hit[1]
+        if self.scan.prelogon_user_seen:
+            data["prelogon_user_seen"] = True
+        pat = re.compile(r"cookie|lifetime|saml|sso|2fa|otp|krb|override|authenticat", re.IGNORECASE)
+        picked = {p: v for p, v in flat.items() if pat.search(p)
+                  and not p.endswith(("portal-timeout", "connect-timeout", "receive-timeout"))}
+        for path, value in picked.items():
+            g.rows.append(_row(path, value, path, "portal-pushed settings"))
+        data["portal_keys"] = picked
+        self.data["authentication"] = data
+        return g if g.rows else None
 
     def sec_gateways(self) -> Section:
         files = ["PanGPS.log"]
@@ -1418,11 +1714,29 @@ class _Builder:
             entries = lst.findall("entry") if lst is not None else []
             entries.sort(key=lambda e: (int(_text(e, "priority") or 999)
                                         if _text(e, "priority").isdigit() else 999))
+            compact = len(entries) > MAX_COMPACT_GATEWAYS
+            crows: list[Row] = []
             for e in entries:
                 name = _text(e, "gateway") or e.get("name", "")
+                gl_data.append({t: _text(e, t) for t in
+                                ("gateway", "description", "priority", "tunnel", "internal",
+                                 "authenticated", "last_hip_sent", "manual")})
+                if compact:
+                    probe = scan.probes.get(name, {})
+                    bits = [f"priority {_text(e, 'priority') or '?'}",
+                            "internal" if _text(e, "internal") == "yes" else "external"]
+                    if _text(e, "tunnel") == "yes":
+                        bits.append("tunnel up")
+                    if _text(e, "manual") == "yes":
+                        bits.append("manual")
+                    if probe:
+                        bits.append(f"{probe['ms']} ms")
+                    crows.append(_row(_text(e, "description") or name, f"{name}; " + ", ".join(bits),
+                                      name))
+                    continue
                 g = Group(f"Gateway {name}")
                 for tag in ("description", "priority", "tunnel", "allow-tunnel", "internal",
-                            "authenticated", "passwd-expire-days", "last_hip_sent"):
+                            "authenticated", "passwd-expire-days", "last_hip_sent", "manual"):
                     if e.find(tag) is not None:
                         g.rows.append(_row(tag, _text(e, tag), tag))
                 ent = scan.gateway_entries.get(name)
@@ -1431,9 +1745,23 @@ class _Builder:
                                        f"ipv4 {ent['ipv4'] or '-'}, ipv6 {ent['ipv6'] or '-'}, "
                                        f"FQDN {ent['fqdn']}", "", _fmt(ent["ts"])))
                 groups.append(g)
-                gl_data.append({t: _text(e, t) for t in
-                                ("gateway", "description", "priority", "tunnel", "internal",
-                                 "authenticated", "last_hip_sent")})
+            if compact:
+                groups.append(Group(f"Gateway list ({len(entries)} entries, by priority)", crows))
+            if len(entries) > 1:
+                n_int = sum(1 for e in entries if _text(e, "internal") == "yes")
+                summ = Group("Gateway list summary", [
+                    _row("Entries", len(entries)), _row("Internal", n_int),
+                    _row("External", len(entries) - n_int),
+                    _row("List type", gl.root.find("gateway-list").get("type", ""), "type")])
+                for key, label in (("external_gw_count", "External gateways discovered (log)"),
+                                   ("internal_gw_count", "Internal gateways configured (log)")):
+                    hit = scan.echoes.get(key)
+                    if hit:
+                        summ.rows.append(_row(label, hit[1], "", f"{_fmt(hit[0])} ({hit[2]})"))
+                groups.insert(0, summ)
+                self.data["gateways_summary"] = {
+                    "entries": len(entries), "internal": n_int, "external": len(entries) - n_int,
+                    "list_type": gl.root.find("gateway-list").get("type", "")}
             if groups:
                 groups[0].rows.append(_row("Gateway list seen at", _fmt(gl.ts), "", gl.src))
         elif scan.gateway_entries:
@@ -1522,6 +1850,22 @@ class _Builder:
         flat = {"received_at": doc.ts, "truncated": doc.truncated}
         flat.update({p: v for p, v in _flat_rows(r) if "message" not in p})
         return g, flat
+
+    def sec_installer(self) -> Section:
+        g = Group("Installer sessions")
+        for e in self.msi or []:
+            g.rows.append(_row(_fmt(e["ts"]), self._msi_line(e, False), e["kind"],
+                               e["product_code"] and f"product code {e['product_code']}"))
+            if e.get("portal"):
+                g.rows.append(_row("PORTAL property of the installer", e["portal"], "PORTAL",
+                                   f"session {_fmt(e['ts'])}"))
+        ts = max((e["ts"] for e in self.msi or [] if e["ts"]), default=None)
+        note = ("Windows Installer log. Dates in the file are day/month/year. The MSI version has "
+                "no build number: the build is in the service log.")
+        if not self.msi:
+            note = "PanGPMsi.log has no installer session. " + note
+        return Section("installer", "Installer log (PanGPMsi.log)", ["PanGPMsi.log"], ts,
+                       LAST_SEEN, note, [g] if g.rows else [])
 
     def sec_hip(self) -> Section:
         files = ["pan_gp_hrpt.xml"]
@@ -1697,8 +2041,12 @@ class _Builder:
         if missing:
             note += " Not in bundle: " + ", ".join(missing) + "."
         if not self.sysinfo and not self.adapter_info and rt is None:
-            return Section("host_network", title, files, None, CURRENT,
-                           "Not in bundle (or empty): " + ", ".join(files) + ".", groups)
+            absent = [f for f in files if f in missing]
+            note = "Not in bundle: " + ", ".join(absent) + "." if absent else ""
+            empty = [f for f in files if f not in missing]
+            if empty:
+                note += " Empty or unreadable: " + ", ".join(empty) + "."
+            return Section("host_network", title, files, None, CURRENT, note.strip(), groups)
         return Section("host_network", title, files, self.cfg.collected_at, CURRENT, note, groups)
 
     def sec_driver(self) -> Section:

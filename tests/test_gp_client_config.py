@@ -627,3 +627,147 @@ def test_parse_datetime_formats():
     assert amb and dt == datetime(2026, 4, 3, 10, 0)  # noqa: DTZ001
     assert parse_datetime("sabato 14 novembre 2026 01:03:32") == (None, False)
     assert parse_datetime("") == (None, False)
+
+
+# ------------------------------------------------- bundles with only PanGPS / PanGPA (tar)
+def make_tgz(path, files: dict[str, str | bytes]):
+    import io
+    import tarfile
+    with tarfile.open(path, "w:gz") as tf:
+        for name, content in files.items():
+            data = content if isinstance(content, bytes) else content.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return path
+
+
+def gw_status(n: int) -> str:
+    entries = "".join(
+        f"<entry><gateway>gw{i}.example.com</gateway><description>Region {i}</description>"
+        f"<priority>{i % 5}</priority><tunnel>no</tunnel><internal>{'yes' if i == 0 else 'no'}</internal>"
+        f"{'<manual>yes</manual>' if i % 2 else ''}</entry>" for i in range(n))
+    return ('<?xml version="1.0"?><response><type>status</type><status>Disconnected</status>'
+            "<product-version>6.2.8-982</product-version><state>Discovery complete</state>"
+            "<portal>vpn.example.com</portal><user-name>jdoe</user-name>"
+            f'<gateway-list name="gateway-list" type="external">{entries}</gateway-list></response>')
+
+
+def service_log_only() -> str:
+    ts = "09/01/26 08:00:00:000"
+    recs = [
+        rec("Info", 10, "09/01/26 08:00:00:000", "####### Start PanGPS service (ver: 6.2.8-982) #######", pid=11),
+        rec("Info", 11, ts, "Connect method is user-logon", pid=11),
+        rec("Debug", 12, ts, "Portal vpn.example.com, user jdoe, logonDomain ", pid=11),
+        rec("Debug", 13, ts, "Portal's saml auth method REDIRECT", pid=11),
+        rec("Debug", 14, ts, "Portal's saml request timeout is 600", pid=11),
+        rec("Debug", 15, ts, "Prelogin use-default-browser = no", pid=11),
+        rec("Debug", 16, ts, "Portal's saml default browser support = yes", pid=11),
+        rec("Debug", 17, ts, "Portal auth method: saml, auth src: IDP", pid=11),
+        rec("Debug", 18, ts, "Discover external gateway: gateway count is 14, cutoff time is 5", pid=11),
+        rec("Debug", 19, ts, "gateway Region 3 (gw3.example.com), priority=3, duration=70 ms, assign 100 as its weight", pid=11),
+        rec("Debug", 20, "09/01/26 08:00:05:000", "--Set state to Connected", pid=11),
+        rec("Debug", 21, "09/01/26 08:00:06:000", "NetworkDiscoverThread: network type is external.", pid=11),
+        rec("Info", 22, "09/05/26 09:00:00:000", "####### Start PanGPS service (ver: 6.2.8-1084) #######", pid=12),
+        rec("Info", 23, "09/05/26 09:00:01:000", "Connect method is On-Demand", pid=12),
+        rec("Debug", 24, "09/05/26 09:00:02:000", "Portal vpn2.example.com, user pre-logon, logonDomain ", pid=12),
+        rec("Debug", 25, "09/05/26 09:00:09:000", "--Set state to Disconnected", pid=12),
+    ]
+    return log(*recs)
+
+
+def agent_log_only() -> str:
+    return log(rec("Debug", 1, "09/05/26 09:00:03:000", "message type from the service = status", pid=30)
+               + NL + gw_status(14).replace("><", ">" + NL + "<"))
+
+
+def test_log_only_tar_bundle(tmp_path):
+    t = make_tgz(tmp_path / "logs.tgz", {"x/PanGPS.log": service_log_only(), "x/PanGPA.log": agent_log_only()})
+    b = Bundle.open(t)
+    cfg = build_config(b)
+    d = cfg.data
+    # version history from the service banner, with the in-bundle change
+    runs = d["client_versions"]["runs"]
+    assert [r["version"] for r in runs] == ["6.2.8-982", "6.2.8-1084"] and runs[1]["change"] == "newer"
+    assert [s["pid"] for s in d["client_versions"]["starts"]] == [11, 12]
+    summary = {r.label: r for g in cfg.section("summary").groups for r in g.rows}
+    assert summary["Client version"].value == "6.2.8-1084" and "service banner" in summary["Client version"].hint
+    assert "Version history" in summary and "Portals seen" in summary
+    # connect method, portals
+    assert d["connect_method"]["value"] == "On-Demand"
+    assert set(d["connect_method"]["seen"]) == {"user-logon", "On-Demand"}
+    assert {p["portal"] for p in d["portals"]} >= {"vpn.example.com", "vpn2.example.com"}
+    assert cfg.data["status"]["_ts"]
+    # authentication
+    auth = d["authentication"]
+    assert auth["saml_method"] == "REDIRECT" and auth["saml_timeout"] == "600"
+    assert auth["use_default_browser"] == "no" and auth["saml_browser_support"] == "yes"
+    assert auth["portal_auth"].startswith("saml") and auth["prelogon_user_seen"] is True
+    # compact gateway list, complete in .data
+    gw = cfg.section("gateways")
+    compact = [g for g in gw.groups if g.title.startswith("Gateway list (14 entries")]
+    assert compact and len(compact[0].rows) == 14
+    assert len(d["gateway_list"]) == 14 and d["gateways_summary"]["internal"] == 1
+    assert any("70 ms" in r.value for r in compact[0].rows)
+    # no network snapshot: unknown, never "not connected"
+    assert d["connection"]["connected"] is None and d["connection"]["status"] == "unknown"
+    assert d["pangp_adapter"]["present"] is None and d["pangp_adapter"]["status"] == "unknown"
+    assert "Not in bundle: SystemInfo.txt, IpConfig.txt, RoutePrint.txt." in cfg.section("host_network").note
+    assert cfg.section("registry").note == "Not in bundle: regval.txt."
+    assert cfg.section("installer") is None
+    # collection time falls back to the newest log record
+    assert cfg.collected_at == datetime(2026, 9, 5, 9, 0, 9)  # noqa: DTZ001
+    assert any(g.title == "State at the end of the logs" for g in cfg.section("summary").groups)
+    json.dumps(cfg.to_dict())
+
+
+def test_status_chunks_do_not_depend_on_source_number(tmp_path):
+    xml = status_xml("Connected")
+    pieces = [rec("Dump", 4321, "11/12/26 20:00:00:000", "ResponseToClient.txt_output: " + xml[i:i + 300].replace("\n", NL),
+                  tid=7) for i in range(0, len(xml), 300)]
+    svc = log(*pieces)
+    b = Bundle.open(make_zip_bundle(tmp_path, {"PanGPS.log": svc}))
+    cfg = build_config(b)
+    assert cfg.data["status"]["state"] == "Connected"
+
+
+def make_zip_bundle(tmp_path, files):
+    path = tmp_path / "b.zip"
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return path
+
+
+MSI_TEXT = (
+    "=== Logging started: 20/07/2026  12:55:38 ===\r\nAction start 12:55:38: INSTALL.\r\n"
+    "Property(S): ProductName = GlobalProtect\r\nProperty(S): ProductVersion = 6.2.8\r\n"
+    "Property(S): ProductCode = {00000000-0000-0000-0000-000000000001}\r\n"
+    "MSI (s) (60:94) [12:55:50:990]: Product: GlobalProtect -- Removal completed successfully.\r\n"
+    "MSI (s) (60:94) [12:55:50:991]: Windows Installer removed the product. Product Name: GlobalProtect. "
+    "Product Version: 6.2.8. Product Language: 1033. Manufacturer: Example.\r\n"
+    "=== Logging stopped: 20/07/2026  12:55:50 ===\r\n"
+    "=== Logging started: 20/07/2026  12:56:00 ===\r\n"
+    "Property(S): ProductVersion = 6.3.0\r\nProperty(S): PORTAL = vpn.example.com\r\n"
+    "MSI (s) (60:40) [12:56:14:527]: Product: GlobalProtect -- Installation completed successfully.\r\n"
+    "=== Logging stopped: 20/07/2026  12:56:14 ===\r\n")
+
+
+def test_msi_log_events_in_damaged_utf16(tmp_path):
+    raw = b"\xef\xbf\xbd\xef\xbf\xbd" + MSI_TEXT.encode("utf-16-le")
+    t = make_tgz(tmp_path / "logs.tgz", {"PanGPS.log": service_log_only(), "PanGPMsi.log": raw})
+    cfg = build_config(Bundle.open(t))
+    ev = cfg.data["installer"]["events"]
+    assert [(e["kind"], e["result"], e["version"]) for e in ev] == [
+        ("remove", "success", "6.2.8"), ("install", "success", "6.3.0")]
+    assert ev[0]["ts"] == datetime(2026, 7, 20, 12, 55, 50)  # noqa: DTZ001
+    assert ev[1]["after_removal"] is True and ev[1]["same_version_as_removed"] is False
+    sec = cfg.section("installer")
+    assert sec is not None and any(r.key == "PORTAL" for g in sec.groups for r in g.rows)
+    assert "Installer events" in {r.label for g in cfg.section("summary").groups for r in g.rows}
+
+
+def test_collection_time_from_file_name_wins_over_newest_record(tmp_path):
+    t = make_tgz(tmp_path / "GlobalProtectLogs_jdoe_09062026101010.tgz", {"PanGPS.log": service_log_only()})
+    cfg = build_config(Bundle.open(t))
+    assert cfg.collected_at == datetime(2026, 9, 6, 10, 10, 10)  # noqa: DTZ001

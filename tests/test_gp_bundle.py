@@ -4,7 +4,9 @@ Synthetic data only; nothing touches a real bundle.
 """
 from __future__ import annotations
 
+import io
 import os
+import tarfile
 import zipfile
 
 import pytest
@@ -228,3 +230,135 @@ def test_classify():
     assert classify("PanGpHip.log") == "hip_log"
     assert classify("LogonUI.log.old") == "logonui_log"
     assert classify("whatever.xyz") == "other"
+
+
+# --------------------------------------------------------------------------- tar archives
+def make_tar(path, entries, mode="w:gz"):
+    """entries: (name, bytes) or (name, bytes, tarfile type) or (name, None, type, linkname)."""
+    with tarfile.open(path, mode) as tf:
+        for entry in entries:
+            info = tarfile.TarInfo(entry[0])
+            kind = entry[2] if len(entry) > 2 else tarfile.REGTYPE
+            info.type = kind
+            if kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+                info.linkname = entry[3]
+                tf.addfile(info)
+            elif kind in (tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.DIRTYPE):
+                tf.addfile(info)
+            else:
+                info.size = len(entry[1])
+                tf.addfile(info, io.BytesIO(entry[1]))
+    return path
+
+
+@pytest.mark.parametrize("suffix,mode", [(".tgz", "w:gz"), (".tar.gz", "w:gz"), (".tar", "w"),
+                                          (".tar.bz2", "w:bz2"), (".tar.xz", "w:xz")])
+def test_tar_formats(tmp_path, suffix, mode):
+    t = make_tar(tmp_path / f"b{suffix}", [("PanGPS.log", b"abc\r\n"), ("PanGPA.log", b"x\n")], mode)
+    b = Bundle.open(t)
+    try:
+        assert b.kind == "tar"
+        assert b.read_text("PanGPS.log") == "abc\r\n"
+        assert b.members["pangpa.log"].family == "agent_log"
+    finally:
+        b.close()
+
+
+def test_tar_detected_by_content_not_extension(tmp_path):
+    t = make_tar(tmp_path / "logs.zip", [("PanGPS.log", b"abc\n")])
+    b = Bundle.open(t)
+    assert b.kind == "tar" and b.read_bytes("PanGPS.log") == b"abc\n"
+    z = make_zip(tmp_path / "logs.tgz", [("PanGPS.log", b"zip\n")])
+    assert Bundle.open(z).kind == "zip"
+
+
+def test_tar_nested_folder_and_dir_members(tmp_path):
+    t = make_tar(tmp_path / "b.tgz", [
+        ("./", None, tarfile.DIRTYPE), ("collect/logs/", None, tarfile.DIRTYPE),
+        ("collect/logs/PanGPS.log", b"svc\n"), ("collect/logs/PanGPS.1.log", b"old\n")])
+    b = Bundle.open(t)
+    assert b.rotation("PanGPS") == ["PanGPS.1.log", "PanGPS.log"]
+    assert b.read_text("PanGPS.1.log") == "old\n"
+
+
+def test_tar_unsafe_links_and_special_members(tmp_path):
+    t = make_tar(tmp_path / "b.tar", [
+        ("../evil.txt", b"x"), ("/etc/passwd", b"x"), ("a/../../b.txt", b"x"),
+        ("lnk.txt", None, tarfile.SYMTYPE, "/etc/passwd"),
+        ("hard.txt", None, tarfile.LNKTYPE, "PanGPS.log"),
+        ("fifo.txt", None, tarfile.FIFOTYPE), ("dev.txt", None, tarfile.CHRTYPE),
+        ("PanGPS.log", b"ok\n")], "w")
+    b = Bundle.open(t)
+    for name in ("evil.txt", "passwd", "b.txt"):
+        assert b.members[name].reason == "unsafe path" and b.read_bytes(name) is None
+    assert b.members["lnk.txt"].reason == "link" and b.members["hard.txt"].reason == "link"
+    assert b.members["fifo.txt"].reason == "special file"
+    assert b.members["dev.txt"].reason == "special file"
+    assert b.read_bytes("lnk.txt") is None
+    assert b.read_text("PanGPS.log") == "ok\n"
+
+
+def test_tar_member_over_limit_and_total_limit(tmp_path, monkeypatch):
+    t = make_tar(tmp_path / "b.tgz", [("PanGPS.log", b"".join([b"a" * 99 + b"\n"] * 40)),
+                                      ("regval.txt", b"zzz\n")])
+    monkeypatch.setattr(bmod, "MAX_MEMBER_BYTES", 1000)
+    b = Bundle.open(t)
+    data = b.read_bytes("PanGPS.log")
+    assert data is not None and len(data) <= 1000 and data.endswith(b"\n")
+    assert b.members["pangps.log"].status == "truncated"
+    monkeypatch.setattr(bmod, "MAX_MEMBER_BYTES", 10_000)
+    monkeypatch.setattr(bmod, "MAX_TOTAL_BYTES", 4000)
+    b = Bundle.open(t)
+    b.read_bytes("PanGPS.log")
+    assert b.read_bytes("regval.txt") is None
+    assert b.members["regval.txt"].reason == "total size limit reached"
+
+
+def test_tar_member_count_and_declared_size_limits(tmp_path, monkeypatch):
+    t = make_tar(tmp_path / "b.tar", [(f"f{i}.txt", b"x" * 10) for i in range(10)], "w")
+    monkeypatch.setattr(bmod, "MAX_MEMBERS", 4)
+    b = Bundle.open(t)
+    assert len(b.members) == 4 and any("too many members" in w for w in b.warnings)
+    monkeypatch.setattr(bmod, "MAX_MEMBERS", 100)
+    monkeypatch.setattr(bmod, "MAX_TOTAL_BYTES", 35)
+    b = Bundle.open(t)
+    assert len(b.members) < 10 and any("declared sizes" in w for w in b.warnings)
+
+
+def test_tar_truncated_archive_keeps_what_was_indexed(tmp_path):
+    t = make_tar(tmp_path / "b.tar", [("PanGPS.log", b"a" * 2000), ("PanGPA.log", b"b" * 2000)], "w")
+    data = t.read_bytes()
+    t.write_bytes(data[:1024 + 2048 + 512 + 100])       # cut inside the second member
+    b = Bundle.open(t)
+    assert "pangps.log" in b.members
+    with pytest.raises(BundleError):
+        Bundle.open(tmp_path / "missing.tgz")
+
+
+def test_duplicate_choice_is_deterministic(tmp_path):
+    entries = [("deep/er/PanGPS.log", b"deep\n"), ("b/PanGPS.log", b"b\n"), ("a/PanGPS.log", b"a\n")]
+    for order in (entries, entries[::-1]):
+        b = Bundle.open(make_tar(tmp_path / "d.tar", order, "w"))
+        assert b.read_text("PanGPS.log") in ("a\n",)
+        assert len(b.duplicates) == 2 and all("kept" in d for d in b.duplicates)
+    b = Bundle.open(make_zip(tmp_path / "e.zip", [("x/PanGPS.log", b"nested\n"), ("PanGPS.log", b"top\n")]))
+    assert b.read_text("PanGPS.log") == "top\n"           # shallowest wins
+    b = Bundle.open(make_zip(tmp_path / "f.zip", [("../PanGPS.log", b"evil\n"), ("z/q/PanGPS.log", b"ok\n")]))
+    assert b.read_text("PanGPS.log") == "ok\n"            # a safe member beats an unsafe one
+
+
+def test_agent_log_rotation_and_beyond_nine(tmp_path):
+    names = ["PanGPA.log", "PanGPA.1.log", "PanGPS.log", "PanGPS.10.log", "PanGPS.9.log", "PanGPMsi.log"]
+    t = make_tar(tmp_path / "b.tgz", [(n, b"x\n") for n in names])
+    b = Bundle.open(t)
+    assert b.rotation("PanGPA") == ["PanGPA.1.log", "PanGPA.log"]
+    assert b.rotation("PanGPS") == ["PanGPS.10.log", "PanGPS.9.log", "PanGPS.log"]
+    assert b.members["pangpmsi.log"].family == "msi_log"
+
+
+def test_decode_damaged_utf16_bom_and_bomless():
+    text = "=== Logging started: 20/07/2026  12:55:38 ===\r\n"
+    raw = text.encode("utf-16-le")
+    assert decode_text(b"\xef\xbf\xbd\xef\xbf\xbd" + raw) == text      # mangled BOM
+    assert decode_text(raw) == text                                   # no BOM at all
+    assert decode_text(b"\xff\xfe" + raw) == text

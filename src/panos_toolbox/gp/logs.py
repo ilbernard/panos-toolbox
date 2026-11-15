@@ -13,8 +13,20 @@ strictly monotonic: records are yielded in file order and never sorted here.
 
 Memory and time: ``iter_records`` is a generator; ~99% of the records of a service log are
 level ``Dump``, so callers that do not need them can pass ``skip_levels={"Dump"}``: such
-records are only counted (no datetime, no object). ``keep_codes`` re-admits skipped-level
-records of given source numbers, e.g. the Dump records that carry XML.
+records are only counted (no datetime, no object). ``keep_msgs`` re-admits skipped-level
+records whose message starts with one of the given texts, e.g. the Dump records that carry the
+status XML.
+
+The ``<src>`` number in the prefix (``code``) is the source line of the logging call in the
+client build: it changes between client versions, even inside one bundle. Nothing in this
+package may depend on a fixed value. ``keep_codes`` is kept for callers that know better, but
+match on message text instead.
+
+Levels seen: ``Dump``, ``Debug``, ``Info``, ``Warn``, ``Error`` (the level may be followed by
+a space before the parenthesis: ``Info (1043)``). Real bundles have hundreds of glued records
+per file, timestamps that step backwards by a few milliseconds (thread interleaving, or a
+second process, e.g. the installer, writing into the same file) and XML continuations of
+about 650 lines.
 """
 from __future__ import annotations
 
@@ -77,6 +89,11 @@ class ParseStats:
     levels: dict[str, int] = field(default_factory=dict)   # records per level, all of them
     first: datetime | None = None   # first / last timestamp of the records that were built
     last: datetime | None = None
+    glued: int = 0          # records whose prefix does not start a line (all records counted)
+    backward: int = 0       # records stamped earlier than the previous record (file order)
+    max_lines: int = 0      # longest record (continuation lines + 1), built records only
+    first_any: datetime | None = None   # first / last timestamp of ALL records, skipped ones
+    last_any: datetime | None = None    # included (valid dates only; set when the parse ends)
 
 
 def _clean(text: str) -> str:
@@ -93,32 +110,59 @@ def _clean(text: str) -> str:
 
 def iter_records(text: str, src: str, skip_levels: Collection[str] = (),
                  keep_codes: Collection[int] = (),
-                 stats: ParseStats | None = None) -> Iterator[Record]:
+                 stats: ParseStats | None = None,
+                 keep_msgs: Collection[str] = ()) -> Iterator[Record]:
     """Yield the service-log records of ``text`` in file order.
 
     * ``skip_levels``: level names (e.g. ``{"Dump"}``) whose records are counted but not built.
-    * ``keep_codes``: source numbers still built even when their level is skipped.
+    * ``keep_msgs``: records of a skipped level whose message (leading blanks and line breaks
+      ignored) starts with one of these texts are still built. Prefer this to ``keep_codes``.
+    * ``keep_codes``: source numbers still built even when their level is skipped (the number
+      changes between client builds: avoid).
     * ``stats``: optional counters.
     """
     text = _clean(text)
     st = stats if stats is not None else ParseStats()
     skip = frozenset(skip_levels)
     keep = frozenset(keep_codes)
+    msgs = tuple(keep_msgs)
+    peek = max((len(m) for m in msgs), default=0) + 8
+    first_key = last_key = prev_key = None
     cur: re.Match | None = None
     for nxt in _SVC_RE.finditer(text):
+        key = nxt.group(7, 5, 6, 8, 9, 10, 11)      # fixed-width digits: text order = time order
+        if first_key is None:
+            first_key = key
+        last_key = key
+        if prev_key is not None and key < prev_key:
+            st.backward += 1
+        prev_key = key
+        if nxt.start() and text[nxt.start() - 1] != "\n":
+            st.glued += 1
         if cur is None:
             _count_orphans(text, nxt.start(), st)
         else:
-            rec = _build(text, cur, nxt.start(), src, skip, keep, st)
+            rec = _build(text, cur, nxt.start(), src, skip, keep, msgs, peek, st)
             if rec is not None:
                 yield rec
         cur = nxt
     if cur is None:
         _count_orphans(text, len(text), st)
     else:
-        rec = _build(text, cur, len(text), src, skip, keep, st)
+        rec = _build(text, cur, len(text), src, skip, keep, msgs, peek, st)
         if rec is not None:
             yield rec
+    st.first_any, st.last_any = _key_ts(first_key), _key_ts(last_key)
+
+
+def _key_ts(key) -> datetime | None:
+    if key is None:
+        return None
+    y, mo, d, h, mi, s, ms = (int(x) for x in key)
+    try:
+        return datetime(2000 + y, mo, d, h, mi, s, ms * 1000)  # noqa: DTZ001
+    except ValueError:
+        return None
 
 
 def _count_orphans(text: str, end: int, st: ParseStats) -> None:
@@ -128,11 +172,13 @@ def _count_orphans(text: str, end: int, st: ParseStats) -> None:
 
 
 def _build(text: str, m: re.Match, end: int, src: str, skip: frozenset, keep: frozenset,
-           st: ParseStats) -> Record | None:
+           msgs: tuple, peek: int, st: ParseStats) -> Record | None:
     st.records += 1
     level = m.group(3).strip()
     st.levels[level] = st.levels.get(level, 0) + 1
-    if level in skip and (not keep or int(m.group(4)) not in keep):
+    if level in skip and not (
+            (keep and int(m.group(4)) in keep)
+            or (msgs and text[m.end():min(end, m.end() + peek)].lstrip().startswith(msgs))):
         st.skipped += 1
         return None
     try:
@@ -152,6 +198,10 @@ def _build(text: str, m: re.Match, end: int, src: str, skip: frozenset, keep: fr
     if st.first is None:
         st.first = ts
     st.last = ts
+    if extra:
+        st.max_lines = max(st.max_lines, len(extra) + 1)
+    elif not st.max_lines:
+        st.max_lines = 1
     return Record(ts, int(m.group(1)), int(m.group(2)), level, int(m.group(4)),
                   first_line.strip(), src, extra)
 

@@ -143,3 +143,37 @@ def test_event_log_final_newline_not_counted_and_wrapper():
 def test_event_log_invalid_date():
     out, bad = parse_event_log("13/45/2026 10:00:00:000 [Info ]: x\n02/03/2026 10:00:00:000 [Error]: y", "f")
     assert [e.msg for e in out] == ["y"] and bad == 1
+
+
+def test_keep_msgs_ignores_the_source_number():
+    # The same message logged under different source numbers (client builds) is kept either way.
+    text = "\n".join([
+        rec_line("Dump", 8450, msg="ResponseToClient.txt_output: <a>"),
+        rec_line("Dump", 9999, msg="") + "\nResponseToClient.txt_output: <b>",
+        rec_line("Dump", 8450, msg="other noise"),
+        rec_line("Debug", 2, msg="flow")])
+    recs, st = parse_records(text, "x", skip_levels={"Dump"}, keep_msgs=("ResponseToClient.txt_output: ",))
+    assert [r.code for r in recs] == [8450, 9999, 2]
+    assert st.skipped == 1 and st.levels["Dump"] == 3
+
+
+def test_warn_level_glued_backward_and_long_continuation():
+    lines = [rec_line("Warn", 5, "11/12/26 20:38:12:533", "Service start pending..."),
+             rec_line("Info ", 6, "11/12/26 20:38:12:600", "a") + rec_line("Debug", 7, "11/12/26 20:38:12:590", "glued"),
+             rec_line("Error", 8, "11/12/26 20:38:12:700", "xml") + "\n" + "\n".join(f"<l{i}/>" for i in range(650))]
+    recs, st = parse_records("\r\n".join(lines) + "\r\n", "x")
+    assert [r.level for r in recs] == ["Warn", "Info", "Debug", "Error"]
+    assert st.levels == {"Warn": 1, "Info": 1, "Debug": 1, "Error": 1}
+    assert st.glued == 1 and st.backward == 1 and st.unparseable == 0
+    assert len(recs[-1].extra) == 650 and st.max_lines == 651
+    assert recs[1].msg == "a" and recs[2].msg == "glued"
+
+
+def test_stats_cover_skipped_records_too():
+    text = "\n".join([rec_line("Dump", 1, "11/12/26 20:00:00:000", "n"),
+                      rec_line("Debug", 2, "11/12/26 21:00:00:000", "x"),
+                      rec_line("Dump", 1, "11/12/26 22:00:00:000", "n")])
+    _, st = parse_records(text, "x", skip_levels={"Dump"})
+    assert st.first == st.last == datetime(2026, 11, 12, 21, 0)  # noqa: DTZ001
+    assert st.first_any == datetime(2026, 11, 12, 20, 0)  # noqa: DTZ001
+    assert st.last_any == datetime(2026, 11, 12, 22, 0)  # noqa: DTZ001
