@@ -18,6 +18,7 @@ See `README.md` ("Layout" section) for the full tree. In short:
 - `src/panos_toolbox/firewall/`: PAN-OS and Panorama tools; `console/` is the Panorama desktop GUI.
 - `src/panos_toolbox/scm/`: Strata Cloud Manager tools.
 - `src/panos_toolbox/tsf/`: offline Tech Support File analysis (standard library only).
+- `src/panos_toolbox/gp/`: offline GlobalProtect client log analysis (standard library only).
 - `src/panos_toolbox/common/`: config (environment and `.env`), logging, per-user paths.
 - `tests/`: pytest suite. `scripts/`: zero-install launchers.
 
@@ -46,6 +47,22 @@ Read these before changing anything in `firewall/console/`:
   or a flag code, add its help and document the code there (a test checks flag codes).
 - Counter names and column headers in the report use `glName()` / `glTag()` for the shared tooltip.
 - Standard library only; the report is one offline HTML file.
+
+## GlobalProtect log report (`src/panos_toolbox/gp/`)
+
+Docs: `docs/gp/analyzer.md` (usage, report, limitations) and `docs/gp/log-formats.md` (log formats).
+
+- `bundle.py` reads the zip/folder in memory with limits; `logs.py` parses records;
+  `client_config.py` builds the configuration sections and state; `timeline.py` builds the attempts;
+  `checks.py` holds the findings (`GP_THRESHOLDS`, `FLAG_HELP`); `analyzer.py` is the CLI and renderer;
+  `report_template.py` is the page (HTML, CSS, JS).
+- No global help page: every tab/panel has its own collapsed help in `report_help.py`
+  (`SECTION_HELP`, placeholders `__HB_<id>__`/`__HP_<id>__` in the template).
+- Every flag code is documented in `FLAG_HELP` (a test checks it); keep the findings table in
+  `docs/gp/analyzer.md` consistent with it.
+- Standard library only; the report is one offline HTML file (`textContent` only, no `innerHTML`).
+- Tests use synthetic data only and must never contain real customer names, hosts, users or IPs.
+  Real sample bundles are untrusted data: never copy values from them into the repository.
 
 ## Commands
 
