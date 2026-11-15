@@ -2,356 +2,304 @@
 """GlobalProtect client log analyzer.
 
 Reads the bundle produced by "Collect Logs" in the GlobalProtect app (the
-``GlobalProtectLogs*.zip`` file, or the folder it extracts to) and writes one
-self-contained HTML report with:
+``GlobalProtectLogs*.zip`` file, or the folder it extracts to) and writes ONE self-contained
+HTML report (no external resources) with:
 
-* the current client configuration (app settings pushed by the portal,
-  registry settings, gateway/tunnel configuration, pre-login responses);
-* the timeline of the connection attempts: one row per attempt, with the
-  phases reached, the outcome and the log events behind it.
+* the current client configuration and settings, each source with its file, time and freshness;
+* the timeline of the connection attempts, with filters and, where detailed logs exist, the
+  ordered phase steps of each attempt;
+* the findings of the automatic checks and the coverage of the bundle.
 
 Usage:
     panos-toolbox gp analyze GlobalProtectLogs.zip [more.zip ...] [-o OUTDIR] [--open]
 
-Windows bundles are supported. The report holds everything found in the logs
-in clear text (user names, addresses, host names): handle it accordingly.
-Standard library only.
+Output: ``<bundle name>_gp.html`` next to the input, or in OUTDIR. The report holds everything
+found in the logs in clear text (user names, addresses, host names): handle it accordingly.
+Log times are the local times of the client, without zone conversion. Standard library only.
 """
 from __future__ import annotations
 
 import argparse
-import calendar
+import html
 import json
-import os
 import re
 import sys
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from panos_toolbox import __version__
 
+from . import checks
 from .bundle import Bundle, BundleError
-from .client_config import (
-    ConfigCollector,
-    Snapshot,
-    parse_hip_report,
-    parse_regval,
-    parse_systeminfo,
-    parse_trb,
-)
-from .logs import EventLine, iter_records, parse_event_log
-from .report_template import render_page
-from .timeline import (
-    OUTCOMES,
-    PHASES,
-    Attempt,
-    Ev,
-    build_attempts,
-    classify,
-    detail_event,
-    merge_details,
-)
+from .client_config import build_config
+from .report_help import render_section_help
+from .report_template import TEMPLATE
+from .timeline import CHAIN_GAP_S, build_timeline
 
-EVENT_LOG = "pan_gp_event"
-SERVICE_LOG = "PanGPS"
-KNOWN_UNPARSED = {
-    "pangpa": "app UI log: not parsed in this version",
-    "pangphip": "HIP collection log: not parsed",
-    "pangphipmp": "HIP missing-patch log: not parsed",
-    "debug_drv": "virtual adapter driver log: not parsed",
-    "logonui": "credential provider log: not parsed",
-    "panproxyagent": "proxy agent log: not parsed",
-}
+KIND = "GlobalProtect analysis"
+SUFFIX = "_gp"
+BLOB_VERSION = 1
+
+# (label, [(section id, "key" | "label", text), ...]) first non-empty match wins
+_KEY_SPECS = [
+    ("Portal", [("status", "key", "portal"), ("summary", "label", "Last portal"),
+                ("registry", "key", "LastUrl")]),
+    ("Connect method", [("portal_settings", "label", "Connect method")]),
+    ("User", [("summary", "label", "User"), ("status", "key", "user-name")]),
+    ("Client version", [("summary", "label", "Client version"), ("status", "key", "product-version")]),
+    ("Single sign-on (SSO)", [("portal_settings", "key", "use-sso")]),
+    ("On-demand", [("portal_settings", "key", "on-demand"), ("registry", "key", "on-demand")]),
+    ("Traffic enforcement", [("registry", "key", "traffic-enforcement")]),
+    ("Enforce GlobalProtect", [("registry", "key", "enforce-globalprotect")]),
+    ("Tunnel MTU", [("portal_settings", "key", "tunnel-mtu"),
+                    ("gateways", "label", "MTU (configured in the client)"),
+                    ("troubleshooting", "key", "gp_mtu")]),
+    ("Split tunnel", [("portal_settings", "key", "split-tunnel-option"),
+                      ("registry", "key", "split-tunnel-option")]),
+    ("DNS servers (tunnel)", [("gateways", "key", "dns")]),
+    ("DNS suffixes (tunnel)", [("gateways", "key", "dns-suffix")]),
+]
+_IDENTITY = ["Client version", "User", "Host name", "Operating system", "Domain", "Last portal",
+             "Time zone (SystemInfo)", "Bundle collected"]
 
 
-def _ms(ts: datetime | None) -> int | None:
-    if ts is None:
+def _norm_ts(value) -> datetime | None:
+    if not value:
         return None
-    return calendar.timegm(ts.timetuple()) * 1000 + ts.microsecond // 1000
+    try:
+        return datetime.fromisoformat(str(value).replace("T", " "))
+    except ValueError:
+        return None
 
 
-def _fmt(ts: datetime | None) -> str:
-    return ts.strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+def _rows(section: dict):
+    for group in section.get("groups", []):
+        yield from group.get("rows", [])
 
 
-def _groups(rows: list[tuple[str, str, str]]) -> list[dict]:
+def _find_row(sections: dict, sid: str, field: str, text: str):
+    sec = sections.get(sid)
+    if not sec:
+        return None, None
+    hits = [r for r in _rows(sec) if r.get(field) == text]
+    if not hits:
+        return None, None
+    best = next((r for r in hits if r.get("value")), hits[0])
+    return sec, best
+
+
+def key_settings(cfg: dict) -> list[dict]:
+    """The settings most useful at a glance, with section, freshness and source of each."""
+    sections = {s["id"]: s for s in cfg.get("sections", [])}
     out: list[dict] = []
-    index: dict[str, dict] = {}
-    for group, key, value in rows:
-        g = index.get(group)
-        if g is None:
-            g = {"name": group, "rows": []}
-            index[group] = g
-            out.append(g)
-        g["rows"].append([key, value])
+    for label, specs in _KEY_SPECS:
+        found = None
+        for sid, field, text in specs:
+            sec, row = _find_row(sections, sid, field, text)
+            if row is None:
+                continue
+            found = (sec, row)
+            if row.get("value"):
+                break
+        if found is None:
+            continue
+        sec, row = found
+        out.append({"label": label, "value": row.get("value", ""), "section": sec["id"],
+                    "freshness": sec.get("freshness", ""),
+                    "source": ", ".join(sec.get("sources", [])[:3])
+                    + (f" ({row['key']})" if row.get("key") else "")})
+    cm = (cfg.get("data") or {}).get("connect_method") or {}
+    if cm.get("value") and not any(r["label"] == "Connect method" for r in out):
+        out.insert(1, {"label": "Connect method", "value": cm["value"], "section": "portal_settings",
+                       "freshness": "last_seen", "source": str(cm.get("source", ""))})
     return out
 
 
-def _section(sid: str, title: str, source: str, groups: list[dict], ts: datetime | None = None,
-             note: str = "") -> dict:
-    return {"id": sid, "title": title, "source": source, "ts": _fmt(ts), "groups": groups, "note": note}
+def identity(cfg: dict) -> list[dict]:
+    sections = {s["id"]: s for s in cfg.get("sections", [])}
+    summary = sections.get("summary")
+    if not summary:
+        return []
+    rows = {}
+    for r in _rows(summary):
+        rows.setdefault(r.get("label"), r.get("value", ""))
+    return [{"label": k, "value": rows[k]} for k in _IDENTITY if k in rows]
 
 
-def _snap_section(sid: str, title: str, snap: Snapshot, note: str = "") -> dict:
-    if snap.truncated:
-        note = (note + " " if note else "") + "The document is cut short in the log: its last elements are missing."
-    return _section(sid, title, snap.src, _groups(snap.rows), snap.ts, note)
+def _anchor(cfg: dict, tl: dict) -> str:
+    """Newest log record: the anchor of every relative period (never the wall clock)."""
+    cands = [_norm_ts(cfg.get("newest_record"))]
+    cov = tl.get("coverage") or {}
+    for key in ("event_log", "service_log", "agent_log"):
+        if cov.get(key):
+            cands.append(_norm_ts(cov[key].get("last")))
+    for a in tl.get("attempts", [])[-50:]:
+        cands.append(_norm_ts(a.get("end") or a.get("start")))
+    cands = [c for c in cands if c is not None]
+    return max(cands).isoformat(sep="T", timespec="milliseconds") if cands else ""
 
 
-def analyze(path) -> dict:
-    """Analyze one bundle and return the data blob rendered in the report."""
+def _inventory(bundle: Bundle) -> list[dict]:
+    rows = [{"name": m.name, "family": m.family, "size": m.size, "status": m.status,
+             "reason": m.reason, "used_for": m.used_for} for m in bundle.inventory()]
+    return sorted(rows, key=lambda r: (r["family"], r["name"].lower()))
+
+
+def _analysis(bundle: Bundle, inventory: list[dict], cfg: dict, tl: dict) -> dict:
+    reasons: list[str] = []
+    for m in inventory:
+        if m["status"] in ("skipped", "truncated"):
+            reasons.append(f"{m['name']}: {m['status']}" + (f" ({m['reason']})" if m["reason"] else ""))
+    reasons.extend(bundle.warnings)
+    reasons.extend(cfg.get("warnings", []))
+    if not (tl.get("coverage") or {}).get("event_log"):
+        reasons.append("no event log (pan_gp_event): the attempt history is limited to the detailed logs")
+    seen: list[str] = []
+    for r in reasons:
+        if r not in seen:
+            seen.append(r)
+    return {"status": "partial" if seen else "complete", "reasons": seen[:200]}
+
+
+def _threshold_table(overrides: dict) -> dict:
+    return {k: {"value": overrides.get(k, v), "default": v} for k, v in checks.GP_THRESHOLDS.items()}
+
+
+def analyze(path, thresholds: dict | None = None, chain_gap_s: float | None = None) -> dict:
+    """Analyze one bundle (zip or folder) and return the data blob rendered in the report."""
+    overrides = {k: float(v) for k, v in (thresholds or {}).items() if v is not None}
     bundle = Bundle.open(path)
     try:
-        return _analyze(bundle)
+        config = build_config(bundle)
+        kwargs = {} if chain_gap_s is None else {"chain_gap_s": float(chain_gap_s)}
+        timeline = build_timeline(bundle, **kwargs)
+        findings = checks.evaluate(config, timeline, overrides or None)
+        cfg = config.to_dict()
+        tl = timeline.to_dict()
+        inv = _inventory(bundle)
+        analysis = _analysis(bundle, inv, cfg, tl)
+        bundle_warnings = list(bundle.warnings)
     finally:
         bundle.close()
-
-
-def _analyze(bundle: Bundle) -> dict:
-    warnings: list[str] = []
-    coverage: dict[str, dict] = {}
-
-    # ---- event log (timeline backbone)
-    lines: list[EventLine] = []
-    for name in bundle.rotation(EVENT_LOG):
-        text = bundle.read_text(name, "timeline")
-        if text is None:
-            continue
-        parsed, bad = parse_event_log(text, name)
-        lines.extend(parsed)
-        coverage[name.lower()] = {"lines": len(parsed), "first": _fmt(parsed[0].ts) if parsed else "",
-                                  "last": _fmt(parsed[-1].ts) if parsed else ""}
-        if bad:
-            warnings.append(f"{name}: {bad} line(s) not in the expected format, ignored")
-
-    # ---- service log (details + configuration documents)
-    collector = ConfigCollector()
-    details: list[Ev] = []
-    fallback_lines: list[EventLine] = []
-    svc_first = svc_last = None
-    for name in bundle.rotation(SERVICE_LOG):
-        text = bundle.read_text(name, "timeline details, configuration")
-        if text is None:
-            continue
-        n = 0
-        first = last = None
-        for rec in iter_records(text, name):
-            n += 1
-            first = first or rec.ts
-            last = rec.ts
-            collector.feed(rec)
-            ev = detail_event(rec)
-            if ev is not None:
-                details.append(ev)
-            if not lines and rec.msg:
-                fallback_lines.append(EventLine(rec.ts, "info", rec.msg, name))
-        del text
-        coverage[name.lower()] = {"lines": n, "first": _fmt(first), "last": _fmt(last)}
-        svc_first = svc_first or first
-        svc_last = last or svc_last
-    if collector.xml_errors:
-        warnings.append(f"{collector.xml_errors} XML document(s) in {SERVICE_LOG}.log could not be parsed")
-
-    fallback = False
-    if not lines:
-        if fallback_lines:
-            fallback = True
-            lines = fallback_lines
-            warnings.append(
-                f"{EVENT_LOG}.log not found: the timeline is rebuilt from {SERVICE_LOG}.log only "
-                "(shorter history, fewer outcome messages)")
-        else:
-            warnings.append(f"neither {EVENT_LOG}.log nor {SERVICE_LOG}.log found: no timeline")
-    del fallback_lines
-    lines.sort(key=lambda e: e.ts)
-    rows = build_attempts(lines, fallback=fallback)
-    details.sort(key=lambda e: e.ts)
-    merged = merge_details(rows, details)
-    if not bundle.rotation(SERVICE_LOG):
-        warnings.append(f"{SERVICE_LOG}.log not found: no detail events and no portal/gateway configuration")
-
-    # ---- configuration
-    sections: list[dict] = []
-    if collector.status:
-        sections.append(_snap_section(
-            "status", "Client state at the last status update", collector.status,
-            "Last status document sent by the service (PanGPS) to the app UI."))
-    for portal, snap in sorted(collector.agent_cfg.items(), key=lambda kv: kv[1].ts, reverse=True):
-        sections.append(_snap_section(
-            f"agent:{portal}", f"App configuration from portal {portal}", snap,
-            "App settings as applied by the service after the portal login (portal agent configuration)."))
-    if collector.gateway_list:
-        sections.append(_snap_section("gwlist", "Gateway list", collector.gateway_list))
-    for gw, snap in sorted(collector.gateway_cfg.items(), key=lambda kv: kv[1].ts, reverse=True):
-        sections.append(_snap_section(
-            f"gwcfg:{gw}", f"Gateway configuration from {gw}", snap,
-            "Tunnel settings returned by the gateway at the last successful login."))
-    for host, snap in sorted(collector.portal_prelogin.items(), key=lambda kv: kv[1].ts, reverse=True):
-        sections.append(_snap_section(f"ppl:{host}", f"Portal pre-login response from {host}", snap))
-    for host, snap in sorted(collector.gateway_prelogin.items(), key=lambda kv: kv[1].ts, reverse=True):
-        sections.append(_snap_section(f"gpl:{host}", f"Gateway pre-login response from {host}", snap))
-    if collector.singles:
-        srows = [("", label, f"{value}   [{_fmt(ts)}]") for label, (ts, value) in collector.singles.items()]
-        sections.append(_section("runtime", "Runtime values seen in the service log", f"{SERVICE_LOG}.log",
-                                 _groups(srows), note="Newest value of each item; the time is when it was logged."))
-
-    reg: dict[str, str] = {}
-    data = bundle.read_bytes("regval.txt", "configuration")
-    if data is not None:
-        reg_sections = parse_regval(data)
-        rrows = [(title, k, v) for title, items in reg_sections for k, v in items]
-        reg = {k: v for title, items in reg_sections if title == "Settings" for k, v in items}
-        sections.append(_section("registry", "Registry settings", "regval.txt", _groups(rrows),
-                                 note="Dump of HKLM\\SOFTWARE\\Palo Alto Networks\\GlobalProtect taken at collection time."))
-    sysinfo: dict[str, str] = {}
-    text = bundle.read_text("SystemInfo.txt", "configuration")
-    if text:
-        srows2 = parse_systeminfo(text)
-        sysinfo = dict(srows2)
-        sections.append(_section("system", "System information", "SystemInfo.txt",
-                                 _groups([("", k, v) for k, v in srows2])))
-    text = bundle.read_text("pan_gp_hrpt.xml", "configuration")
-    if text:
-        hrows = parse_hip_report(text)
-        if hrows:
-            sections.append(_section("hip", "Last HIP report (summary)", "pan_gp_hrpt.xml",
-                                     _groups([("", k, v) for k, v in hrows])))
-    trb: dict[str, str] = {}
-    text = bundle.read_text("pan_gp_trb.log", "configuration")
-    if text:
-        trows = parse_trb(text)
-        if trows:
-            trb = dict(trows)
-            sections.append(_section(
-                "trb", "Last troubleshooting report", "pan_gp_trb.log",
-                _groups([("", k, v) for k, v in trows]),
-                note="Written by the app when a connection fails; it can refer to a different portal "
-                     "than the one in use at collection time."))
-
-    # ---- overview
-    status = {k: v for _g, k, v in collector.status.rows} if collector.status else {}
-    client_version = status.get("product-version", "")
-    os_name = ""
-    for line in reversed(lines):
-        if classify(line.msg)[0] == "SVC_START":
-            m = re.search(r"client version: ([^,)]+), OS version: (.+?)\)?\.?$", line.msg)
-            if m:
-                client_version = client_version or m.group(1).strip()
-                os_name = m.group(2).strip()
-            break
-    last_ts = max([t for t in (lines[-1].ts if lines else None, svc_last) if t], default=None)
-    attempts = [r for r in rows if r.kind != "system"]
-    last_attempt = attempts[-1] if attempts else None
-    connect_method = collector.singles.get("Connect method", (None, ""))[1]
-    if not connect_method and reg.get("on-demand"):
-        connect_method = "On-Demand" if reg["on-demand"] == "yes" else "not on-demand (see registry)"
-    overview = [
-        ("GlobalProtect version", client_version or trb.get("gp_version", "")),
-        ("Operating system", os_name or sysinfo.get("OS Name", "") or trb.get("os", "")),
-        ("Computer", sysinfo.get("Host Name", "") or trb.get("host_name", "")),
-        ("Last portal (registry LastUrl)", reg.get("LastUrl", "")),
-        ("Portal in the last status", status.get("portal", "")),
-        ("User in the last status", status.get("user-name", "")),
-        ("Connect method", connect_method),
-        ("State at the last status", " / ".join(v for v in (status.get("status", ""), status.get("state", "")) if v)),
-        ("Portal status", status.get("portal-status", "")),
-        ("Time zone of the client", sysinfo.get("Time Zone", "")),
-        ("Last log line", _fmt(last_ts)),
-        ("Event log coverage", f"{_fmt(lines[0].ts)} to {_fmt(lines[-1].ts)}" if lines and not fallback else ""),
-        ("Service log coverage (detail events)", f"{_fmt(svc_first)} to {_fmt(svc_last)}" if svc_first else ""),
-    ]
-    overview = [[k, v] for k, v in overview if v]
-
-    # ---- sources
-    sources = []
-    for key, member in sorted(bundle.members.items()):
-        stem = re.sub(r"(\.\d+)?\.(log|txt|xml|dmp)(\.old)?$", "", key)
-        note = member.reason or member.used_for
-        if not note and member.status == "found":
-            note = KNOWN_UNPARSED.get(stem, "not used")
-        cov = coverage.get(key, {})
-        sources.append({"name": member.name, "size": member.size, "status": member.status, "note": note,
-                        "lines": cov.get("lines", ""), "first": cov.get("first", ""), "last": cov.get("last", "")})
-    warnings = bundle.warnings + warnings
-
-    src_names: list[str] = []
-    src_index: dict[str, int] = {}
-
-    def src_id(name: str) -> int:
-        if name not in src_index:
-            src_index[name] = len(src_names)
-            src_names.append(name)
-        return src_index[name]
-
-    def row_blob(r: Attempt) -> dict:
-        return {
-            "k": r.kind, "s": _ms(r.start), "e": _ms(r.end), "p": r.portal, "g": r.gateway, "u": r.user,
-            "o": r.outcome, "st": r.stage, "r": r.reason, "n": r.notes, "ph": r.phases,
-            "pi": int(r.portal_inferred),
-            "up": _ms(r.tunnel_up), "dn": _ms(r.tunnel_down), "er": r.end_reason, "d": int(r.has_detail),
-            "ev": [[_ms(e.ts), e.level, e.phase, e.text, src_id(e.src), e.count, _ms(e.last)] for e in r.events],
-        }
-
+    data = cfg.pop("data", {}) or {}
+    name = Path(str(path).rstrip("/\\")).name
     return {
         "meta": {
-            "bundle": bundle.path.name, "generated": _fmt(datetime.now()), "tool": __version__,
-            "last": _ms(last_ts), "fallback": fallback, "detail_events": merged,
-            "detail_from": _ms(svc_first), "detail_to": _ms(svc_last),
+            "kind": KIND, "bundle": name, "version": BLOB_VERSION, "tool_version": __version__,
+            "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "anchor": _anchor(cfg, tl),
         },
-        "overview": overview,
-        "sections": sections,
-        "phases": [list(p) for p in PHASES],
-        "outcomes": OUTCOMES,
-        "rows": [row_blob(r) for r in rows],
-        "srcs": src_names,
-        "sources": sources,
-        "warnings": warnings,
+        "config": cfg,
+        "state": {k: data.get("connection", {}).get(k) for k in
+                  ("connected", "conclusion", "last_state", "last_state_at", "evidence")},
+        "identity": identity({**cfg, "data": data}),
+        "key_settings": key_settings({**cfg, "data": data}),
+        "timeline": tl,
+        "findings": checks.to_dicts(findings),
+        "status": checks.status(findings),
+        "flag_help": {k: list(v) for k, v in checks.FLAG_HELP.items()},
+        "thresholds": _threshold_table(overrides),
+        "inventory": inv,
+        "analysis": analysis,
+        "warnings": bundle_warnings,
     }
 
 
+# ------------------------------------------------------------------------------------ render
+_PLACEHOLDER = re.compile(r"__(?:KIND|TITLE|DATA|HB_[a-z_]+|HP_[a-z_]+)__")
+
+
+def blob_json(blob: dict) -> str:
+    """JSON that is safe inside a script element: no ``<``, ``>``, ``&``, U+2028 or U+2029."""
+    text = json.dumps(blob, separators=(",", ":"), ensure_ascii=True, default=str)
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 def render(blob: dict) -> str:
-    payload = json.dumps(blob, ensure_ascii=False, separators=(",", ":"))
-    # "<" never appears literally in the embedded JSON, so the data cannot
-    # close the script element or open a comment.
-    payload = payload.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-    return render_page(blob["meta"]["bundle"], payload)
+    """The HTML page. Placeholders are replaced in a single pass, so substituted text (a bundle
+    name or a log line that contains a placeholder token) is never interpreted again."""
+    params = (blob.get("timeline") or {}).get("params") or {}
+    values = dict(render_section_help(params))
+    values["__KIND__"] = html.escape(KIND)
+    values["__TITLE__"] = html.escape(str(blob.get("meta", {}).get("bundle", "")))
+    values["__DATA__"] = blob_json(blob)
+    return _PLACEHOLDER.sub(lambda m: values.get(m.group(0), m.group(0)), TEMPLATE)
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(
-        prog="panos-toolbox gp analyze",
-        description="HTML report from a GlobalProtect client log bundle (Collect Logs): "
-                    "current client configuration and timeline of the connection attempts.")
-    ap.add_argument("inputs", nargs="+", help="GlobalProtectLogs*.zip bundles or extracted folders")
-    ap.add_argument("-o", "--outdir", default="output", help="output directory (default: output)")
+# ------------------------------------------------------------------------------------- CLI
+def _summary_line(name: str, blob: dict, out: Path) -> str:
+    by = blob["timeline"]["summary"]["by_outcome"]
+    sev = {lv: sum(1 for f in blob["findings"] if f["level"] == lv) for lv in ("critical", "warning", "info")}
+    return (f"{name}: {blob['timeline']['summary']['total']} attempts "
+            f"(connected {by.get('connected', 0)}, failed {by.get('failed', 0)}, "
+            f"cancelled {by.get('cancelled', 0)}, abandoned {by.get('abandoned', 0)}); "
+            f"findings: {sev['critical']} critical, {sev['warning']} warning, {sev['info']} info; "
+            f"status {blob['status']}, analysis {blob['analysis']['status']} -> {out}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="panos-toolbox gp analyze", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("inputs", nargs="+", help="GlobalProtectLogs .zip file(s) or extracted folder(s)")
+    ap.add_argument("-o", "--outdir", default=None,
+                    help="output directory (default: next to each input)")
     ap.add_argument("--open", action="store_true", help="open the report in the default browser")
-    args = ap.parse_args(argv)
+    ap.add_argument("--chain-gap", type=float, default=None, metavar="S",
+                    help=f"seconds within which login cycles are chained into one attempt [{CHAIN_GAP_S:g}]")
+    grp = ap.add_argument_group("finding thresholds",
+                                "Tunables of the automatic checks (defaults in brackets; see the "
+                                "flag reference in the report).")
+    for key, default in checks.GP_THRESHOLDS.items():
+        grp.add_argument("--gp-" + key.replace("_", "-"), dest="gp_" + key, metavar="N", type=float,
+                         default=None, help=f"{key} [{default:g}]")
+    return ap
 
-    os.makedirs(args.outdir, exist_ok=True)
-    written = []
-    rc = 0
-    for item in args.inputs:
+
+def parse_thresholds(args: argparse.Namespace, ap: argparse.ArgumentParser) -> dict:
+    out = {k: getattr(args, "gp_" + k) for k in checks.GP_THRESHOLDS
+           if getattr(args, "gp_" + k) is not None}
+    if any(v < 0 for v in out.values()):
+        ap.error("thresholds must be >= 0")
+    return out
+
+
+def _stem(path: Path) -> str:
+    name = path.name
+    return name[:-4] if name.lower().endswith(".zip") else name
+
+
+def main(argv=None) -> int:
+    ap = build_parser()
+    args = ap.parse_args(argv)
+    thresholds = parse_thresholds(args, ap)
+    if args.chain_gap is not None and args.chain_gap < 0:
+        ap.error("--chain-gap must be >= 0")
+    ok = 0
+    used: set[Path] = set()
+    last: Path | None = None
+    for raw in args.inputs:
+        src = Path(raw)
         try:
-            blob = analyze(item)
-        except (BundleError, OSError) as exc:
-            print(f"[ERROR] {item}: {exc}", file=sys.stderr)
-            rc = 1
+            blob = analyze(src, thresholds, args.chain_gap)
+            outdir = Path(args.outdir) if args.outdir else (src.resolve().parent)
+            outdir.mkdir(parents=True, exist_ok=True)
+            target = outdir / f"{_stem(src)}{SUFFIX}.html"
+            n = 1
+            while target in used:
+                n += 1
+                target = outdir / f"{_stem(src)}{SUFFIX}_{n}.html"
+            used.add(target)
+            target.write_text(render(blob), encoding="utf-8")
+        except (BundleError, OSError, ValueError, KeyError) as exc:
+            print(f"[ERROR] {raw}: {exc}", file=sys.stderr)
             continue
-        stem = Path(item).name
-        stem = stem[:-4] if stem.lower().endswith(".zip") else stem
-        out = Path(args.outdir) / f"{stem}_gp.html"
-        out.write_text(render(blob), encoding="utf-8")
-        written.append(out)
-        attempts = [r for r in blob["rows"] if r["k"] != "system"]
-        ok = sum(1 for r in attempts if r["o"] == "connected")
-        print(f"[OK] {item}: {len(attempts)} connection attempts ({ok} connected), "
-              f"{len(blob['sections'])} configuration sections -> {out}")
-        for w in blob["warnings"]:
-            print(f"  [WARN] {w}")
-    if args.open and written:
-        webbrowser.open(written[0].resolve().as_uri())
-    return rc
+        ok += 1
+        last = target
+        print(_summary_line(src.name, blob, target))
+    if args.open and last is not None:
+        webbrowser.open(last.resolve().as_uri())
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
