@@ -232,7 +232,8 @@ def _summary_line(name: str, blob: dict, out: Path) -> str:
     by = blob["timeline"]["summary"]["by_outcome"]
     sev = {lv: sum(1 for f in blob["findings"] if f["level"] == lv) for lv in ("critical", "warning", "info")}
     return (f"{name}: {blob['timeline']['summary']['total']} attempts "
-            f"(connected {by.get('connected', 0)}, failed {by.get('failed', 0)}, "
+            f"(connected {by.get('connected', 0)}, internal {by.get('internal', 0)}, "
+            f"failed {by.get('failed', 0)}, "
             f"cancelled {by.get('cancelled', 0)}, abandoned {by.get('abandoned', 0)}, "
             f"expired {by.get('expired', 0)}); "
             f"findings: {sev['critical']} critical, {sev['warning']} warning, {sev['info']} info; "
@@ -249,7 +250,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--debug", action="store_true",
                     help="do not catch unexpected errors: show the full traceback and stop")
     ap.add_argument("--chain-gap", type=float, default=None, metavar="S",
-                    help=f"seconds within which login cycles are chained into one attempt [{CHAIN_GAP_S:g}]")
+                    help=("upper bound in seconds for chaining portal cycles of one attempt when no SAML "
+                          f"timeout is logged (the logged SAML timeout wins) [{CHAIN_GAP_S:g}]"))
     grp = ap.add_argument_group("finding thresholds",
                                 "Tunables of the automatic checks (defaults in brackets; see the "
                                 "flag reference in the report).")
@@ -269,7 +271,11 @@ def parse_thresholds(args: argparse.Namespace, ap: argparse.ArgumentParser) -> d
 
 def _stem(path: Path) -> str:
     name = path.name
-    return name[:-4] if name.lower().endswith(".zip") else name
+    lower = name.lower()
+    for ext in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tgz", ".tar"):
+        if lower.endswith(ext) and len(name) > len(ext):
+            return name[: -len(ext)]
+    return name
 
 
 def main(argv=None) -> int:

@@ -216,3 +216,9 @@ def test_missing_event_log_is_partial(tmp_path):
     blob = analyzer.analyze(p)
     assert blob["analysis"]["status"] == "partial"
     assert re.search("event log", " ".join(blob["analysis"]["reasons"]))
+
+
+def test_summary_line_reports_internal(bundle):
+    blob = analyzer.analyze(bundle)
+    blob["timeline"]["summary"]["by_outcome"]["internal"] = 4
+    assert "internal 4" in analyzer._summary_line("x", blob, bundle)

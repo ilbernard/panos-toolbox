@@ -132,10 +132,10 @@ def test_expired_outcome_is_supported_in_the_page_and_help():
     for needle in ("'expired'", "expired:'Expired'", "expired:'#2b6cb0'", ".b-expired",
                    ".chip.o-expired", "cancel_evidence", "gateway_switches"):
         assert needle in TEMPLATE, needle
-    # five outcomes: the chart lanes follow OUTS, no hard-coded four lanes
+    # six outcomes: the chart lanes follow OUTS, no hard-coded four lanes
     assert "LANE * 4" not in TEMPLATE
     text = report_help.render_help().lower()
-    for word in ("expired", "inferred", "never crosses portals", "grace period"):
+    for word in ("expired", "inferred", "same portal", "grace period"):
         assert word in text, word
 
 
@@ -186,3 +186,20 @@ def test_end_to_end_report_has_tabs_and_data(tmp_path):
         assert label in html
     assert len(extract_blob(html)["timeline"]["attempts"]) == 2
     assert "localStorage" in html and "catch(e)" in html
+
+
+def test_internal_outcome_and_new_kinds_are_supported_in_the_page_and_help():
+    for needle in ("'internal'", "internal:'Internal'", ".b-internal",
+                   ".chip.o-internal", "tr.att.o-internal", "'pre-logon'", "'auto-reconnect'",
+                   "KINDSHAPE", "error_category", "no collection snapshot"):
+        assert needle in TEMPLATE, needle
+    text = report_help.render_help().lower()
+    for word in ("internal", "pre-logon", "auto-reconnect", "no explicit", "same portal",
+                 "agent log", "saml"):
+        assert word in text or word.replace("no explicit", "no \"attempt begins\"") in text, word
+
+
+def test_chart_shapes_do_not_rely_on_colour_alone():
+    # one shape per kind, drawn in the chart and named in the legend
+    for shape in ("circle", "square", "triangle", "diamond"):
+        assert f"'{shape}'" in TEMPLATE

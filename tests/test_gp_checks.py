@@ -356,3 +356,67 @@ def test_thresholds_are_complete_and_overridable():
         assert key in GP_THRESHOLDS, key
     assert GP_THRESHOLDS['repeated_failure_min'] == 3 and GP_THRESHOLDS['recent_days'] == 7
     assert GP_THRESHOLDS['success_rate_min_pct'] == 70 and GP_THRESHOLDS['log_gap_s'] == 3600
+
+
+# ------------------------------------------------------------------ internal, categories, new flags
+def with_cat(a: Attempt, cat: str) -> Attempt:
+    a.error_category = cat
+    return a
+
+
+def test_internal_counts_as_success_in_the_success_rate():
+    att = [attempt(i, at(hours=i), 'internal', 'login') for i in range(1, 6)]
+    att.append(attempt(9, at(hours=9), 'failed', 'login', error='x'))
+    assert 'LOW_SUCCESS_RATE' not in codes(evaluate(healthy_config(), healthy_timeline(att)))
+
+
+def test_pre_logon_attempts_count_as_login_attempts():
+    att = [attempt(i, at(hours=i), 'failed', 'pre-logon', error='x') for i in range(1, 7)]
+    assert 'LOW_SUCCESS_RATE' in codes(evaluate(healthy_config(), healthy_timeline(att)))
+
+
+def test_auth_failure_uses_the_error_category_not_the_text():
+    a = with_cat(attempt(1, at(hours=1), 'failed', error='something unrelated'), 'saml')
+    f = get(evaluate(healthy_config(), healthy_timeline([a])), 'AUTH_FAILURE')
+    assert f and f[0].count == 1
+    b = with_cat(attempt(2, at(hours=1), 'failed', error='Authentication failed'), 'other')
+    assert 'AUTH_FAILURE' not in codes(evaluate(healthy_config(), healthy_timeline([b])))
+
+
+def test_portal_unreachable_is_a_warning():
+    a = with_cat(attempt(1, at(hours=1), 'failed', error='Invalid portal'), 'portal-unreachable')
+    f = get(evaluate(healthy_config(), healthy_timeline([a])), 'PORTAL_UNREACHABLE')
+    assert f and f[0].level == 'warning'
+
+
+def test_saml_timeout_levels():
+    def expired(n):
+        a = attempt(n, at(hours=n), 'expired', 'login')
+        a.details = {'expired_reason': 'saml-timeout'}
+        return a
+    one = get(evaluate(healthy_config(), healthy_timeline([expired(1)])), 'SAML_TIMEOUT')
+    assert one and one[0].level == 'info'
+    many = get(evaluate(healthy_config(), healthy_timeline([expired(i) for i in range(1, 4)])),
+               'SAML_TIMEOUT')
+    assert many and many[0].level == 'warning' and many[0].count == 3
+
+
+def test_client_upgraded_from_the_version_history_and_tolerates_absence():
+    hist = {'runs': [{'version': '6.1.0', 'first_start': datetime(2026, 11, 1), 'change': ''},
+                     {'version': '6.2.0', 'first_start': datetime(2026, 11, 10),
+                      'change': 'newer', 'previous': '6.1.0'}]}
+    f = get(evaluate(healthy_config(client_versions=hist), healthy_timeline()), 'CLIENT_UPGRADED')
+    assert f and f[0].level == 'info' and '6.1.0 to 6.2.0' in f[0].text
+    assert 'CLIENT_UPGRADED' not in codes(evaluate(healthy_config(), healthy_timeline()))
+
+
+def test_driver_and_not_connected_are_silent_without_a_collection_snapshot():
+    cfg = healthy_config(pangp_adapter={'present': None}, connection={'connected': None},
+                         driver_events=DRIVER_EV)
+    found = codes(evaluate(cfg, healthy_timeline()))
+    assert 'DRIVER_DISABLED' not in found and 'NOT_CONNECTED_AT_COLLECTION' not in found
+
+
+def test_every_new_flag_is_documented():
+    for code in ('SAML_TIMEOUT', 'PORTAL_UNREACHABLE', 'CLIENT_UPGRADED'):
+        assert code in FLAG_HELP

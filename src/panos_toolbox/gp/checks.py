@@ -13,8 +13,9 @@ Every finding is a ``GpFinding``: a ``tsf.findings.Finding`` (code, level, text,
 and ``count``. The generic ``Finding.refs`` (source file and line) is left empty.
 
 The "recent window" (``GP_THRESHOLDS['recent_days']``) is anchored to the newest log record,
-never to the wall clock. Error classes are matched on the normalised error texts of
-``timeline.normalise_error`` (constants ``ERR_*`` below, defined once). Only facts present in
+never to the wall clock. Error classes are read from the structured ``error_category`` of each attempt
+(``timeline.CATEGORIES``), never from message texts; the ``ERR_*`` texts are kept only as a
+fallback for attempts without a category. Only facts present in
 the data are reported; the help (``FLAG_HELP``) explains in general what a code can mean.
 """
 from __future__ import annotations
@@ -25,7 +26,13 @@ from typing import Any
 
 from panos_toolbox.tsf.findings import CRITICAL, INFO, WARNING, Finding, module_status
 
-# Normalised error texts of gp/timeline.py (normalise_error) that identify an error class.
+# Structured categories of gp/timeline.py (CATEGORIES) used by the class checks.
+CAT_AUTH = ('auth', 'saml')
+CAT_GW_CERT = ('gateway-cert',)
+CAT_GW_UNREACHABLE = ('gateway-unreachable',)
+CAT_PORTAL_UNREACHABLE = ('portal-unreachable',)
+
+# Normalised error texts (fallback only) of gp/timeline.py (normalise_error) that identify an error class.
 ERR_GW_CERT = 'Gateway certificate could not be verified'
 ERR_GW_UNREACHABLE = 'Gateway unreachable or unresponsive'
 ERR_AUTH_PORTAL = 'Portal rejected the credentials'
@@ -38,6 +45,8 @@ GP_THRESHOLDS: dict[str, float] = {
     'repeated_failure_min': 3,     # same error text on at least N login failures
     'class_failure_min': 1,        # gateway certificate / unreachable failures needed
     'auth_failure_min': 1,         # authentication failures needed
+    'saml_timeout_warn': 3,        # SAML prompt timeouts in the window that raise SAML_TIMEOUT to warning
+    'portal_unreachable_min': 1,   # portal unreachable failures needed
     'restore_grace_min': 1,        # expired (grace period) restores needed
     'restore_failed_min': 1,       # auto-restores with a real failed retry needed
     'success_rate_min_pct': 70,    # login success rate below this percentage is low
@@ -69,9 +78,10 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
          'and the last service state.')),
     'LAST_ATTEMPT_FAILED': (
         'Most recent login attempt failed',
-        ('The newest login attempt of the timeline ended failed or abandoned (cancelled by the '
-         'user is not reported). Computed from the login attempts sorted by start; '
-         'auto-restores, expired or not, are not login attempts. Check the error text and stage of the attempt and the gateway or '
+        ('The newest login attempt of the timeline (kinds login and pre-logon) ended failed or '
+         'abandoned (cancelled by the user and expired are not reported). Computed from the '
+         'login attempts sorted by start; automatic restores and reconnects are not login '
+         'attempts. Check the error text and stage of the attempt and the gateway or '
          'portal it names.')),
     'RETRY_STORM': (
         'Retry storm',
@@ -102,6 +112,26 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
          'gateway). Credential prompts that were followed by a successful attempt in the same '
          'chain are not failures and are not counted. Check the account, the password or '
          'token, the authentication profile and the identity provider logs.')),
+    'SAML_TIMEOUT': (
+        'SAML sign-in prompt timed out',
+        ('Login attempts in the recent window ended "expired" because the SAML sign-in in the '
+         'browser was not completed before the portal SAML request timeout (the attempt details '
+         'say "SAML prompt timeout"). Info for a few; warning when saml_timeout_warn or more '
+         'happened. Typical of a browser window left open, a blocked default-browser launch or '
+         'an identity provider page that never finished. Check the default browser setting, '
+         'the identity provider logs and whether the user saw the prompt.')),
+    'PORTAL_UNREACHABLE': (
+        'Portal unreachable',
+        ('Failed login attempts in the recent window ended with the client unable to reach or '
+         'validate the portal (error category portal-unreachable: invalid portal, name '
+         'resolution, no response). Check the portal name in the client settings, DNS, the '
+         'network path and firewall rules to the portal from the client network.')),
+    'CLIENT_UPGRADED': (
+        'GlobalProtect client version changed',
+        ('The client version recorded at the service starts changed inside the bundle (taken '
+         'from the configuration data, not from the attempts). Info only: the new version may '
+         'explain a change of behaviour or of log format after that date. Not reported when the '
+         'version history is not available.')),
     'RESTORE_GRACE_EXCEEDED': (
         'Auto-restore refused: downtime over the grace period',
         ('Automatic tunnel restores in the recent window ended "expired": the log says the '
@@ -121,10 +151,10 @@ FLAG_HELP: dict[str, tuple[str, str]] = {
          'the network the PC was on when it tried.')),
     'LOW_SUCCESS_RATE': (
         'Low login success rate',
-        ('In the recent window, connected login attempts divided by all login attempts '
-         '(cancelled excluded; a cancelled outcome is often only inferred from a user '
+        ('In the recent window, successful login attempts (outcome connected or internal) divided '
+         'by all login attempts (kinds login and pre-logon; cancelled excluded; a cancelled outcome is often only inferred from a user '
          'disconnect) is below success_rate_min_pct, with at least '
-         'success_rate_min_attempts attempts. Auto-restores, expired or failed, are not '
+         'success_rate_min_attempts attempts. Automatic restores and reconnects are not '
          'counted. Check the most '
          'frequent error texts of the window.')),
     'STALE_TRB_REPORT': (
@@ -245,7 +275,25 @@ def _err(a: Any) -> str:
     return getattr(a, 'error_text', '') or ''
 
 
-def _is_auth(text: str) -> bool:
+LOGIN_KINDS = ('login', 'pre-logon')
+SUCCESS_OUTCOMES = ('connected', 'internal')
+
+
+def _cat(a: Any) -> str:
+    return getattr(a, 'error_category', '') or ''
+
+
+def _in_cat(cats: tuple, texts: tuple = ()) -> Any:
+    """Predicate on an attempt: structured category, else (no category) the fallback text."""
+    def pred(a: Any) -> bool:
+        c = _cat(a)
+        if c:
+            return c in cats
+        return _err(a) in texts
+    return pred
+
+
+def _is_auth_text(text: str) -> bool:
     low = text.lower()
     return text == ERR_AUTH_PORTAL or any(m in low for m in _AUTH_MARKERS)
 
@@ -272,6 +320,8 @@ def _driver(config: Any, fails: list | None = None, **_: Any) -> list[GpFinding]
     newest = max(enumerate(events), key=lambda p: (_dt(p[1]['ts']), p[0]))[1] if events else None
     problem = newest is not None and newest.get('kind') == 'problem'
     adapter = data.get('pangp_adapter') or {}
+    if adapter.get('present') is None:
+        return []          # no collection snapshot (IpConfig.txt): the adapter state is unknown
     present = bool(adapter.get('present'))
     absent = adapter.get('present') is False
     conn = data.get('connection') or {}
@@ -326,7 +376,7 @@ def _not_connected(config: Any, **_: Any) -> list[GpFinding]:
 
 
 def _last_attempt(attempts: list, **_: Any) -> list[GpFinding]:
-    logins = sorted((a for a in attempts if a.kind == 'login'), key=lambda a: _dt(a.start))
+    logins = sorted((a for a in attempts if a.kind in LOGIN_KINDS), key=lambda a: _dt(a.start))
     if not logins:
         return []
     last = logins[-1]
@@ -364,7 +414,7 @@ def _recent_failures(attempts: list, anchor: datetime | None, thr: dict) -> list
     if anchor is None:
         return []
     lo = anchor - timedelta(days=_num(thr, 'recent_days'))
-    return sorted((a for a in attempts if a.kind == 'login' and a.outcome == 'failed'
+    return sorted((a for a in attempts if a.kind in LOGIN_KINDS and a.outcome == 'failed'
                    and _dt(a.start) >= lo), key=lambda a: _dt(a.start))
 
 
@@ -386,9 +436,10 @@ def _repeated(fails: list, thr: dict, **_: Any) -> list[GpFinding]:
 
 
 def _class(code: str, fails: list, pred: Any, thr: dict, what: str) -> list[GpFinding]:
-    items = [a for a in fails if pred(_err(a))]
-    if not items or len(items) < _num(thr, 'class_failure_min' if code != 'AUTH_FAILURE'
-                                      else 'auth_failure_min'):
+    items = [a for a in fails if pred(a)]
+    key = {'AUTH_FAILURE': 'auth_failure_min',
+           'PORTAL_UNREACHABLE': 'portal_unreachable_min'}.get(code, 'class_failure_min')
+    if not items or len(items) < _num(thr, key):
         return []
     first, last = _span(items)
     cap = int(_num(thr, 'refs_cap'))
@@ -397,6 +448,43 @@ def _class(code: str, fails: list, pred: Any, thr: dict, what: str) -> list[GpFi
                 f"{_range(first, last)} (gateway(s): {_gateways(items)}). Attempts: "
                 f"{', '.join(_ids(items, cap))}{_more(len(items), cap)}.",
                 'attempts', last, _ids(items, cap), len(items))]
+
+
+def _saml_timeout(attempts: list, anchor: datetime | None, thr: dict,
+                  **_: Any) -> list[GpFinding]:
+    if anchor is None:
+        return []
+    lo = anchor - timedelta(days=_num(thr, 'recent_days'))
+    items = sorted((a for a in attempts if a.outcome == 'expired' and a.kind in LOGIN_KINDS
+                    and 'saml' in str((a.details or {}).get('expired_reason', '')
+                                      or (a.details or {}).get('expired', '')).lower()
+                    and _dt(a.start) >= lo), key=lambda a: _dt(a.start))
+    if not items:
+        return []
+    first, last = _span(items)
+    cap = int(_num(thr, 'refs_cap'))
+    level = WARNING if len(items) >= _num(thr, 'saml_timeout_warn') else INFO
+    return [_mk('SAML_TIMEOUT', level,
+                f"{len(items)} login attempt(s) in the recent window expired because the SAML "
+                f"sign-in was not completed in time, {_range(first, last)}. Attempts: "
+                f"{', '.join(_ids(items, cap))}{_more(len(items), cap)}.", 'attempts', last,
+                _ids(items, cap), len(items))]
+
+
+def _client_upgraded(config: Any, **_: Any) -> list[GpFinding]:
+    hist = _data(config).get('client_versions')
+    if not isinstance(hist, dict):
+        return []
+    runs = [r for r in hist.get('runs') or [] if isinstance(r, dict)]
+    changes = [r for r in runs if r.get('change') and r.get('previous')]
+    if not changes:
+        return []
+    last = changes[-1]
+    text = (f"The client version changed {len(changes)} time(s) inside the bundle; the latest "
+            f"change is {last.get('previous')} to {last.get('version')} ({last.get('change')}) "
+            f"at the service start of {_fmt(_dt(last.get('first_start')))}.")
+    return [_mk('CLIENT_UPGRADED', INFO, text, 'config', _dt(last.get('first_start')), [],
+                len(changes))]
 
 
 def _restore_grace(attempts: list, anchor: datetime | None, thr: dict, **_: Any) -> list[GpFinding]:
@@ -456,16 +544,16 @@ def _success_rate(attempts: list, anchor: datetime | None, thr: dict, **_: Any) 
     if anchor is None:
         return []
     lo = anchor - timedelta(days=_num(thr, 'recent_days'))
-    logins = [a for a in attempts if a.kind == 'login' and a.outcome != 'cancelled'
+    logins = [a for a in attempts if a.kind in LOGIN_KINDS and a.outcome != 'cancelled'
               and _dt(a.start) >= lo]
     if not logins or len(logins) < _num(thr, 'success_rate_min_attempts'):
         return []
-    ok = sum(1 for a in logins if a.outcome == 'connected')
+    ok = sum(1 for a in logins if a.outcome in SUCCESS_OUTCOMES)
     rate = 100.0 * ok / len(logins)
     if rate >= _num(thr, 'success_rate_min_pct'):
         return []
     return [_mk('LOW_SUCCESS_RATE', WARNING,
-                f"{ok} of {len(logins)} login attempts connected ({rate:.0f}%) in the recent "
+                f"{ok} of {len(logins)} login attempts succeeded (connected or internal, {rate:.0f}%) in the recent "
                 f"window ({_fmt(lo)} to {_fmt(anchor)}, cancelled attempts excluded); the "
                 f"threshold is {_num(thr, 'success_rate_min_pct'):g}%.", 'attempts', anchor,
                 [], len(logins))]
@@ -572,13 +660,19 @@ def evaluate(config, timeline, thresholds=None) -> list[Finding]:
     steps = [
         (_driver, ctx), (_not_connected, ctx), (_last_attempt, ctx), (_storms, ctx),
         (_repeated, ctx),
-        (lambda **c: _class('GW_CERT_FAILURE', c['fails'], lambda t: t == ERR_GW_CERT,
+        (lambda **c: _class('GW_CERT_FAILURE', c['fails'],
+                            _in_cat(CAT_GW_CERT, (ERR_GW_CERT,)),
                             c['thr'], 'gateway certificate could not be verified'), ctx),
-        (lambda **c: _class('GW_UNREACHABLE', c['fails'], lambda t: t == ERR_GW_UNREACHABLE,
+        (lambda **c: _class('GW_UNREACHABLE', c['fails'],
+                            _in_cat(CAT_GW_UNREACHABLE, (ERR_GW_UNREACHABLE,)),
                             c['thr'], 'gateway unreachable or unresponsive'), ctx),
-        (lambda **c: _class('AUTH_FAILURE', c['fails'], _is_auth, c['thr'],
+        (lambda **c: _class('PORTAL_UNREACHABLE', c['fails'], _in_cat(CAT_PORTAL_UNREACHABLE),
+                            c['thr'], 'portal unreachable or invalid'), ctx),
+        (lambda **c: _class('AUTH_FAILURE', c['fails'],
+                            lambda a: (_cat(a) in CAT_AUTH if _cat(a)
+                                       else _is_auth_text(_err(a))), c['thr'],
                             'authentication failed'), ctx),
-        (_restore_grace, ctx), (_restore_failed, ctx), (_success_rate, ctx), (_stale_trb, ctx), (_log_gap, ctx),
+        (_saml_timeout, ctx), (_client_upgraded, ctx), (_restore_grace, ctx), (_restore_failed, ctx), (_success_rate, ctx), (_stale_trb, ctx), (_log_gap, ctx),
         (_truncated, ctx), (_partial, ctx),
     ]
     out: list[Finding] = []

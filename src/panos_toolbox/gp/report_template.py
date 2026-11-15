@@ -73,6 +73,7 @@ td.r,th.r{text-align:right}
 .b-info,.b-abandoned,.b-no_data{background:#5d6b7a}
 .b-ok,.b-connected,.b-current{background:#2f855a}
 .b-expired{background:#2b6cb0}
+.b-internal{background:#0e7490}
 .b-historical{background:#fff;color:#5d6b7a;border:1px solid #5d6b7a;line-height:15px}
 .astatus{display:inline-block;font-size:12px;line-height:20px;padding:0 10px;border-radius:10px;margin:0 0 12px;cursor:pointer;color:#fff}
 .astatus.complete{background:#2f855a}.astatus.partial{background:#b7791f}
@@ -97,7 +98,7 @@ summary{cursor:pointer}
 .chip b{display:block;font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums}
 .chip span{font-size:12px;color:var(--mute)}
 .chip.o-connected{border-left:4px solid var(--c-ok)}.chip.o-failed{border-left:4px solid var(--c-fail)}
-.chip.o-cancelled{border-left:4px solid var(--c-warn)}.chip.o-abandoned{border-left:4px solid var(--c-mute)}.chip.o-expired{border-left:4px solid var(--c-exp)}
+.chip.o-cancelled{border-left:4px solid var(--c-warn)}.chip.o-abandoned{border-left:4px solid var(--c-mute)}.chip.o-expired{border-left:4px solid var(--c-exp)}.chip.o-internal{border-left:4px solid #0e7490}
 .lnk{color:var(--acc);cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font:inherit}
 .fnd{border-left:4px solid var(--line);background:#f7f9fb;padding:6px 10px;margin:0 0 6px;border-radius:2px}
 .fnd.s-critical{border-color:#b42318;background:#fdecea}.fnd.s-warning{border-color:var(--warn-bd);background:var(--warn-bg)}
@@ -129,6 +130,8 @@ tr.att.o-connected td:first-child{box-shadow:inset 4px 0 0 var(--c-ok)}
 tr.att.o-cancelled td:first-child{box-shadow:inset 4px 0 0 var(--c-warn)}
 tr.att.o-abandoned td:first-child{box-shadow:inset 4px 0 0 var(--c-mute)}
 tr.att.o-expired td:first-child{box-shadow:inset 4px 0 0 var(--c-exp)}
+tr.att.o-internal td:first-child{box-shadow:inset 4px 0 0 #0e7490}
+.ecat{color:var(--mute);font-size:12px;margin-left:6px}
 tr.att.in-grp td:nth-child(2){padding-left:26px}
 tr.grp td{background:#fdf6e3;cursor:pointer;font-weight:600}
 tr.flash td{animation:flash 2.2s}
@@ -190,10 +193,12 @@ __HELPSTORE__
 JS_CORE = r'''<script>
 const D = __DATA__;
 const META = D.meta, CF = D.config, TL = D.timeline, FND = D.findings || [], ATT = TL.attempts || [];
-const OUTS = ['connected','failed','cancelled','abandoned','expired'], KINDS = ['login','auto-restore'];
-const OUTLBL = {connected:'Connected',failed:'Failed',cancelled:'Cancelled',abandoned:'Abandoned',expired:'Expired'};
-const OUTCOL = {connected:'#2f855a',failed:'#b42318',cancelled:'#b7791f',abandoned:'#5d6b7a',expired:'#2b6cb0'};
-const KINDLBL = {login:'Login','auto-restore':'Auto-restore'};
+const OUTS = ['connected','internal','failed','cancelled','abandoned','expired'], KINDS = ['login','pre-logon','auto-reconnect','auto-restore'];
+const OUTLBL = {connected:'Connected',internal:'Internal',failed:'Failed',cancelled:'Cancelled',abandoned:'Abandoned',expired:'Expired'};
+const OUTCOL = {connected:'#2f855a',internal:'#0e7490',failed:'#b42318',cancelled:'#b7791f',abandoned:'#5d6b7a',expired:'#2b6cb0'};
+const KINDLBL = {login:'Login','pre-logon':'Pre-logon','auto-reconnect':'Auto-reconnect','auto-restore':'Auto-restore'};
+const KINDSHAPE = {login:'circle','pre-logon':'square','auto-reconnect':'triangle','auto-restore':'diamond'};
+const KINDSYM = {login:'\u25cf','pre-logon':'\u25a0','auto-reconnect':'\u25b2','auto-restore':'\u25c6'};
 const FRESHLBL = {current:'At collection',last_seen:'Last seen in logs',historical:'Historical'};
 const LEVELS = ['critical','warning','info'];
 const TABS = ['summary','config','timeline','findings','coverage'];
@@ -331,7 +336,7 @@ function renderSummary(){
   const left = E('div', {class:'subpanel'}, E('h3', {text:'Identity and state at collection'}));
   const dl = E('dl', {class:'kv'});
   for(const r of (D.identity || [])){ dl.appendChild(E('dt', {text:r.label})); dl.appendChild(E('dd', null, r.value === '' ? emptyVal() : r.value)); }
-  const conn = st.connected === true ? 'Connected' : st.connected === false ? 'Not connected' : 'Unknown';
+  const conn = st.connected === true ? 'Connected' : st.connected === false ? 'Not connected' : 'Unknown (no collection snapshot)';
   dl.appendChild(E('dt', {text:'Connection at collection'}));
   dl.appendChild(E('dd', null, E('b', {text:conn}), st.conclusion ? ' - ' + st.conclusion : ''));
   if(st.last_state){ dl.appendChild(E('dt', {text:'Last service state'})); dl.appendChild(E('dd', {text:st.last_state + (st.last_state_at ? ' (' + sec(st.last_state_at) + ')' : '')})); }
@@ -496,7 +501,7 @@ function attRow(a, inGrp){
     E('td', null, x), E('td', {class:'nw', title:a.id + ' | ' + a.start}, sec(a.start)), E('td', {class:'nw', text:KINDLBL[a.kind] || a.kind}),
     E('td', {class:'nw'}, badge(oc, OUTLBL[a.outcome] || a.outcome)), E('td', {class:'nw r', text:fmtMs(a.duration_ms)}),
     E('td', {text:a.portal || ''}), E('td', {text:a.gateway || ''}), E('td', {class:'nw', text:a.protocol || ''}), E('td', {class:'nw', text:a.trigger || ''}),
-    E('td', {class:'nw r', text:a.cycles > 1 ? String(a.cycles) : (a.cycles ? '1' : '')}), E('td', {text:a.error ? a.error.text : ''}));
+    E('td', {class:'nw r', text:a.cycles > 1 ? String(a.cycles) : (a.cycles ? '1' : '')}), E('td', null, a.error ? a.error.text : '', a.error_category ? E('span', {class:'ecat', text:'[' + a.error_category + ']'}) : ''));
   return tr;
 }
 function kvRow(dl, k, v){ if(v == null || v === '') return; dl.appendChild(E('dt', {text:k})); dl.appendChild(E('dd', {text:String(v)})); }
@@ -518,7 +523,9 @@ function detRow(a){
   kvRow(dl, 'Attempt', a.id + ' (' + (KINDLBL[a.kind] || a.kind) + ')'); kvRow(dl, 'Start', a.start); kvRow(dl, 'End', a.end);
   kvRow(dl, 'User', a.user); kvRow(dl, 'Tunnel IP', a.tunnel_ip); kvRow(dl, 'Sources', (a.sources || []).join(', '));
   if(a.outcome === 'cancelled'){ const ce = (a.details || {}).cancel_evidence; kvRow(dl, 'Cancelled', ce === 'explicit' ? 'explicit user cancel (the log has a cancel line)' : ce === 'inferred' ? 'inferred from a user disconnect during the attempt (no explicit cancel line)' : 'evidence not recorded'); }
-  if(a.outcome === 'expired') kvRow(dl, 'Expired', 'downtime over the retry grace period; no reconnection was attempted' + ((a.details || {}).modern_standby ? ' (the PC waited in modern standby)' : ''));
+  if(a.outcome === 'expired') kvRow(dl, 'Expired', (a.details || {}).expired_reason === 'saml-timeout' ? 'the SAML sign-in was not completed before the portal SAML timeout' + ((a.details || {}).saml_timeout_s ? ' (' + a.details.saml_timeout_s + ' s)' : '') : 'downtime over the retry grace period; no reconnection was attempted' + ((a.details || {}).modern_standby ? ' (the PC waited in modern standby)' : ''));
+  if(a.outcome === 'internal') kvRow(dl, 'Internal', 'the client detected the internal network and created no tunnel on purpose; counted as a success');
+  if(a.error_category) kvRow(dl, 'Error category', a.error_category);
   if(a.error){ kvRow(dl, 'Error', a.error.text); kvRow(dl, 'Logged message', a.error.raw); kvRow(dl, a.outcome === 'failed' ? 'Failed at stage' : 'Stage', a.error.stage); }
   const dc = a.disconnect;
   if(dc){ kvRow(dl, 'Disconnect', sec(dc.time) + (dc.reason ? ' - ' + dc.reason : '') + (dc.by_user ? ' (by the user)' : ''));
@@ -593,16 +600,18 @@ function drawStrip(){
     const oi = OUTS.indexOf(a.outcome); if(oi < 0) return;
     const cx = x(a._t), cy = PT + oi * LANE + LANE / 2, col = OUTCOL[a.outcome];
     const ttl = S('title'); ttl.textContent = sec(a.start) + ' | ' + (KINDLBL[a.kind] || a.kind) + ' | ' + (OUTLBL[a.outcome] || a.outcome) + (a.gateway ? ' | ' + a.gateway : '') + (a.error ? ' | ' + a.error.text : '');
-    const m = a.kind === 'auto-restore'
-      ? S('path', {d:'M' + cx + ' ' + (cy - 6) + 'L' + (cx + 6) + ' ' + cy + 'L' + cx + ' ' + (cy + 6) + 'L' + (cx - 6) + ' ' + cy + 'Z', fill:col, 'fill-opacity':'.7', stroke:'#fff', 'stroke-width':'.6', class:'mk', 'data-i':a._i}, ttl)
-      : S('circle', {cx, cy, r:4.5, fill:col, 'fill-opacity':'.7', stroke:'#fff', 'stroke-width':'.6', class:'mk', 'data-i':a._i}, ttl);
+    const sh = KINDSHAPE[a.kind] || 'circle', at = {fill:col, 'fill-opacity':'.7', stroke:'#fff', 'stroke-width':'.6', class:'mk', 'data-i':a._i};
+    const m = sh === 'diamond' ? S('path', Object.assign({d:'M' + cx + ' ' + (cy - 6) + 'L' + (cx + 6) + ' ' + cy + 'L' + cx + ' ' + (cy + 6) + 'L' + (cx - 6) + ' ' + cy + 'Z'}, at), ttl)
+      : sh === 'triangle' ? S('path', Object.assign({d:'M' + cx + ' ' + (cy - 6) + 'L' + (cx + 5.5) + ' ' + (cy + 4.5) + 'L' + (cx - 5.5) + ' ' + (cy + 4.5) + 'Z'}, at), ttl)
+      : sh === 'square' ? S('rect', Object.assign({x:cx - 4.5, y:cy - 4.5, width:9, height:9}, at), ttl)
+      : S('circle', Object.assign({cx, cy, r:4.5}, at), ttl);
     svg.appendChild(m);
   });
   host.appendChild(svg);
 }
 function legend(){
   const l = E('div', {class:'leg'});
-  l.appendChild(E('span', null, E('i', {text:'●'}), 'Login (circle)')); l.appendChild(E('span', null, E('i', {text:'◆'}), 'Auto-restore (diamond)'));
+  KINDS.forEach(k => l.appendChild(E('span', null, E('i', {text:KINDSYM[k]}), KINDLBL[k] + ' (' + KINDSHAPE[k] + ')')));
   OUTS.forEach(o => l.appendChild(E('span', null, E('i', {text:'■', style:'color:' + OUTCOL[o]}), OUTLBL[o] + ' (row ' + (OUTS.indexOf(o) + 1) + ')')));
   l.appendChild(E('span', {class:'dim', text:'Click a mark to open its row.'}));
   return l;
@@ -620,7 +629,7 @@ function syncControls(){
 function refreshTimeline(keepShown){
   if(!tlBuilt) return;
   CUR.list = sortedList(); CUR.items = buildItems(CUR.list); if(!keepShown) CUR.shown = ST.tl.page;
-  const cnt = {}; OUTS.forEach(o => { cnt[o] = 0; }); let inPeriod = 0; const kc = {login:0, 'auto-restore':0};
+  const cnt = {}; OUTS.forEach(o => { cnt[o] = 0; }); let inPeriod = 0; const kc = {}; KINDS.forEach(k => { kc[k] = 0; });
   for(const a of ATT){ if(passes(a, true)){ cnt[a.outcome]++; } }
   const saveKind = ST.tl.kind; ST.tl.kind = KINDS;
   for(const a of ATT){ if(passes(a)){ kc[a.kind]++; } if(passes(a, true)) inPeriod++; }

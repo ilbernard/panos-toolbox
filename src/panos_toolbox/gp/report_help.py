@@ -73,14 +73,17 @@ skipped, truncated or missing; click it for the reasons.</li>
 <p>Number of attempts that started in the period, by outcome and by kind. The same filter is
 available, with more options, in the Connection timeline tab (button below the counters).</p>
 <ul>
-<li><b>Connected</b>: the tunnel came up. <b>Failed</b>: a terminal error ended the attempt
+<li><b>Connected</b>: the tunnel came up. <b>Internal</b>: the client detected that it is on
+the internal network and created no tunnel on purpose (log: "network type is internal", "does
+not need tunnel"); it is a success, not a failure and not a missing tunnel. <b>Failed</b>: a terminal error ended the attempt
 (for an auto-restore: a reconnection was really attempted and failed). <b>Cancelled</b>: the user
 cancelled; most often this is <i>inferred</i> from a user disconnect during the attempt, not read
 from an explicit cancel line (the details say which). <b>Abandoned</b>: the attempt stopped at a
-credential prompt or while waiting for the user and never completed. <b>Expired</b>
-(auto-restores only): the tunnel downtime exceeded the retry grace period, so no reconnection was
-attempted (the PC slept or was offline); the log still ends with "failed retry", but it is not a
-VPN malfunction and not a failure.</li>
+credential prompt or while waiting for the user and never completed. <b>Expired</b>:
+for an auto-restore, the tunnel downtime exceeded the retry grace period, so no reconnection was
+attempted (the PC slept or was offline; the log still ends with "failed retry", but it is not a
+VPN malfunction); for a login, the SAML sign-in in the browser was not completed before the
+portal SAML timeout (the details say which).</li>
 <li>A credential prompt in the middle of an attempt is <b>not</b> a failure: the client first
 tries without a password and asks for one when the portal wants it.</li>
 <li>"In retry storms" counts the attempts of the period that belong to an automatic retry loop;
@@ -156,17 +159,34 @@ bundle. <b>All</b> attempts of the bundle are in the page; the period filter onl
 shown. On opening, the period is the 7 days before the newest log record.</p>
 <ul>
 <li><b>Kinds.</b> <i>Login</i> is a connection attempt (portal pre-login, authentication,
-gateway, tunnel). <i>Auto-restore</i> is an automatic tunnel restore after a network change or
-sleep: no portal contact, only the gateway.</li>
-<li><b>Cycles.</b> The client first tries to log in without a password; when the portal asks for
-credentials the cycle ends at a prompt and a new cycle starts once the user answers. Cycles that
-follow each other within {chain_gap_s} s are chained into ONE attempt; "cycles" is how many
-were chained. A prompt is therefore not a failure. Chaining never crosses portals: a cycle for
-another portal than the previous one starts a new attempt and the earlier one is abandoned.</li>
-<li><b>Outcomes.</b> <i>Connected</i>, <i>failed</i>, <i>cancelled</i> (often inferred from a
-user disconnect, see the details), <i>abandoned</i> (never completed) and, for auto-restores
-only, <i>expired</i>: the downtime exceeded the retry grace period and no reconnection was
-attempted, typically because the PC slept or was offline.</li>
+gateway, tunnel) started by a person or by the client with a user session. <i>Pre-logon</i> is a
+connection made before any user signed in (machine certificate or pre-logon account).
+<i>Auto-reconnect</i> is a new portal discovery started by the client itself (network change,
+sign-out, unlock, rediscovery) with no user action. <i>Auto-restore</i> is an automatic tunnel
+restore after a network change or sleep: no portal contact, only the gateway. The finer cause is
+in the <b>Trigger</b> column, and is <code>unknown</code> when the logs do not say.</li>
+<li><b>How an attempt is delimited.</b> The logs have no explicit "attempt begins" line, so the
+start is inferred from the first marker that opens a cycle: "Portal Processing starts"; for
+attempts without a portal contact, "Network Discover starts" when no attempt is open. A portal
+refresh is not an attempt, and neither are a lock, unlock or wake on their own. "SSO starts" marks
+the first cycle of a new attempt. A failed "Failed to create tunnel" line after the state
+Connected is a late message of a finished tunnel, not a failure.</li>
+<li><b>Cycles and chaining.</b> The client first tries to log in without a password; when the
+portal asks for credentials, a SAML sign-in or a retry, the cycle ends without an outcome and a
+new cycle starts. A cycle is chained to the previous one only if the previous one ended without an
+outcome, in the same process and for the same portal, never between a pre-logon cycle and a user
+cycle, and within the logged SAML timeout or, without one, {chain_gap_s} s. "cycles" is how many
+were chained. A prompt is therefore not a failure. A cycle that does not qualify starts a new
+attempt and the earlier one is abandoned.</li>
+<li><b>Outcomes.</b> <i>Connected</i>, <i>internal</i> (no tunnel needed, a success),
+<i>failed</i>, <i>cancelled</i> (explicit when the log has a cancel line, otherwise inferred from
+a user disconnect, see the details), <i>abandoned</i> (never completed) and <i>expired</i>: the
+SAML sign-in timed out, or, for auto-restores, the downtime exceeded the retry grace period and
+no reconnection was attempted (typically the PC slept or was offline).</li>
+<li><b>Agent-only periods.</b> Where only the agent log (PanGPA) covers a period, attempts are
+derived from the "Dialog Status" transitions and marked with the source agent log. Automatic
+rediscoveries closer than 15 minutes that end the same way are collapsed into one row (the
+details give how many), so a machine that rediscovers every few minutes stays readable.</li>
 <li><b>Retry storms.</b> {storm_min_failures} or more failed logins, each starting at most
 {storm_max_gap_s} s after the previous one, are collapsed into one group row that expands.</li>
 <li><b>Detail.</b> Phase steps exist only where the detailed logs (service and agent logs, which
@@ -177,20 +197,24 @@ first and last record of the attempt.</li>
 </ul>""",
     "tl_chart": """
 <p>Attempts over time for the filtered period. Each mark is one attempt: the row (lane) is its
-<b>outcome</b> (connected, failed, cancelled, abandoned, expired) and the colour repeats it; the
-<b>shape</b> is its kind (circle = login, diamond = auto-restore). Click a mark to jump to its
+<b>outcome</b> (connected, internal, failed, cancelled, abandoned, expired) and the colour repeats
+it; the <b>shape</b> is its kind (circle = login, square = pre-logon, triangle = auto-reconnect,
+diamond = auto-restore), shown in the legend. Click a mark to jump to its
 row in the table. Hover for a short description. Dense stretches (a retry storm) overlap into a
 solid band.</p>""",
     "tl_table": """
 <p>One row per attempt (or per retry storm). Click a column heading to sort; click a row to see its
 details.</p>
 <ul>
-<li><b>Trigger</b>: <code>user-click</code> (the user pressed Connect), <code>sso</code>
-(single sign-on started it; inferred from timing), <code>auto</code> (the service started it),
-<code>restore</code> (auto-restore), <code>unknown</code> (event log only: a click and an
-automatic retry look the same).</li>
-<li><b>Error</b>: the short normalised text; the logged message and the stage are in the
-details. An <i>expired</i> restore shows the grace-period text; the details give the downtime and
+<li><b>Trigger</b>: what started it, as far as the log says: <code>user-click</code> (the
+user pressed Connect), <code>gui-start</code> (the agent started), <code>sign-out</code>,
+<code>rediscovery</code>, <code>network-change</code>, <code>unlock</code>,
+<code>service-start</code>, <code>user-switch</code>, <code>software-upgrade</code>,
+<code>sso</code> (single sign-on), or <code>unknown</code> (a click and an automatic retry
+look the same).</li>
+<li><b>Error</b>: the short normalised text and, in brackets, its category (auth, saml,
+certificate, portal-unreachable, gateway-unreachable, gateway-cert, cancelled, timeout, other),
+which the findings use; the logged message and the stage are in the details. An <i>expired</i> restore shows the grace-period text; the details give the downtime and
 whether the PC waited in modern standby. A <i>cancelled</i> attempt says whether the cancel was
 explicit or inferred from a user disconnect. Manual gateway switches inside a session are listed
 in the details of that session.</li>

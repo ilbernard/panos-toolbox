@@ -532,3 +532,155 @@ def test_failed_restore_keeps_the_specific_error(tmp_path):
     r = restores(build(tmp_path, event=lines))[0]
     assert r["outcome"] == "failed" and r["details"]["retries"] == 2
     assert r["error"]["text"] == "Server certificate verification failed"
+
+
+# ------------------------------------------------------------------ service-log-only flows
+def svc_src(src: int):
+    """A ``svc`` writer with another ``<src>`` number: the engine must not care."""
+    def w(sec, msg, level="Debug", pid=100, tid=200):
+        return svc(sec, msg, level, pid, tid).replace("(1234)", f"({src})", 1)
+    return w
+
+
+def cycle(w, t, *, user=True, saml=False, portal="vpn.example.com", pid=100):
+    """Lines of one portal cycle up to the portal answer."""
+    out = [w(t, "----Portal Processing starts----", pid=pid)]
+    if not user:
+        out.append(w(t + 0.1, "This portal message is from prelogon thread", pid=pid))
+    out.append(w(t + 0.2, f"Portal {portal}, user {'jdoe' if user else 'pre-logon'}, "
+                 "logonDomain ", pid=pid))
+    if saml:
+        out += [w(t + 0.3, "Portal's saml request timeout is 60", pid=pid),
+                w(t + 0.4, "Saml auth", pid=pid)]
+    return out
+
+
+def tunnel_ok(w, t, gw="gw1.example.com"):
+    return [w(t, "----Network Discover starts----"),
+            w(t + 0.1, "NetworkDiscoverThread: network type is external."),
+            w(t + 0.2, "NetworkDiscoverThread: PortalStatus is 1, HasLoggedOnGateway is 1"),
+            w(t + 0.5, f"Tunnel is created with the gateway {gw}"),
+            w(t + 1.0, "--Set state to Connected")]
+
+
+def svc_attempts(tmp_path, lines, **kw):
+    return attempts(build(tmp_path, service=lines, **kw))
+
+
+def test_internal_outcome_is_a_success_class(tmp_path):
+    w = svc
+    lines = cycle(w, 0) + [
+        w(1, "----Network Discover starts----"),
+        w(1.1, "NetworkDiscoverThread: network type is internal."),
+        w(1.2, "NetworkDiscoverThread: PortalStatus is 1, HasLoggedOnGateway is 1"),
+        w(1.3, "gateway gw1.example.com does not need tunnel."),
+        w(1.5, "--Set state to Connected")]
+    a = svc_attempts(tmp_path, lines)
+    assert [(x["kind"], x["outcome"]) for x in a] == [("login", "internal")]
+    assert a[0]["sources"] == ["service_log"]
+
+
+def test_no_dependency_on_the_src_number(tmp_path):
+    base = None
+    for src in (1234, 8450, 7):
+        w = svc_src(src)
+        lines = (cycle(w, 0) + tunnel_ok(w, 2) + cycle(w, 100, saml=True)
+                 + [w(101, "Portal's saml request timeout is 60")])
+        a = svc_attempts(tmp_path, lines)
+        shape = [(x["kind"], x["outcome"], x["cycles"]) for x in a]
+        base = base or shape
+        assert shape == base and shape[0][1] == "connected"
+
+
+def test_saml_cycles_chain_and_timeout_is_expired(tmp_path):
+    w = svc
+    lines = cycle(w, 0, saml=True) + cycle(w, 20, saml=True) + [
+        w(100, "msgtype = disconnect")]
+    a = svc_attempts(tmp_path, lines)
+    assert len(a) == 1 and a[0]["cycles"] == 2
+    assert a[0]["outcome"] == "expired"
+    assert a[0]["details"]["expired_reason"] == "saml-timeout"
+    assert a[0]["error_category"] == "timeout"
+
+
+def test_cycle_beyond_the_saml_timeout_is_not_chained(tmp_path):
+    w = svc
+    a = svc_attempts(tmp_path, cycle(w, 0, saml=True) + cycle(w, 300, saml=True))
+    assert len(a) == 2
+
+
+def test_sso_starts_is_the_first_cycle_of_a_new_attempt(tmp_path):
+    w = svc
+    first = cycle(w, 0, saml=True)
+    second = [w(20, "----Portal Processing starts----"), w(20.1, "SSO starts."),
+              w(20.2, "Portal vpn.example.com, user jdoe, logonDomain ")]
+    a = svc_attempts(tmp_path, first + second)
+    assert len(a) == 2 and a[1]["trigger"] == "sso"
+
+
+def test_pre_logon_is_not_chained_with_user_cycles(tmp_path):
+    w = svc
+    a = svc_attempts(tmp_path, cycle(w, 0, saml=True, user=False) + cycle(w, 10, saml=True))
+    assert [x["kind"] for x in a] == ["pre-logon", "login"]
+    assert a[0]["outcome"] == "abandoned"
+
+
+def test_refresh_is_not_an_attempt(tmp_path):
+    w = svc
+    lines = [w(0, "----Portal refresh configuration starts----"),
+             w(1, "Portal vpn.example.com, user jdoe, logonDomain ")]
+    assert svc_attempts(tmp_path, lines) == []
+
+
+def test_tunnel_creation_failure_after_connected_is_not_a_failure(tmp_path):
+    w = svc
+    lines = cycle(w, 0) + tunnel_ok(w, 2) + [
+        w(30, "Failed to create tunnel to gateway gw1.example.com.")]
+    a = svc_attempts(tmp_path, lines)
+    assert [x["outcome"] for x in a] == ["connected"]
+    assert not any("Failed to create tunnel" in s["text"] for s in a[0]["steps"])
+
+
+def test_certificate_required_is_a_certificate_failure(tmp_path):
+    w = svc
+    lines = cycle(w, 0) + [
+        w(1, "portal status is Client Cert Required."),
+        w(1.1, "ProcessServerPortal failed")]
+    a = svc_attempts(tmp_path, lines)
+    assert a[0]["outcome"] == "failed" and a[0]["error_category"] == "certificate"
+
+
+def test_gateway_credential_cancel_loop_is_one_cancelled_attempt(tmp_path):
+    w = svc
+    lines = cycle(w, 0) + [w(1, "msgtype = gateway-credential-cancel"),
+                           w(2, "msgtype = gateway-credential-cancel")]
+    a = svc_attempts(tmp_path, lines)
+    assert len(a) == 1 and a[0]["outcome"] in ("cancelled", "abandoned")
+
+
+def test_lock_unlock_and_wake_alone_never_start_an_attempt(tmp_path):
+    w = svc
+    lines = [w(0, "Received session change, event type 7"),
+             w(5, "Received session change, event type 8"),
+             w(10, "Wakeup from modern standby")]
+    assert svc_attempts(tmp_path, lines) == []
+
+
+def test_agent_only_attempts_come_from_dialog_status(tmp_path):
+    w = agent
+    lines = [w(0, "Dialog Status is going to change from Disconnected to Connecting."),
+             w(5, "Dialog Status is going to change from Connecting to Connected.")]
+    a = attempts(build(tmp_path, agent_lines=lines))
+    assert len(a) == 1 and a[0]["sources"] == ["agent_log"]
+    assert a[0]["outcome"] == "connected"
+
+
+def test_automatic_rediscoveries_in_agent_only_periods_are_collapsed(tmp_path):
+    w = agent
+    lines = []
+    for i in range(6):
+        t = i * 60
+        lines += [w(t, "Dialog Status is going to change from Connected to Connecting."),
+                  w(t + 5, "Dialog Status is going to change from Connecting to Connected.")]
+    a = attempts(build(tmp_path, agent_lines=lines))
+    assert len(a) < 6

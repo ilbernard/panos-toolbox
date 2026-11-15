@@ -9,41 +9,67 @@ Specification of the logs: ``docs/gp/log-formats.md`` (sections 3 to 5, 9 and 10
 
 What is an attempt
 ------------------
-``kind="login"``
-    A user-visible login/connection attempt. In the event log (``pan_gp_event.log.old`` then
-    ``pan_gp_event.log``, the whole history) a *cycle* starts at ``Started the Portal pre-login``
-    and ends at the first terminal marker: tunnel created, tunnel failed, gateway certificate
-    failure, cancel, authentication rejected, portal or gateway error. The client first tries
-    without a password, so a cycle that ends at a credential prompt (or while waiting for the
-    user) is *chained* to the next cycle when that one starts within ``chain_gap_s`` seconds
-    (default ``CHAIN_GAP_S``): chained cycles are ONE attempt (``cycles`` counts them). Chaining
-    never crosses portals: the portal of a cycle is known a few lines after its start, and when
-    it differs (case-insensitive) from the portal of the chain, the earlier cycles close as
-    ``abandoned`` and the cycle starts a new attempt (an unknown portal does not split). Portal
-    and gateway of an attempt therefore always come from the same chain. A chain that is never
-    completed is ``abandoned``.
-``kind="auto-restore"``
-    An automatic tunnel restore after a network change or sleep (no portal contact). The event
-    log carries it for the whole history (start ``Gateway <name>: Checking network availability
-    and restoring VPN connection...``, success ``Tunnel is restored.``, failure ``Tunnel retry
-    done: failed retry``), so restores come from the event log and are enriched from the service
-    log. After the end of the event log they come from the service log alone (``Show Gateway``
-    start, ``Retry start succeeded`` / ``Tunnel retry done: failed retry`` end).
+Kinds (``Attempt.kind``) and the finer cause in ``Attempt.trigger`` (``unknown`` when the logs do
+not say):
 
-Outcomes: ``connected``, ``failed``, ``cancelled``, ``abandoned`` and, only for
-``auto-restore``, ``expired``. A restore ends with ``Tunnel retry done: failed retry`` in both
-cases; it is ``expired`` when the log says the tunnel downtime exceeded the retry grace period
-and no ``Retry connect failed`` was logged (no reconnection was attempted: the PC slept or was
-offline; ``details.downtime_ms`` and ``details.modern_standby`` say how long and whether
-``Wait in modern standy`` was seen) and ``failed`` when a retry was really attempted and failed
-(the error text keeps the specific reason) or the log gives no reason. ``expired`` is never a
-failure (not in the failure counters, storms or findings about failures). A ``cancelled`` login
-carries ``details.cancel_evidence``: ``explicit`` (a ``User canceled login`` line) or
-``inferred`` (deduced from a user disconnect during the attempt). The log level never decides
-an outcome (``Unable to verify server cert`` and the benign ``Error`` records of the service log
-are not failures); the user-visible ``[Error]`` lines of the event log are the error *text* of
-a failure that a marker already established, or the evidence of a gateway failure after the
-portal login completed.
+``login``
+    A connection attempt with a user session (portal discovery, authentication, gateway, tunnel).
+``pre-logon``
+    A connection made before a user signed in (``This portal message is from prelogon thread`` or
+    ``Portal <host>, user pre-logon``).
+``auto-reconnect``
+    A portal discovery started by the client itself (network change, sign-out, unlock,
+    rediscovery) with no user action.
+``auto-restore``
+    An automatic tunnel restore after a network change or sleep (no portal contact). The event
+    log carries it for the whole history (``Checking network availability and restoring VPN
+    connection...`` / ``Tunnel is restored.`` / ``Tunnel retry done: failed retry``); after the
+    end of the event log it comes from the service log alone.
+
+Where the history comes from. The event log (``pan_gp_event.log[.old]``), when present, is
+authoritative: a cycle starts at ``Started the Portal pre-login`` and ends at the first terminal
+marker. Service-log-only bundles are first-class: the service log (PanGPS) is read by an engine
+that never uses the ``<src>`` number of a record (``Record.code``); every rule matches on the
+message text only, because the number differs between client builds. Details of the service and
+agent logs are attached to event attempts by start time (``match_tol_s``).
+
+Attempt boundaries (service engine). The logs have NO explicit "attempt begins" marker, so the
+start is inferred:
+
+* a portal cycle starts at ``----Portal Processing starts----``;
+* an attempt without a portal contact starts at ``----Network Discover starts----`` when no
+  attempt is open;
+* ``----Portal refresh configuration starts----`` is a refresh, never an attempt; lock, unlock
+  and wake alone never start one;
+* ``SSO starts.`` marks the first cycle of a new attempt, so it blocks chaining;
+* a cycle is chained to the previous one only if the previous one ended without an outcome
+  (credential prompt, SAML prompt, retry), in the same process, for the same portal, never between
+  a pre-logon cycle and a user cycle, and within the logged SAML timeout (``Portal's saml request
+  timeout is N``) or, without one, ``chain_gap_s``. Otherwise the earlier attempt is
+  ``abandoned`` and a new one starts. ``cycles`` counts the chained cycles;
+* ``Failed to create tunnel to gateway X.`` after the state Connected is not a failure.
+
+Agent-only periods. Where only the agent log covers a period, attempts are derived from the
+``Dialog Status is going to change from X to Y`` transitions (``sources=["agent_log"]``).
+Automatic rediscoveries closer than ``AGENT_GROUP_GAP_S`` that end the same way are collapsed into
+one row (``details.collapsed`` is the number of rediscoveries), so the timeline stays readable.
+
+Outcomes (``OUTCOMES``): ``connected``, ``internal``, ``failed``, ``cancelled``, ``abandoned``,
+``expired``. ``internal`` is a success class: the client detected the internal network
+(``network type is internal``) and created no tunnel on purpose (``gateway X does not need
+tunnel``). ``expired`` is never a failure: an auto-restore that ends with ``Tunnel retry done:
+failed retry`` is ``expired`` when the log says the downtime exceeded the retry grace period and
+no ``Retry connect failed`` was logged (``details.downtime_ms``, ``details.modern_standby``),
+and a login is ``expired`` when the SAML prompt timed out (``details.expired_reason`` is
+``saml-timeout``, with ``details.saml_timeout_s``); otherwise a restore that really retried is
+``failed``. A ``cancelled`` login carries ``details.cancel_evidence``: ``explicit`` (a ``User
+canceled login`` line) or ``inferred`` (deduced from a user disconnect during the attempt). The
+log level never decides an outcome (``Unable to verify server cert`` and the benign ``Error``
+records of the service log are not failures).
+
+Errors. ``Attempt.error`` keeps the literal message and the stage; ``Attempt.error_category`` is
+one of ``CATEGORIES`` (auth, saml, certificate, portal-unreachable, gateway-unreachable,
+gateway-cert, cancelled, timeout, other; empty without error) and is what the findings use.
 
 Detail enrichment: where the verbose logs overlap (``PanGPS*.log`` about the last 2 or 3 days,
 ``PanGPA.log``) the attempt gets ordered ``steps`` (phase steps) from all sources; an attempt
@@ -71,8 +97,8 @@ is no time zone conversion. Keys::
         "limitations": [text, ...]
       },
       "summary": {
-        "total", "by_outcome": {...}, "by_kind": {"login": {...}, "auto-restore": {...}},
-        "per_day": [{"date", "login": {...outcomes}, "auto-restore": {...}}],
+        "total", "by_outcome": {...}, "by_kind": {<kind>: {...}},
+        "per_day": [{"date", <kind>: {...outcomes}}],
         "top_errors": [{"text", "count", "first", "last", "kind", "raw_example"}],
         "with_detail", "excluding_storms": {"total", "by_outcome"}
       },
@@ -82,19 +108,20 @@ is no time zone conversion. Keys::
 
 An attempt::
 
-    {"id": "a0001", "kind": "login"|"auto-restore", "start", "end", "duration_ms",
+    {"id": "a0001", "kind": one of KINDS, "start", "end", "duration_ms",
      "outcome", "portal", "gateway", "protocol": "IPSec"|"SSL"|"", "user", "trigger",
      "error": {"text": normalised short text, "raw": logged message, "stage": phase} or null,
+     "error_category": one of CATEGORIES or "",
      "cycles": n, "tunnel_ip", "has_detail": bool, "sources": ["event_log", "service_log",
      "agent_log"], "storm": id or null,
      "disconnect": {"time", "reason", "session_ms", "by_user", ...} or null,
      "details": {...},                       # kind specific facts (restore cause, retries ...)
      "steps": [{"ts", "phase", "text", "source", "level", "count"?, "until"?}]}  # detail only
 
-``trigger``: ``user-click`` (PanGPA click or service ``user clicked connect button``), ``sso``
-(``SSO starts.`` within 2 s before the start; an inference), ``auto`` (service portal request
-without a click), ``restore`` (auto-restore) or ``unknown`` (event log only: a manual click or
-an automatic retry cannot be told apart). ``details.outcome_mismatch`` is present when the
+``trigger``: what started the attempt, as the logs say: ``user-click`` (PanGPA click or service
+``user clicked connect button``), ``sso`` (``SSO starts.``), ``gui-start``, ``sign-out``,
+``rediscovery``, ``network-change``, ``unlock``, ``service-start``, ``user-switch``,
+``software-upgrade``, ``restore`` (auto-restore) or ``unknown``. ``details.outcome_mismatch`` is present when the
 detailed logs disagree with the event log.
 
 Retry storms: ``STORM_MIN_FAILURES`` failed login attempts, each starting at most
@@ -127,7 +154,12 @@ TOP_ERRORS = 10
 
 KIND_LOGIN = "login"
 KIND_RESTORE = "auto-restore"
-OUTCOMES = ("connected", "failed", "cancelled", "abandoned", "expired")
+KIND_PRELOGON = "pre-logon"
+KIND_RECONNECT = "auto-reconnect"
+KINDS = (KIND_LOGIN, KIND_PRELOGON, KIND_RECONNECT, KIND_RESTORE)
+OUTCOMES = ("connected", "internal", "failed", "cancelled", "abandoned", "expired")
+CATEGORIES = ("auth", "saml", "certificate", "portal-unreachable", "gateway-unreachable",
+              "gateway-cert", "cancelled", "timeout", "other")
 PHASES = (
     "trigger", "portal-prelogin", "portal-auth", "network-discovery", "gateway-selection",
     "gateway-prelogin", "gateway-login", "tunnel", "connected", "hip", "disconnect",
@@ -197,6 +229,7 @@ class Attempt:
     sources: list[str] = field(default_factory=list)
     id: str = ""
     storm: int | None = None
+    error_category: str = ""
     _post: list[Step] = field(default_factory=list, repr=False)   # steps after the end
     _next_restore: Attempt | None = field(default=None, repr=False)
 
@@ -231,7 +264,7 @@ class Attempt:
             "trigger": self.trigger, "error": error, "cycles": self.cycles,
             "tunnel_ip": self.tunnel_ip, "has_detail": self.has_detail,
             "sources": sorted(self.sources, key=_SRC_ORDER.index), "storm": self.storm,
-            "disconnect": disc, "details": self.details, "steps": steps,
+            "error_category": self.error_category, "disconnect": disc, "details": self.details, "steps": steps,
         }
 
 
@@ -531,6 +564,9 @@ class _EventEngine:
         if self.cur is not None:
             self.cur.last = ts
             self._close_cycle()
+        if self.chain:          # a service start/stop ends every open chain (another process)
+            self._finalise(self.chain, "abandoned")
+            self.chain = []
         if self.restore is not None:
             self._end_restore(ts, "abandoned", "service restarted")
         if code == "SVC_STOP" and self.sess is not None:
@@ -944,16 +980,15 @@ class _EventEngine:
             self.sess = _Session(att, ts)
             self.last_connected = att
 
-
 # ---------------------------------------------------------------------------- service log
 @dataclass
 class _Detail:
-    """An attempt seen in the verbose logs (PanGPS block chain and/or PanGPA click)."""
+    """An attempt seen in the verbose logs (PanGPS engine, PanGPA dialog states)."""
 
     kind: str
     start: datetime
     end: datetime | None = None
-    outcome: str = ""             # connected | failed | cancelled | abandoned | expired | ""
+    outcome: str = ""             # one of OUTCOMES or "" (unknown)
     trigger: str = ""
     portal: str = ""
     gateway: str = ""
@@ -961,51 +996,148 @@ class _Detail:
     protocol: str = ""
     tunnel_ip: str = ""
     error_raw: str = ""
+    error_stage: str = ""
+    category: str = ""
     cycles: int = 1
     steps: list[Step] = field(default_factory=list)
     sources: set[str] = field(default_factory=set)
     disconnect: dict | None = None
     details: dict = field(default_factory=dict)
-    portal_outcome: str = ""      # outcome as seen by the service log
-    ui_outcome: str = ""          # outcome as seen by the agent
+    ui_outcome: str = ""          # settled UI state seen by the agent
+    i0: int = 0                   # record index range in the kept service records
+    i1: int = 0
 
 
+# Messages of the service log that matter. Everything is matched on the TEXT only: the
+# ``<src>`` number of the record prefix changes between client builds and is never used.
+_S_RULES = [
+    ("BANNER", r"#{3,} Start PanGPS service \(ver: ([\w.\-]+)\)"),
+    ("SHUTDOWN", r"Received shutdown message"),
+    ("EXIT", r"PanGPS service exits"),
+    ("MSGTYPE", r"msgtype = ([\w-]+)\s*$"),
+    ("PSTART", r"----Portal Processing starts----"),
+    ("REFRESH", r"----Portal refresh configuration starts----"),
+    ("NDSTART", r"----Network Discover starts----"),
+    ("SSO", r"SSO starts\."),
+    ("SKIPSAML", r"Skip portal prelgoin for saml"),
+    ("PRELOGON_MSG", r"This portal message is from prelogon thread"),
+    ("PORTAL_USER", r"Portal (\S+), user (\S*), logonDomain"),
+    ("COOKIE", (r"(?:Unserialized|Serialize) (?:non-empty|empty) cookie for portal (\S+) "
+                r"and (?:user (\S+)|pre-logon user)")),
+    ("PRELOGIN_FAIL", r"Failed to pre-login to the portal (\S+?) with"),
+    ("CACHE_ONLY", r"ProcessServerPortal: szCacheOnly: (\S+) bRetrieveCacheOnly: (\d)"),
+    ("CLICK", r"AgentProxyAutoStart: user clicked connect button"),
+    ("AUTHM", r"Portal auth method: (\w+), auth src: (.*)$"),
+    ("SAMLTO", r"Portal's saml request timeout is (\d+)"),
+    ("SAMLM", r"Portal's saml auth method (\w+)"),
+    ("BROWSER", r"Prelogin use-default-browser = (yes|no)"),
+    ("AUTH_EMPTY", r"Auth failed empty password for portal"),
+    ("SAMLPROMPT", r"Saml auth$"),
+    ("SAMLERR", r"saml-auth-error is (\S.*?)\s*$"),
+    ("PSTATUS", r"portal status is (.*?)\.?$"),
+    ("PFAILED", r"ProcessServerPortal failed"),
+    ("CACHED", r"Cached portal is validated"),
+    ("STATE", r"--Set state to (.*?)\s*$"),
+    ("NETTYPE", r"NetworkDiscoverThread: network type is (internal|external)\."),
+    ("DISCOK", r"NetworkDiscoverThread: PortalStatus is (\d), HasLoggedOnGateway is (\d)"),
+    ("NOTUN", r"gateway (\S+) does not need tunnel"),
+    ("DISCFAIL", r"NetworkDiscoverThread: failed to discover (internal|external) network"),
+    ("NOGW", r"number of successfully returned gateways is 0"),
+    ("GWCANCEL", r"User canceled login to gateway (\S+?)\.?$"),
+    ("RETRYND", r"Retry network discovery for non-OnDemand mode"),
+    ("GWAUTH", r"Gateway auth method: (\w+), auth src: (.*)$"),
+    ("GWSAML", r"send saml-pre-login to UI"),
+    ("TUNOK", r"tunnel to (\S+) connected"),
+    ("TUNCREATED", r"Tunnel is created with the gateway (\S+)"),
+    ("TUNFAIL", r"Failed to create tunnel to gateway (\S+?)\.?$"),
+    ("SHOWGW", r"Show Gateway (.+?): Checking network availability"),
+    ("GWERR", r"Show Gateway (.+?): (The network connection is unreachable.*)$"),
+    ("DISCONNECT", r"Disconnect\((.*?)\) called"),
+    ("USERDISC", r"----Tunnel User Diconnecting starts----"),
+    ("TSLOG", r"TSLog: Set error_stage = (.*?), error = (.*?)\s*$"),
+    ("SESSION", r"Received session change, event type (\d+)"),
+    ("LOGOFF", r"User \S+ logs off on session"),
+    ("WAKE", r"Wakeup from modern standby|Waked up from modern standby|Received resume"),
+    ("SLEEP", r"Received sleep event"),
+    ("RETRYFAIL", r"Retry connect failed (\w+) time"),
+    ("RETRYDONE", r"Tunnel retry done: failed retry"),
+    ("GRACE", r"Tunnel downtime \((\d+) milliseconds\) exceeds retry grace period \((\d+) seconds\)"),
+    ("DOWNTIME", r"Tunnel downtime is (\d+) miliseconds"),
+    ("STANDBY", r"Wait in modern standy until wakeup"),
+    ("ROUTECHG", r"NetworkConnectionMonitorThread: route change detected|Network changed, break from"),
+    ("PRELOGON_THREAD", r"PrelogonThread starts"),
+    ("UPGRADE", r"msgtype = software-upgrade"),
+    ("GWSEL", r"(?:One external gateway|Try to create tunnel with gateway) ([^\s,]+)"),
+    ("SETIP", r"Set preferred IP (\S+) for gateway"),
+    ("IPSEC", r"Trying to do ipsec connection"),
+]
+_S_ALT = re.compile("|".join(f"(?P<{c}>{p})" for c, p in _S_RULES))
+_S_PAT = {c: re.compile(p) for c, p in _S_RULES}
+_FLOW_CODES = frozenset({"SSO", "SKIPSAML", "PRELOGON_MSG", "PORTAL_USER", "COOKIE", "PRELOGIN_FAIL",
+                        "AUTHM", "SAMLTO", "SAMLM", "BROWSER", "AUTH_EMPTY", "SAMLPROMPT", "SAMLERR",
+                        "PSTATUS", "PFAILED", "CACHED"})
+_SKIP_MSGTYPES = ("status", "pan_msg_ping")
+
+# Lines that become steps (the rule table below renders them) or feed the detail records.
 _SVC_KEEP = re.compile(
-    r"(?:msgtype = |----|--Set state to |ProcessServerPortal: sz|AgentProxyAutoStart|"
-    r"Portal \S+, user |REGION-PRIO, region code|Portal authentication-message|"
-    r"Portal auth method|Auth failed|portal status is |Portal config digest matched|"
-    r"Restored cached portal|Connect method is|Force discovery|Discover external|"
-    r"One external gateway|pretunnel latency|Auth message is|Using portal's user|"
+    r"(?:ProcessServerPortal|AgentProxyAutoStart|Portal \S+, user |REGION-PRIO, region code|"
+    r"Portal authentication-message|Portal auth method|Auth failed|portal status is |"
+    r"Portal config digest matched|Restored cached portal|Connect method is|Force discovery|"
+    r"Discover external|One external gateway|pretunnel latency|Auth message is|Using portal's user|"
     r"Gateway auth method|Actual user for gateway|Set preferred IP|Configured MTU|"
     r"Encryption method|Trying to do ipsec|Connected ipsec|tunnel to \S+ connected|"
-    r"sent HIP report  to|Disconnect\(|Logging out gateway|logout: |User \S+ logs off|"
-    r"Received (?:sleep|resume)|Wakeup from|Waked up|Wait in modern|Show Gateway|"
-    r"Network changed|NetworkConnectionMonitorThread: route change|"
+    r"sent HIP report  to|Logging out gateway|logout: |Received (?:sleep|resume)|Wakeup from|"
+    r"Waked up|Wait in modern|Show Gateway|Network changed|NetworkConnectionMonitorThread: route change|"
     r"Received network change event|Retry |Tunnel (?:downtime|retry)|Before ProcMonitor|"
-    r"failed to receive keep alive|Unable to verify server cert|#+ Start PanGPS|"
-    r"PanGPS service exits|Failed to create tunnel|failed to create tunnel)")
+    r"failed to receive keep alive|Unable to verify server cert|"
+    r"Saml auth|saml auth status|Portal's saml|Prelogin use-default|Skip portal prelgoin|"
+    r"Failed to pre-login|Failed to create tunnel|failed to create tunnel|TSLog|"
+    r"Troubleshooting log|User canceled|NetworkDiscoverThread: (?:network type|failed|PortalStatus)|"
+    r"Retry network|Disconnect: |number of successfully|HandleGatewayChallenge|"
+    r"Tunnel is created|gateway \S+ does not need tunnel|Internal host detection)")
 
-# (pattern, phase, level, text template with {0}.. groups)
+# (pattern, phase, level, text template with {0}.. groups). Texts mirror what the log says.
 _SVC_RULES = [
     (r"AgentProxyAutoStart: user clicked connect button", "trigger", "info",
      "Service received the user's Connect request"),
+    (r"----Portal Processing starts----", "trigger", "info", "Portal request processing starts"),
     (r"----Portal Pre-login starts----", "portal-prelogin", "info", "Portal pre-login starts"),
+    (r"Skip portal prelgoin for saml", "portal-prelogin", "info",
+     "Portal pre-login skipped for SAML (log: Skip portal prelgoin for saml)"),
     (r"Portal (\S+), user (\S*), logonDomain", "portal-prelogin", "info",
      "Portal {0}, user {1}"),
     (r"REGION-PRIO, region code is (\S+)", "portal-prelogin", "info", "Region code {0}"),
+    (r"Portal's saml auth method (\w+)", "portal-prelogin", "info",
+     "Portal SAML authentication method {0}"),
+    (r"Portal's saml request timeout is (\d+)", "portal-prelogin", "info",
+     "Portal SAML request timeout is {0} s"),
+    (r"Prelogin use-default-browser = (yes|no)", "portal-prelogin", "info",
+     "Prelogin use-default-browser = {0}"),
     (r"Portal authentication-message is (.*)", "portal-prelogin", "info", "Portal prompt: {0}"),
     (r"Unable to verify server cert\. Result is (.*?)\s*$", "portal-prelogin", "info",
      "Certificate pre-check note (not an error): {0}"),
     (r"----Portal Login starts----", "portal-auth", "info", "Portal login starts"),
     (r"Portal auth method: (.*)$", "portal-auth", "info", "Portal authentication: {0}"),
+    (r"Saml auth$", "portal-auth", "warn", "SAML authentication requested (log: Saml auth)"),
+    (r"saml-auth-error is (\S.*?)\s*$", "portal-auth", "error", "SAML authentication error: {0}"),
     (r"Auth failed empty password for portal", "portal-auth", "warn",
      "Authentication with an empty password failed: credentials requested"),
     (r"Auth failed for portal", "portal-auth", "error", "Portal rejected the credentials"),
+    (r"Auth failed empty password for gateway (\S+)", "gateway-login", "warn",
+     "Gateway {0}: authentication with an empty password failed"),
+    (r"ProcessServerPortal failed", "portal-auth", "warn", "ProcessServerPortal failed"),
     (r"portal status is (.*?)\.?$", "portal-auth", "info", "Portal status: {0}"),
+    (r"Cached portal is validated", "portal-auth", "info", "Cached portal configuration validated"),
     (r"Restored cached portal config", "portal-auth", "info",
      "Cached portal configuration used"),
     (r"Connect method is (.*)$", "portal-auth", "info", "Connect method: {0}"),
+    (r"Failed to pre-login to the portal (\S+)", "portal-prelogin", "error",
+     "Failed to pre-login to the portal {0}"),
+    (r"TSLog: Set error_stage = (.*?), error = (.*?)\s*$", "portal-auth", "error",
+     "Troubleshooting report: stage {0}, error {1}"),
     (r"----Network Discover starts----", "network-discovery", "info", "Network discovery starts"),
+    (r"NetworkDiscoverThread: network type is (internal|external)\.", "network-discovery", "info",
+     "Network type is {0}"),
     (r"Discover external gateway: gateway count is (\d+)", "gateway-selection", "info",
      "External gateway count: {0}"),
     (r"One external gateway (\S+), priority=(\d+)", "gateway-selection", "info",
@@ -1018,8 +1150,20 @@ _SVC_RULES = [
     (r"Using portal's user credential to login to gateway", "gateway-login", "info",
      "Gateway login reuses the portal credentials"),
     (r"Gateway auth method: (.*)$", "gateway-login", "info", "Gateway authentication: {0}"),
+    (r"send saml-pre-login to UI", "gateway-login", "warn",
+     "Gateway SAML prompt sent to the UI (log: send saml-pre-login to UI)"),
     (r"Actual user for gateway login is (\S+)", "gateway-login", "info",
      "Gateway login user: {0}"),
+    (r"User canceled login to gateway (\S+?)\.?$", "gateway-login", "warn",
+     "User canceled login to gateway {0}"),
+    (r"gateway (\S+) does not need tunnel", "network-discovery", "ok",
+     "Gateway {0} does not need a tunnel (internal network)"),
+    (r"NetworkDiscoverThread: failed to discover (internal|external) network", "network-discovery",
+     "error", "Failed to discover the {0} network"),
+    (r"number of successfully returned gateways is 0", "gateway-selection", "error",
+     "No gateway answered (number of successfully returned gateways is 0)"),
+    (r"Retry network discovery for non-OnDemand mode", "network-discovery", "info",
+     "Retry network discovery (non-OnDemand mode)"),
     (r"----Tunnel Creation starts----", "tunnel", "info", "Tunnel creation starts"),
     (r"Set preferred IP (\S+) for gateway", "tunnel", "info", "Preferred IP set: {0}"),
     (r"Configured MTU is (\d+)", "tunnel", "info", "MTU {0}"),
@@ -1027,10 +1171,14 @@ _SVC_RULES = [
     (r"Trying to do ipsec connection to", "tunnel", "info", "IPSec tunnel: connecting"),
     (r"Connected ipsec to", "tunnel", "ok", "IPSec tunnel established"),
     (r"tunnel to \S+ connected", "tunnel", "ok", "Tunnel is up"),
+    (r"Tunnel is created with the gateway (\S+)", "tunnel", "ok", "Tunnel is created with {0}"),
     (r"Failed to create tunnel|failed to create tunnel", "tunnel", "error",
      "Tunnel creation failed"),
+    (r"Show Gateway (.+?): (The network connection is unreachable.*)$", "gateway-prelogin", "error",
+     "Gateway {0}: {1}"),
     (r"sent HIP report  to", "hip", "info", "HIP report sent to the gateway"),
     (r"Disconnect\((.*)\) called", "disconnect", "info", "Disconnect requested (reason: {0})"),
+    (r"----Tunnel User Diconnecting starts----", "disconnect", "warn", "User disconnect requested"),
     (r"Logging out gateway, reason is (User logs off)$", "disconnect", "info",
      "Logging out of the gateway (reason: {0})"),
     (r"logout: user=", "disconnect", "info", "Gateway logout sent"),
@@ -1042,7 +1190,8 @@ _SVC_RULES = [
      "Waiting in modern standby until wake-up"),
     (r"NetworkConnectionMonitorThread: route change detected", "restore", "info",
      "Network route change detected"),
-    (r"Network changed, break from ProcMonitor", "restore", "warn", "Network changed: connection monitor interrupted"),
+    (r"Network changed, break from ProcMonitor", "restore", "warn",
+     "Network changed: connection monitor interrupted"),
     (r"Show Gateway (.+?): Checking network availability", "restore", "info",
      "Restoring the tunnel to gateway {0} when the network is available"),
     (r"Received network change event during retry network checking", "restore", "info",
@@ -1059,47 +1208,15 @@ _SVC_RULES = [
 _SVC_RULES = [(re.compile("^(?:" + p + ")"), ph, lv, tx) for p, ph, lv, tx in _SVC_RULES]
 _SVC_STATE_PHASE = {
     "Retrieving configuration...": "portal-auth", "Discovering network...": "network-discovery",
+    "Discovery complete": "network-discovery",
     "Connecting...": "tunnel", "Connected": "connected", "Restoring VPN Connection": "restore",
     "Disconnecting...": "disconnect", "Disconnected": "disconnect",
     "OnDemand mode.": "disconnect", "User logs off": "disconnect",
 }
 _RE_STATE = re.compile(r"^--Set state to (.*?)\s*$")
-_RE_PORTAL_USER = re.compile(r"^Portal (\S+), user (\S*), logonDomain")
 _RE_GATEWAY = re.compile(r"^(?:One external gateway|Try to create tunnel with gateway) ([^\s,]+)")
 _RE_SET_IP = re.compile(r"^Set preferred IP (\S+) for gateway")
-_RE_SHOW_GW = re.compile(r"^Show Gateway (.+?): Checking network availability")
-_RE_CACHE_ONLY = re.compile(r"^ProcessServerPortal: szCacheOnly: (\S+) bRetrieveCacheOnly: (\d)")
-_RE_DOWNTIME = re.compile(r"^Tunnel downtime is (\d+) miliseconds")
-_RE_GRACE = re.compile(r"^Tunnel downtime \((\d+) milliseconds\) exceeds retry grace period "
-                       r"\((\d+) seconds\)")
-_END_STATES = ("Disconnected", "OnDemand mode.", "User logs off")
-
-
-class _Block:
-    __slots__ = (
-        "a",
-        "b",
-        "cache_only",
-        "click",
-        "end_ts",
-        "kind",
-        "msgtype",
-        "pid",
-        "progress",
-        "result",
-        "short",
-        "ts",
-    )
-
-    def __init__(self, kind: str, a: int, ts: datetime, pid: int):
-        self.kind, self.a, self.b, self.ts, self.pid = kind, a, a, ts, pid
-        self.end_ts = ts
-        self.msgtype = ""
-        self.cache_only = False
-        self.click = False
-        self.progress = False
-        self.result = ""        # connected | prompt | failed | ended | abandoned
-        self.short = ""
+_RE_UPGRADE_VER = re.compile(r"[\d.]+")
 
 
 def _svc_step(r: Record, source: str, login: bool = False) -> Step | None:
@@ -1115,7 +1232,7 @@ def _svc_step(r: Record, source: str, login: bool = False) -> Step | None:
         if login and phase in ("disconnect", "restore"):
             phase = "ui"
         return Step(r.ts, phase, f"Client state: {st}", source,
-                    "ok" if st == "Connected" else "info")
+                    "ok" if st in ("Connected", "Discovery complete") else "info")
     for rx, phase, level, text in _SVC_RULES:
         mm = rx.match(m)
         if mm:
@@ -1126,220 +1243,738 @@ def _svc_step(r: Record, source: str, login: bool = False) -> Step | None:
     return None
 
 
-def _scan_service(recs: list[Record], chain_gap_s: float, hip_window_s: float) -> list[_Detail]:
-    """Segment the service log into kind A (portal login) chains and kind B (auto-restore)."""
-    blocks: list[_Block] = []
-    last_msgtype: dict = {}
-    cur: _Block | None = None
-    last_sleep: datetime | None = None
-    n = len(recs)
+def _scode(msg: str):
+    m = _S_ALT.match(msg)
+    if not m:
+        return "", None
+    code = m.lastgroup
+    return code, _S_PAT[code].match(msg)
 
-    def close(blk: _Block | None, idx: int, ts: datetime, result: str) -> None:
-        if blk is None:
+
+def _read_service(bundle, st: ParseStats) -> tuple[list[Record], list[str]]:
+    """Kept records of the service log in chronological file order.
+
+    No level is skipped (a marker can be logged at another level in another build); records
+    are filtered on their message text only.
+    """
+    names = bundle.rotation(SERVICE_STEM)
+    recs: list[Record] = []
+    used: list[str] = []
+    for name in names:
+        text = bundle.read_text(name, "timeline details")
+        if not text:
+            continue
+        used.append(name)
+        for r in iter_records(text, name, stats=st):
+            m = r.msg
+            if m.startswith("msgtype = ") and m[10:].strip() in _SKIP_MSGTYPES:
+                continue
+            if r.level == "Error" or _S_ALT.match(m) or _SVC_KEEP.match(m):
+                recs.append(r)
+    return recs, used
+
+
+# ---------------------------------------------------------------------------- service engine
+class _PC:
+    """One portal cycle of the service log (``----Portal Processing starts----``)."""
+
+    __slots__ = (
+        "auth_empty",
+        "authm",
+        "browser",
+        "cache_only",
+        "cached",
+        "err",
+        "idx",
+        "last",
+        "msgtype",
+        "pid",
+        "portal",
+        "prelogin_fail",
+        "prelogon",
+        "prompt_ts",
+        "refresh",
+        "retry",
+        "saml",
+        "saml_timeout",
+        "samlerr",
+        "skip_saml",
+        "sso",
+        "status",
+        "tid",
+        "ts",
+        "tslog",
+        "user",
+    )
+
+    def __init__(self, ts: datetime, idx: int, pid: int, tid: int, msgtype: str):
+        self.ts, self.idx, self.pid, self.tid, self.msgtype = ts, idx, pid, tid, msgtype
+        self.last = ts
+        self.prelogon = self.sso = self.skip_saml = self.refresh = False
+        self.auth_empty = self.retry = self.cached = self.saml = self.prelogin_fail = False
+        self.status = self.portal = self.user = self.authm = self.browser = self.err = ""
+        self.samlerr = ""
+        self.cache_only = False
+        self.tslog: tuple | None = None
+        self.saml_timeout: int | None = None
+        self.prompt_ts: datetime | None = None
+
+    def result(self) -> str:
+        """failed | portal_ok | retry | prompt | open: how the cycle ended."""
+        if self.samlerr or self.prelogin_fail or self.status in ("Invalid portal", "Client Cert Required"):
+            return "failed"
+        if self.status == "Connected" or self.cached:
+            return "portal_ok"
+        if self.retry:
+            return "retry"
+        if self.auth_empty or self.saml or self.status == "User authentication failed":
+            return "prompt"
+        return "open"
+
+
+class _Open:
+    """An attempt being assembled by the service engine."""
+
+    __slots__ = ("cancel_n", "cancel_ts", "cyc", "d", "gw_prompt", "internal", "last_cancel_gw",
+                 "last_ts", "net", "pending", "pid", "prelogon", "samlto")
+
+    def __init__(self, d: _Detail, pid: int, prelogon: bool):
+        self.d, self.pid, self.prelogon = d, pid, prelogon
+        self.cyc: list[_PC] = []
+        self.last_ts = d.start
+        self.internal = False        # network type internal seen in this attempt
+        self.net = ""
+        self.gw_prompt = False
+        self.pending = ""            # "cancelled" while a gateway prompt loop is open
+        self.cancel_n = 0
+        self.cancel_ts: datetime | None = None
+        self.last_cancel_gw = ""
+        self.samlto: int | None = None
+
+
+def _norm_portal(p: str) -> str:
+    return p.rstrip(".").lower()
+
+
+class _SvcEngine:
+    """Segmentation of the service log into attempts (text markers only, see the module docstring)."""
+
+    def __init__(self, recs: list[Record], chain_gap_s: float, hip_window_s: float):
+        self.recs = recs
+        self.chain_gap = chain_gap_s
+        self.hip_window = hip_window_s
+        self.out: list[_Detail] = []
+        self.open: _Open | None = None
+        self.pid: int | None = None
+        self.dead: set[int] = set()
+        self.tcyc: dict = {}
+        self.msgtype: dict = {}
+        self.ver = ""
+        self.prev_ver = ""
+        self.banner_ts: datetime | None = None
+        self.session: dict = {}
+        self.hello_ts: dict = {}
+        self.click_ts: dict = {}
+        self.last_disc: tuple | None = None
+        self.last_route: datetime | None = None
+        self.last_wake: datetime | None = None
+        self.last_logoff: datetime | None = None
+        self.restore: _Detail | None = None
+        self.rst: dict = {}
+        self.last_done: _Open | None = None
+        self.sso_seen = 0
+        self.stats = {"cycles": 0, "chained": 0, "sso_follow_up": 0, "sso_first": 0}
+
+    # ------------------------------------------------------------------ helpers
+    def _lookahead(self, i: int, c: _PC) -> None:
+        recs, n = self.recs, len(self.recs)
+        r0 = recs[i]
+        j = i + 1
+        while j < n and j < i + 90:
+            r = recs[j]
+            j += 1
+            if r.pid != r0.pid or r.tid != r0.tid:
+                continue
+            code, m = _scode(r.msg)
+            if code in ("PSTART", "REFRESH", "MSGTYPE"):
+                break
+            if code == "SSO":
+                c.sso = True
+            elif code == "SKIPSAML":
+                c.skip_saml = True
+            elif code == "PRELOGON_MSG":
+                c.prelogon = True
+            elif code == "CACHE_ONLY":
+                c.cache_only = m.group(1) == "yes" or m.group(2) == "1"
+            elif code == "PORTAL_USER" and m.group(2) == "pre-logon":
+                c.prelogon = True
+                c.user = c.user or "pre-logon"
+
+    def _flow(self, c: _PC, code: str, m, r: Record) -> None:
+        c.last = r.ts
+        if code == "SSO":
+            c.sso = True
+        elif code == "SKIPSAML":
+            c.skip_saml = True
+        elif code == "PORTAL_USER":
+            c.portal = c.portal or m.group(1)
+            c.user = m.group(2) if m.group(2) != "pre-logon" else c.user
+        elif code == "COOKIE":
+            c.portal = c.portal or m.group(1).rstrip(".")
+            if m.group(2) and not c.user:
+                c.user = unquote(m.group(2)).rstrip(".")
+        elif code == "PRELOGIN_FAIL":
+            c.prelogin_fail = True
+            c.portal = c.portal or m.group(1).rstrip(".")
+            c.err = r.msg
+        elif code == "AUTHM":
+            c.authm = f"{m.group(1)} ({m.group(2).strip()})"
+            if m.group(1) == "saml":
+                c.saml = True
+        elif code == "SAMLTO":
+            c.saml_timeout = int(m.group(1))
+        elif code == "SAMLM":
+            c.saml = True
+            c.prompt_ts = c.prompt_ts or r.ts
+        elif code == "BROWSER":
+            c.browser = "embedded browser" if m.group(1) == "no" else "default browser"
+        elif code == "AUTH_EMPTY":
+            c.auth_empty = True
+            c.prompt_ts = r.ts
+        elif code == "SAMLPROMPT":
+            c.saml = True
+            c.prompt_ts = r.ts
+        elif code == "SAMLERR":
+            c.samlerr = m.group(1)
+            c.err = f"saml-auth-error is {m.group(1)}"
+        elif code == "PSTATUS":
+            c.status = m.group(1).strip()
+            if c.status in ("Invalid portal", "Client Cert Required"):
+                c.err = r.msg
+        elif code == "PFAILED":
+            c.retry = True
+        elif code == "CACHED":
+            c.cached = True
+
+    def _unlock_ctx(self, ts: datetime) -> str:
+        un = self.session.get(8)
+        if un is not None and 0 <= (ts - un).total_seconds() <= 180:
+            return "unlock"
+        return ""
+
+    def _cycle_trigger(self, c: _PC) -> str:
+        pid_h = self.hello_ts.get(c.pid)
+        clk = self.click_ts.get(c.pid)
+        if clk is not None and 0 <= (c.ts - clk).total_seconds() <= 3:
+            return "user-click"
+        if c.prelogon:
+            return "service-start" if self.banner_ts and (c.ts - self.banner_ts).total_seconds() <= 120 \
+                else "unknown"
+        if self.ver and self.prev_ver and self.ver != self.prev_ver and self.banner_ts and \
+                0 <= (c.ts - self.banner_ts).total_seconds() <= 120:
+            return "software-upgrade"
+        if pid_h is not None and 0 <= (c.ts - pid_h).total_seconds() <= 8:
+            return "gui-start"
+        return self._unlock_ctx(c.ts) or ("sso" if c.sso else "unknown")
+
+    # ------------------------------------------------------------------ attempt lifecycle
+    def _new(self, kind: str, ts: datetime, pid: int, idx: int, prelogon: bool = False) -> _Open:
+        d = _Detail(kind, ts, sources={SRC_SERVICE}, i0=idx, i1=idx)
+        d.cycles = 0
+        o = _Open(d, pid, prelogon)
+        self.open = o
+        return o
+
+    def _done(self, o: _Open, outcome: str, ts: datetime, idx: int, raw: str = "", stage: str = "",
+              category: str = "") -> None:
+        d = o.d
+        d.outcome, d.end, d.i1 = outcome, ts, idx
+        if raw:
+            d.error_raw, d.error_stage = raw, stage
+        if category:
+            d.category = category
+        d.cycles = len(o.cyc) or d.details.get("discovery_rounds", 1)
+        d.portal = d.portal or next((c.portal for c in o.cyc if c.portal), "")
+        d.user = d.user or next((c.user for c in reversed(o.cyc) if c.user), "")
+        browsers = [c.browser for c in o.cyc if c.browser]
+        if browsers:
+            d.details["saml_browser"] = browsers[-1]
+        if any(c.saml for c in o.cyc):
+            d.details["saml"] = True
+        if o.samlto:
+            d.details["saml_timeout_s"] = o.samlto
+        if o.cyc and o.cyc[-1].authm:
+            d.details["portal_auth"] = o.cyc[-1].authm
+        self.out.append(d)
+        self.last_done = o
+        if self.open is o:
+            self.open = None
+
+    def _abandon(self, o: _Open, ts: datetime, idx: int, reason: str) -> None:
+        if o.pending == "cancelled":
+            o.d.details["cancel_evidence"] = "explicit"
+            o.d.details["gateway_prompts_cancelled"] = o.cancel_n
+            self._done(o, "cancelled", o.cancel_ts or ts, idx, category="cancelled")
             return
-        blk.b, blk.end_ts, blk.result = idx, ts, result
-        blocks.append(blk)
+        d = o.d
+        d.details["abandon_reason"] = reason
+        self._done(o, "abandoned", min(max(o.last_ts, d.start), ts) if ts else o.last_ts, idx)
 
-    for i, r in enumerate(recs):
-        m = r.msg
-        if cur is not None and r.pid != cur.pid:
-            close(cur, i - 1, recs[i - 1].ts, "abandoned")
-            cur = None
-        if m.startswith("msgtype = "):
-            last_msgtype[(r.pid, r.tid)] = (r.ts, m[10:].strip())
-            continue
-        if m.startswith("Received sleep event"):
-            last_sleep = r.ts
-        if m.startswith("----Portal Processing starts----"):
-            close(cur, i - 1, recs[i - 1].ts, "abandoned")
-            cur = _Block("A", i, r.ts, r.pid)
-            mt = last_msgtype.get((r.pid, r.tid))
-            if mt and 0 <= (r.ts - mt[0]).total_seconds() <= 0.1:
-                cur.msgtype = mt[1]
-            continue
-        sg = _RE_SHOW_GW.match(m)
-        if sg:
-            close(cur, i - 1, recs[i - 1].ts, "abandoned")
-            cur = _Block("B", i, r.ts, r.pid)
-            cur.short = sg.group(1)
-            cur.msgtype = "sleep" if (last_sleep and 0 <= (r.ts - last_sleep).total_seconds() <= 5) \
-                else "network change"
-            continue
-        if cur is None:
-            continue
-        if cur.kind == "A":
-            co = _RE_CACHE_ONLY.match(m)
-            if co:
-                cur.cache_only = co.group(1) == "yes" or co.group(2) == "1"
-            elif m.startswith("AgentProxyAutoStart: user clicked connect button"):
-                cur.click = True
-            elif m.startswith(("portal status is ", "----Portal Login starts")):
-                cur.progress = True
-            sm = _RE_STATE.match(m)
-            if sm:
-                st = sm.group(1)
-                if st == "Retrieving configuration...":
-                    cur.progress = True
-                if st == "Connected":
-                    close(cur, i, r.ts, "connected")
-                    cur = None
-                elif st in _END_STATES and (cur.progress or cur.cache_only):
-                    close(cur, i, r.ts, "ended")
-                    cur = None
-            elif m.startswith(("Disconnect(", "PanGPS service exits")):
-                close(cur, i, r.ts, "ended")
-                cur = None
-        else:   # restore
-            sm = _RE_STATE.match(m)
-            if sm and sm.group(1) == "Connected":
-                close(cur, i, r.ts, "connected")
-                cur = None
-            elif m.startswith("Tunnel retry done: failed retry"):
-                j = i
-                while j + 1 < n and (recs[j + 1].ts - r.ts).total_seconds() <= 2 and \
-                        recs[j + 1].pid == r.pid:
-                    j += 1
-                    nm = _RE_STATE.match(recs[j].msg)
-                    if nm and nm.group(1) == "Disconnected":
-                        break
-                close(cur, j, recs[j].ts, "failed")
-                cur = None
-            elif m.startswith("PanGPS service exits"):
-                close(cur, i, r.ts, "abandoned")
-                cur = None
-    if cur is not None:
-        close(cur, n - 1, recs[-1].ts, "abandoned")
+    def _abandon_reason(self, o: _Open, why: str) -> str:
+        if why:
+            return why
+        last = o.cyc[-1] if o.cyc else None
+        if o.gw_prompt:
+            return "gateway credential prompt left open"
+        if last is not None and last.result() in ("prompt", "retry"):
+            return ("SAML prompt not completed" if last.saml else "credential prompt not completed") \
+                if last.result() == "prompt" else "portal request retried without a result"
+        return "no outcome logged"
 
-    details: list[_Detail] = []
-    pending: _Detail | None = None       # logical A attempt that ended at a credential prompt
-    pending_block: _Block | None = None
-    for blk in blocks:
-        src_names = {recs[blk.a].src, recs[blk.b].src}
-        if blk.kind == "B":
-            d = _Detail(KIND_RESTORE, blk.ts, blk.end_ts, trigger="restore")
-            d.sources.add(SRC_SERVICE)
-            d.details["service_cause"] = blk.msgtype
-            d.details["gateway_short"] = blk.short
-            retries = 0
-            standby = False
-            last_err = ""
-            lo = blk.a
-            while lo > 0 and (blk.ts - recs[lo - 1].ts).total_seconds() <= 5 and \
-                    recs[lo - 1].pid == blk.pid:
-                lo -= 1
-            for j in range(lo, blk.b + 1):
-                rr = recs[j]
-                if rr.msg.startswith("Retry connect failed"):
-                    retries += 1
-                if rr.msg.startswith("Wait in modern standy"):
-                    standby = True
-                if rr.level == "Error" and rr.msg.startswith("Failed to verify"):
-                    last_err = rr.msg
-                dm = _RE_DOWNTIME.match(rr.msg)
-                if dm:
-                    d.details["downtime_at_start_ms"] = int(dm.group(1))
-                gm = _RE_GRACE.match(rr.msg)
-                if gm:
-                    d.details["grace_exceeded"] = {"downtime_ms": int(gm.group(1)),
-                                                   "grace_s": int(gm.group(2))}
-                st = _svc_step(rr, rr.src)
-                if st is not None and st.phase in ("restore", "connected", "disconnect"):
-                    d.steps.append(st)
-            d.details["retries"] = retries
-            d.details["modern_standby"] = standby
-            d.outcome = {"connected": "connected", "failed": "failed"}.get(blk.result, "abandoned")
-            if d.outcome == "failed":
-                d.outcome = restore_outcome(retries, "grace_exceeded" in d.details)
-            g0 = d.details.get("grace_exceeded")
-            if g0:
-                d.details["downtime_ms"] = g0["downtime_ms"]
-            elif "downtime_at_start_ms" in d.details:
-                d.details["downtime_ms"] = d.details["downtime_at_start_ms"]
-            if d.outcome in ("failed", "expired"):
-                g = d.details.get("grace_exceeded")
-                if d.outcome == "failed" and last_err:
-                    d.error_raw = last_err
-                elif g:
-                    d.error_raw = (f"Tunnel downtime ({g['downtime_ms']} milliseconds) exceeds "
-                                   f"retry grace period ({g['grace_s']} seconds)")
-                else:
-                    d.error_raw = "Tunnel retry done: failed retry"
-            details.append(d)
-            continue
-        # kind A
-        if blk.cache_only:
-            continue
-        d = _block_detail(recs, blk, src_names)
-        cont = (pending is not None and pending_block is not None
-                and blk.msgtype == "user_credential"
-                and (blk.ts - pending_block.end_ts).total_seconds() <= chain_gap_s)
-        if cont:
-            head = pending
-            head.steps.extend(d.steps)
-            head.end, head.cycles = d.end, head.cycles + 1
-            head.portal = head.portal or d.portal
-            head.user = d.user or head.user
-            head.gateway = d.gateway or head.gateway
-            head.protocol = d.protocol or head.protocol
-            head.tunnel_ip = d.tunnel_ip or head.tunnel_ip
-            head.portal_outcome = d.portal_outcome
-            head.error_raw = d.error_raw or head.error_raw
-            d = head
-        else:
-            details.append(d)
-        pending, pending_block = (d, blk) if d.portal_outcome == "prompt" else (None, None)
-    for d in details:
-        if d.kind == KIND_LOGIN:
-            d.outcome = {"connected": "connected", "failed": "failed"}.get(
-                d.portal_outcome, "abandoned")
-            if d.portal_outcome == "prompt":
-                d.details["abandon_reason"] = "credential prompt not answered"
-    _service_post(recs, details, hip_window_s)
-    return details
+    def _close_open(self, ts: datetime, idx: int, why: str = "") -> None:
+        o = self.open
+        if o is None:
+            return
+        self._abandon(o, ts, idx, self._abandon_reason(o, why))
 
+    def _chainable(self, o: _Open, c: _PC) -> bool:
+        if not o.cyc or o.d.kind == KIND_RESTORE or o.pid != c.pid or o.prelogon != c.prelogon:
+            return False
+        if o.pending:
+            return False
+        prev = o.cyc[-1]
+        if prev.result() not in ("prompt", "retry", "open"):
+            return False
+        if c.sso:                           # `SSO starts.` marks the first cycle of a new attempt
+            return False
+        pp, cp = _norm_portal(next((x.portal for x in reversed(o.cyc) if x.portal), "")), \
+            _norm_portal(c.portal)
+        if pp and cp and pp != cp:
+            return False
+        bound = o.samlto if o.samlto else self.chain_gap
+        return (c.ts - prev.last).total_seconds() <= max(bound, 0) + 20 if o.samlto else \
+            (c.ts - prev.last).total_seconds() <= bound
 
-def _block_detail(recs: list[Record], blk: _Block, src_names: set) -> _Detail:
-    d = _Detail(KIND_LOGIN, blk.ts, blk.end_ts)
-    d.sources.add(SRC_SERVICE)
-    d.trigger = "user-click" if blk.click else "auto"
-    d.details["request"] = blk.msgtype or "unknown"
-    got_status = ""
-    reached_gateway = False
-    for j in range(blk.a, blk.b + 1):
-        rr = recs[j]
-        m = rr.msg
-        pu = _RE_PORTAL_USER.match(m)
-        if pu:
-            d.portal, d.user = pu.group(1), pu.group(2)
-        gw = _RE_GATEWAY.match(m)
-        if gw:
-            d.gateway = gw.group(1).rstrip(",")
-        ip = _RE_SET_IP.match(m)
-        if ip:
-            d.tunnel_ip = ip.group(1)
-        if m.startswith("Trying to do ipsec connection"):
+    # ------------------------------------------------------------------ main loop
+    def run(self) -> list[_Detail]:
+        for i, r in enumerate(self.recs):
+            code, m = _scode(r.msg)
+            if code == "":
+                if r.level == "Error" and self.open is not None and self.open.pid == r.pid:
+                    self.open.last_ts = r.ts
+                continue
+            if r.pid in self.dead:
+                continue
+            self._dispatch(i, r, code, m)
+        if self.open is not None:
+            last = self.recs[-1].ts
+            self._close_open(last, len(self.recs) - 1, "log ends")
+        if self.restore is not None:
+            self._end_restore(len(self.recs) - 1, self.recs[-1].ts, "abandoned")
+        for d in self.out:
+            d.cycles = max(d.cycles, 1)
+        self.out.sort(key=lambda d: d.start)
+        return self.out
+
+    def _dispatch(self, i: int, r: Record, code: str, m) -> None:
+        ts, pid, tid = r.ts, r.pid, r.tid
+        key = (pid, tid)
+        if code == "BANNER":
+            if self.open is not None:
+                self._close_open(ts, i, "service restarted")
+            if self.restore is not None:
+                self._end_restore(i, ts, "abandoned")
+            self.prev_ver, self.ver, self.banner_ts, self.pid = self.ver, m.group(1), ts, pid
+            self.tcyc = {}
+            return
+        if code in ("SHUTDOWN", "EXIT"):
+            if self.open is not None and self.open.pid == pid:
+                self._close_open(ts, i, "service stopped")
+            if self.restore is not None:
+                self._end_restore(i, ts, "abandoned")
+            if code == "EXIT":
+                self.dead.add(pid)
+            return
+        if code == "SESSION":
+            self.session[int(m.group(1))] = ts
+            return
+        if code == "LOGOFF":
+            self.last_logoff = ts
+            return
+        if code == "WAKE":
+            self.last_wake = ts
+            return
+        if code == "CLICK":
+            self.click_ts[pid] = ts
+            o = self.open
+            if o is not None and o.pid == pid and o.cyc and (ts - o.cyc[-1].ts).total_seconds() <= 3 \
+                    and o.d.trigger != "user-click":
+                o.d.trigger = "user-click"
+            return
+        if code == "SLEEP":
+            self.last_sleep_ts = ts
+            return
+        if code == "ROUTECHG":
+            self.last_route = ts
+            return
+        if code == "UPGRADE":
+            return
+        if code == "MSGTYPE":
+            mt = m.group(1)
+            self.msgtype[key] = (ts, mt)
+            if mt == "hello":
+                self.hello_ts[pid] = ts
+            if mt == "refresh-configuration":
+                self.tcyc[key] = None
+                c = _PC(ts, i, pid, tid, mt)
+                c.refresh = True
+                self.tcyc[key] = c
+            elif mt in ("disconnect", "disable", "switch-off"):
+                self._on_disconnect_request(i, r, mt)
+                self.tcyc[key] = None
+            elif mt == "gateway-credential-cancel":
+                o = self.open
+                if o is not None and o.pid == pid:
+                    o.gw_prompt = False
+            elif mt not in ("portal",):
+                self.tcyc[key] = None
+            return
+        if code == "PSTART":
+            self._on_cycle(i, r)
+            return
+        if code == "REFRESH":
+            c = _PC(ts, i, pid, tid, "refresh-configuration")
+            c.refresh = True
+            self.tcyc[key] = c
+            return
+        if code in _FLOW_CODES:
+            c = self.tcyc.get(key)
+            if c is not None and not c.refresh:
+                self._flow(c, code, m, r)
+                o = self.open
+                if o is not None and c in o.cyc:
+                    o.last_ts = ts
+                    if code == "SAMLTO":
+                        o.samlto = c.saml_timeout
+                    elif code == "PSTATUS":
+                        self._portal_status(i, r, o, c)
+                    elif code == "SAMLERR":
+                        self._failure(o, i, ts, f"saml-auth-error is {m.group(1)}", "portal-auth",
+                                      "saml", fail=m.group(1).lower().startswith("authentication"))
+                    elif code == "PFAILED":
+                        pass
+            return
+        if code == "SHOWGW":
+            self._start_restore(i, r, m)
+            return
+        if self.restore is not None:
+            self._restore_line(i, r, code, m)
+            return
+        if code == "NDSTART":
+            self._on_discover(i, r)
+            return
+        o = self.open
+        if o is None or (o.pid != pid and code != "DISCONNECT"):
+            if code == "DISCONNECT":
+                self.last_disc = (ts, m.group(1).strip())
+            return
+        o.last_ts = ts
+        self._attempt_line(i, r, o, code, m)
+
+    # ------------------------------------------------------------------ cycles
+    def _on_cycle(self, i: int, r: Record) -> None:
+        ts, pid, tid = r.ts, r.pid, r.tid
+        if self.pid is None:
+            self.pid = pid
+        mt = self.msgtype.get((pid, tid))
+        c = _PC(ts, i, pid, tid, mt[1] if mt and 0 <= (ts - mt[0]).total_seconds() <= 0.5 else "")
+        self._lookahead(i, c)
+        self.tcyc[(pid, tid)] = c
+        if c.cache_only:            # GUI start-up cache load: not an attempt
+            c.refresh = True
+            return
+        self.stats["cycles"] += 1
+        o = self.open
+        if self.restore is not None:
+            self._end_restore(i, ts, "abandoned")
+        if o is not None and self._chainable(o, c):
+            o.cyc.append(c)
+            o.last_ts = ts
+            self.stats["chained"] += 1
+            if c.sso:
+                self.stats["sso_follow_up"] += 1
+            return
+        if o is not None:
+            self._close_open(ts, i, "superseded by a new attempt" if o.cyc else "")
+        o = self._new(KIND_PRELOGON if c.prelogon else KIND_LOGIN, ts, pid, i, c.prelogon)
+        o.cyc.append(c)
+        o.d.trigger = self._cycle_trigger(c)
+        if c.sso:
+            self.stats["sso_first"] += 1
+
+    def _portal_status(self, i: int, r: Record, o: _Open, c: _PC) -> None:
+        st = c.status
+        if st == "Client Cert Required":
+            self._failure(o, i, r.ts, r.msg, "portal-auth", "certificate")
+        elif st == "Invalid portal":
+            self._failure(o, i, r.ts, r.msg, "portal-prelogin", "portal-unreachable")
+
+    def _failure(self, o: _Open, i: int, ts: datetime, raw: str, stage: str, category: str,
+                 fail: bool = True) -> None:
+        if not fail:
+            return
+        self._done(o, "failed", ts, i, raw, stage, category)
+
+    def _on_discover(self, i: int, r: Record) -> None:
+        ts, pid = r.ts, r.pid
+        o = self.open
+        if o is not None and o.pid != pid:
+            self._close_open(ts, i, "service restarted")
+            o = None
+        if o is not None and o.pending == "cancelled" and not (
+                o.cancel_ts is not None and (ts - o.cancel_ts).total_seconds() <= 90):
+            self._close_open(ts, i)
+            o = None
+        if o is not None and o.d.kind in (KIND_LOGIN, KIND_PRELOGON, KIND_RECONNECT):
+            o.last_ts = ts
+            o.pending = ""
+            o.net = ""
+            o.d.details["discovery_rounds"] = o.d.details.get("discovery_rounds", 0) + 1
+            return
+        if o is not None:
+            self._close_open(ts, i)
+        ld = self.last_done
+        if ld is not None and ld.d.kind == KIND_RECONNECT and ld.pid == pid and ld.d.end is not None \
+                and not ld.cyc and 0 <= (ts - ld.d.end).total_seconds() <= 2 \
+                and ld.d.outcome in ("internal", "connected") and ld.d in self.out:
+            self.out.remove(ld.d)       # a second discovery round right after: same attempt
+            ld.d.outcome, ld.d.end = "", None
+            ld.pending, ld.net = "", ""
+            ld.d.details["discovery_rounds"] = ld.d.details.get("discovery_rounds", 1) + 1
+            self.open = ld
+            self.last_done = None
+            return
+        o = self._new(KIND_RECONNECT, ts, pid, i)
+        o.d.trigger = self._reconnect_trigger(ts)
+        for ref in (self.last_disc, self.last_route):
+            when = ref[0] if isinstance(ref, tuple) else ref
+            if when is not None and 0 <= (ts - when).total_seconds() <= 30 and when < o.d.start:
+                o.d.start = when
+        j = i
+        while j > 0 and self.recs[j - 1].ts >= o.d.start and self.recs[j - 1].pid == pid:
+            j -= 1
+        o.d.i0 = j
+        o.d.details["discovery_rounds"] = 1
+
+    def _reconnect_trigger(self, ts: datetime) -> str:
+        if self.last_disc is not None and 0 <= (ts - self.last_disc[0]).total_seconds() <= 60:
+            reason = self.last_disc[1].lower()
+            if "network change" in reason:
+                return "network-change"
+            if "user switch" in reason:
+                return "user-switch"
+            return "disconnect"
+        if self.last_route is not None and 0 <= (ts - self.last_route).total_seconds() <= 30:
+            return "network-change"
+        if self.last_wake is not None and 0 <= (ts - self.last_wake).total_seconds() <= 60:
+            return "wake"
+        return "unknown"
+
+    def _on_disconnect_request(self, i: int, r: Record, mt: str) -> None:
+        o = self.open
+        ts = r.ts
+        if o is None or o.pid != r.pid:
+            return
+        if o.pending == "cancelled":
+            self._abandon(o, ts, i, "")
+            return
+        last = o.cyc[-1] if o.cyc else None
+        waited = None
+        if last is not None and last.prompt_ts is not None:
+            waited = (ts - last.prompt_ts).total_seconds()
+        timeout = o.samlto or (last.saml_timeout if last else None)
+        if last is not None and last.saml and timeout and waited is not None and waited >= timeout:
+            o.d.details["expired_reason"] = "saml-timeout"
+            o.d.details["saml_timeout_s"] = timeout
+            o.d.details["waited_s"] = round(waited, 1)
+            self._done(o, "expired", ts, i, f"SAML request timeout ({timeout} s)", "portal-auth",
+                       "timeout")
+            return
+        o.d.details["cancel_evidence"] = "inferred"
+        if waited is not None:
+            o.d.details["cancelled_after_prompt_s"] = round(waited, 1)
+        self._done(o, "cancelled", ts, i, category="cancelled")
+
+    # ------------------------------------------------------------------ attempt lines
+    def _attempt_line(self, i: int, r: Record, o: _Open, code: str, m) -> None:
+        ts, d = r.ts, o.d
+        d.i1 = i
+        if code == "STATE":
+            st = m.group(1)
+            if st == "Connected":
+                self._connected(o, i, ts)
+            elif st == "Discovery complete":
+                pass
+        elif code == "NETTYPE":
+            o.net = m.group(1)
+            if m.group(1) == "internal":
+                o.internal = True
+        elif code in ("DISCOK", "NOTUN"):
+            if o.net == "internal" and (code == "NOTUN" or m.group(1) == "1"):
+                o.gw_prompt = False
+                if o.pending != "cancelled":
+                    self._done(o, "internal", ts, i)
+        elif code == "GWCANCEL":
+            o.pending = "cancelled"
+            o.cancel_n += 1
+            o.cancel_ts = ts
+            d.gateway = d.gateway or m.group(1).rstrip(".")
+            d.details["gateway_prompt"] = "cancelled by the user"
+        elif code == "GWAUTH":
+            d.details.setdefault("gateway_auth", f"{m.group(1)} ({m.group(2).strip()})")
+            o.gw_prompt = m.group(1) == "credential"
+        elif code == "GWSAML":
+            d.details["gateway_saml_prompt"] = True
+        elif code == "DISCFAIL":
+            if o.pending != "cancelled":
+                self._done(o, "failed", ts, i, r.msg, "network-discovery",
+                           "gateway-unreachable" if m.group(1) == "external" else "other")
+        elif code == "GWSEL":
+            d.gateway = m.group(1).rstrip(",")
+        elif code == "SETIP":
+            d.tunnel_ip = m.group(1)
+        elif code == "IPSEC":
             d.protocol = "IPSec"
-        if m.startswith(("----Gateway Pre-login starts", "----Network Discover")):
-            reached_gateway = True
-        ps = re.match(r"^portal status is (.*?)\.?$", m)
-        if ps:
-            got_status = ps.group(1)
-        if m.startswith("Auth failed empty password"):
-            d.details["prompt"] = "credentials requested (no stored password)"
-        st = _svc_step(rr, rr.src, login=True)
-        if st is not None:
-            d.steps.append(st)
-    if blk.result == "connected":
-        d.portal_outcome = "connected"
-    elif got_status == "User authentication failed" and "prompt" in d.details:
-        d.portal_outcome = "prompt"
-    elif reached_gateway or got_status in ("Invalid portal", "Client Cert Required"):
-        d.portal_outcome = "failed"
-        if got_status:
-            d.error_raw = d.error_raw or f"portal status is {got_status}."
-    else:
-        d.portal_outcome = "ended"
-    return d
+        elif code == "NOGW":
+            d.details["no_gateway_answered"] = True
+        elif code == "GWERR":
+            d.error_raw = d.error_raw or f"Show Gateway {m.group(1)}: {m.group(2)}"
+            d.category = d.category or "gateway-unreachable"
+            d.details.setdefault("gateway_errors", 0)
+            d.details["gateway_errors"] += 1
+        elif code == "TUNFAIL":
+            # false friend: logged right after a successful Connected; only a real failure when
+            # no tunnel was created in this attempt
+            d.details.setdefault("tunnel_fail_lines", 0)
+            d.details["tunnel_fail_lines"] += 1
+        elif code in ("TUNOK", "TUNCREATED"):
+            d.gateway = d.gateway if d.gateway and "." in d.gateway else d.gateway or m.group(1)
+            d.details["tunnel_up"] = True
+        elif code == "TSLOG":
+            stage, err = m.group(1), m.group(2)
+            raw = f"TSLog error_stage = {stage}, error = {err}"
+            if o.d.outcome == "":
+                cat = "saml" if (o.cyc and o.cyc[-1].saml) else "auth"
+                if "authentication" not in err.lower():
+                    cat = "other"
+                self._done(o, "failed", ts, i, raw, stage, cat)
+        elif code == "DISCONNECT":
+            self.last_disc = (ts, m.group(1).strip())
+            d.details["disconnect_reason"] = m.group(1).strip() or "(no reason)"
+            if o.pending == "cancelled":
+                self._abandon(o, ts, i, "")
+
+    def _connected(self, o: _Open, i: int, ts: datetime) -> None:
+        o.d.details["tunnel_up"] = True
+        self._done(o, "connected", ts, i)
+
+    # ------------------------------------------------------------------ restores (kind B)
+    def _start_restore(self, i: int, r: Record, m) -> None:
+        if self.open is not None:
+            self._close_open(r.ts, i, "superseded by a restore")
+        if self.restore is not None:
+            self._end_restore(i, r.ts, "abandoned")
+        lo = i
+        recs = self.recs
+        while lo > 0 and (r.ts - recs[lo - 1].ts).total_seconds() <= 5 and recs[lo - 1].pid == r.pid:
+            lo -= 1
+        d = _Detail(KIND_RESTORE, r.ts, trigger="restore", sources={SRC_SERVICE}, i0=lo, i1=i)
+        last_sleep = self.last_sleep_ts
+        d.details["service_cause"] = "sleep" if (
+            last_sleep and 0 <= (r.ts - last_sleep).total_seconds() <= 5) else "network change"
+        d.details["gateway_short"] = m.group(1)
+        self.restore = d
+        self.rst = {"pid": r.pid, "retries": 0, "standby": False, "err": ""}
+
+    last_sleep_ts: datetime | None = None
+
+    def _restore_line(self, i: int, r: Record, code: str, m) -> None:
+        d, st = self.restore, self.rst
+        ts = r.ts
+        d.i1 = i
+        if r.pid != st["pid"]:
+            self._end_restore(i - 1, self.recs[i - 1].ts, "abandoned")
+            self._dispatch(i, r, code, m)
+            return
+        if code == "RETRYFAIL":
+            st["retries"] += 1
+        elif code == "STANDBY":
+            st["standby"] = True
+        elif code == "DOWNTIME":
+            d.details["downtime_at_start_ms"] = int(m.group(1))
+        elif code == "GRACE":
+            d.details["grace_exceeded"] = {"downtime_ms": int(m.group(1)), "grace_s": int(m.group(2))}
+        elif r.level == "Error" and r.msg.startswith("Failed to verify"):
+            st["err"] = r.msg
+        elif code == "STATE" and m.group(1) == "Connected":
+            self._end_restore(i, ts, "connected")
+        elif code == "RETRYDONE":
+            recs, j = self.recs, i
+            while j + 1 < len(recs) and (recs[j + 1].ts - ts).total_seconds() <= 2 and \
+                    recs[j + 1].pid == r.pid:
+                j += 1
+                nm = _RE_STATE.match(recs[j].msg)
+                if nm and nm.group(1) == "Disconnected":
+                    break
+            self._end_restore(j, recs[j].ts, "failed")
+        elif code == "PSTART":
+            self._end_restore(i, ts, "abandoned")
+            self._on_cycle(i, r)
+
+    def _end_restore(self, i: int, ts: datetime, result: str) -> None:
+        d, st = self.restore, self.rst
+        self.restore = None
+        if d is None:
+            return
+        d.end, d.i1 = ts, i
+        d.details["retries"] = st["retries"]
+        d.details["modern_standby"] = st["standby"]
+        d.outcome = {"connected": "connected", "failed": "failed"}.get(result, "abandoned")
+        if d.outcome == "failed":
+            d.outcome = restore_outcome(st["retries"], "grace_exceeded" in d.details)
+            if d.outcome == "expired":
+                d.details["expired_reason"] = "restore-grace"
+        g = d.details.get("grace_exceeded")
+        if g:
+            d.details["downtime_ms"] = g["downtime_ms"]
+        elif "downtime_at_start_ms" in d.details:
+            d.details["downtime_ms"] = d.details["downtime_at_start_ms"]
+        if d.outcome in ("failed", "expired"):
+            if d.outcome == "failed" and st["err"]:
+                d.error_raw = st["err"]
+            elif g:
+                d.error_raw = (f"Tunnel downtime ({g['downtime_ms']} milliseconds) exceeds "
+                               f"retry grace period ({g['grace_s']} seconds)")
+            else:
+                d.error_raw = "Tunnel retry done: failed retry"
+            d.error_stage = "restore"
+        self.out.append(d)
+
+
+def _make_steps(recs: list[Record], d: _Detail, login: bool) -> None:
+    """Phase steps of a service attempt from its record range (false friends are dropped)."""
+    ok_ts: datetime | None = None
+    for j in range(d.i0, min(d.i1, len(recs) - 1) + 1):
+        rr = recs[j]
+        st = _svc_step(rr, rr.src, login=login)
+        if st is None:
+            continue
+        if st.phase == "connected" or st.text.startswith(("Tunnel is created", "Tunnel is up")):
+            ok_ts = rr.ts
+        if st.text == "Tunnel creation failed" and ok_ts is not None and \
+                (rr.ts - ok_ts).total_seconds() <= 15:
+            continue        # logged right after a successful Connected: not a failure
+        d.steps.append(st)
 
 
 def _service_post(recs: list[Record], details: list[_Detail], hip_window_s: float) -> None:
@@ -1349,7 +1984,7 @@ def _service_post(recs: list[Record], details: list[_Detail], hip_window_s: floa
     times = [r.ts for r in recs]
     starts = sorted(d.start for d in details)
     for d in details:
-        if d.outcome != "connected" or d.end is None:
+        if d.outcome not in ("connected", "internal") or d.end is None:
             continue
         idx = bisect.bisect_left(times, d.end)
         nxt = starts[bisect.bisect_right(starts, d.start):]
@@ -1378,27 +2013,16 @@ def _service_post(recs: list[Record], details: list[_Detail], hip_window_s: floa
                 break
 
 
-def _read_service(bundle, st: ParseStats) -> tuple[list[Record], list[str]]:
-    names = bundle.rotation(SERVICE_STEM)
-    recs: list[Record] = []
-    used: list[str] = []
-    for name in names:
-        text = bundle.read_text(name, "timeline details")
-        if not text:
-            continue
-        used.append(name)
-        for r in iter_records(text, name, skip_levels={"Dump"}, stats=st):
-            if r.level == "Error" or _SVC_KEEP.match(r.msg):
-                recs.append(r)
-    return recs, used
-
-
 # ---------------------------------------------------------------------------- agent log
 _AGENT_KEEP = re.compile(
     r"(?:User clicks connect|CPanBaseReceiver::HandleHello - sending portal|"
     r"Command = <request><type>|message type from the service = |"
     r"Dialog Status is going to change|Display the main panel when user attention|"
     r"User try to disconnect|To display error must show message|"
+    r"User clicked sign out|rediscovery started|Cancelling the SAML Auth|"
+    r"User cancel current action|HandleSamlModel - Show saml auth|"
+    r"CPanSAMLDlg::HandleSamlACSResponse - saml auth successful|"
+    r"CPanSAMLView::OnDocumentComplete - saml auth successful|ShowPage - using embedded browser|"
     r"WINHTTP_CALLBACK_STATUS_REQUEST_ERROR)")
 _RE_DIALOG = re.compile(r"^Dialog Status is going to change from (.*?) to (.*?)\.\s*$")
 _RE_CMD = re.compile(r"^Command = <request><type>([\w-]+)</type>")
@@ -1409,13 +2033,15 @@ _RE_XML_USER = re.compile(r"<user>([^<]*)</user>")
 _RE_XML_PORTAL = re.compile(r"<portal>([^<]*)</portal>")
 _RE_XML_GATEWAY = re.compile(r"<gateway>([^<]*)</gateway>")
 _RE_WINHTTP = re.compile(r"error=(0x[0-9a-fA-F]+)")
+_UI_SETTLED = {"Connected": "connected", "Internal": "internal", "Connection Failed": "failed",
+               "Not Connected": "cancelled"}
 
 
 @dataclass
 class _AgentEv:
     ts: datetime
-    kind: str            # click hello cmd svc dialog popup error winhttp disc
-    src: str
+    kind: str            # click hello cmd svc dialog popup error winhttp disc signout rediscovery
+    src: str             # cancelsaml saml samlok embedded
     a: str = ""
     b: str = ""
     c: str = ""
@@ -1432,7 +2058,7 @@ def _read_agent(bundle, st: ParseStats) -> tuple[list[_AgentEv], list[str]]:
         if not text:
             continue
         used.append(name)
-        for r in iter_records(text, name, skip_levels={"Dump"}, stats=st):
+        for r in iter_records(text, name, stats=st):
             m = r.msg
             if r.level == "Error":
                 if not _BENIGN_ERRORS.search(m):
@@ -1444,6 +2070,18 @@ def _read_agent(bundle, st: ParseStats) -> tuple[list[_AgentEv], list[str]]:
                 evs.append(_AgentEv(r.ts, "click", name))
             elif m.startswith("CPanBaseReceiver::HandleHello"):
                 evs.append(_AgentEv(r.ts, "hello", name))
+            elif m.startswith("User clicked sign out"):
+                evs.append(_AgentEv(r.ts, "signout", name))
+            elif m.startswith("rediscovery started"):
+                evs.append(_AgentEv(r.ts, "rediscovery", name))
+            elif m.startswith(("Cancelling the SAML Auth", "User cancel current action")):
+                evs.append(_AgentEv(r.ts, "cancelsaml", name))
+            elif m.startswith("HandleSamlModel"):
+                evs.append(_AgentEv(r.ts, "saml", name))
+            elif m.startswith(("CPanSAMLDlg::HandleSamlACSResponse", "CPanSAMLView::OnDocumentComplete")):
+                evs.append(_AgentEv(r.ts, "samlok", name))
+            elif m.startswith("ShowPage - using embedded browser"):
+                evs.append(_AgentEv(r.ts, "embedded", name))
             elif m.startswith("Command = "):
                 c = _RE_CMD.match(m)
                 if c and c.group(1) != "pan_msg_ping":
@@ -1453,7 +2091,7 @@ def _read_agent(bundle, st: ParseStats) -> tuple[list[_AgentEv], list[str]]:
                                         p.group(1) if p else "", g.group(1) if g else ""))
             elif m.startswith("message type from the service = "):
                 t = _RE_SVCMSG.match(m)
-                if not t or t.group(1) in ("https_request", "hip", "hello", "sleep"):
+                if not t or t.group(1) in ("https_request", "hip", "hello", "sleep", "dem-upgrade"):
                     continue
                 if t.group(1) == "status":
                     body = r.body
@@ -1478,22 +2116,37 @@ def _read_agent(bundle, st: ParseStats) -> tuple[list[_AgentEv], list[str]]:
     return evs, used
 
 
+_AGENT_TEXT = {
+    "click": ("trigger", "User clicked Connect", "info"),
+    "signout": ("trigger", "User clicked Sign out (SAML cookies cleared)", "info"),
+    "rediscovery": ("trigger", "Client started a rediscovery (log: rediscovery started)", "info"),
+    "hello": ("trigger", "UI started: automatic portal request (HandleHello)", "info"),
+    "cancelsaml": ("disconnect", "User cancelled the SAML authentication", "warn"),
+    "saml": ("portal-auth", "SAML sign-in window shown", "info"),
+    "samlok": ("portal-auth", "SAML sign-in completed in the window", "ok"),
+    "embedded": ("portal-auth", "SAML sign-in uses the embedded browser", "info"),
+}
+
+
 def _agent_step(ev: _AgentEv, state: dict) -> Step | None:
     """Step for an agent event; ``state`` remembers the last status text and error shown."""
     k = ev.kind
-    if k == "click":
-        return Step(ev.ts, "trigger", "User clicked Connect", ev.src, "info")
+    if k in _AGENT_TEXT:
+        ph, tx, lv = _AGENT_TEXT[k]
+        return Step(ev.ts, ph, tx, ev.src, lv)
     if k == "cmd":
         text = {
             "portal": "Window sends the portal request",
             "user_credential": "User submitted the portal credentials",
             "invalid-gateway-credential": "User submitted the gateway credentials",
+            "gateway-credential-cancel": "User cancelled the gateway credential prompt",
             "disconnect": "User requested a disconnect",
         }.get(ev.a)
         if text is None:
             return None
         phase = {"portal": "trigger", "user_credential": "portal-auth",
-                 "invalid-gateway-credential": "gateway-login", "disconnect": "disconnect"}[ev.a]
+                 "invalid-gateway-credential": "gateway-login",
+                 "gateway-credential-cancel": "gateway-login", "disconnect": "disconnect"}[ev.a]
         return Step(ev.ts, phase, text, ev.src, "info")
     if k == "svc":
         if ev.a == "user_credential":
@@ -1501,6 +2154,8 @@ def _agent_step(ev: _AgentEv, state: dict) -> Step | None:
         if ev.a == "invalid-gateway-credential":
             return Step(ev.ts, "gateway-login", "Credential prompt shown (gateway)", ev.src,
                         "warn")
+        if ev.a == "saml-pre-login":
+            return Step(ev.ts, "portal-auth", "SAML prompt sent to the window", ev.src, "warn")
         if ev.a == "status":
             if ev.c and ev.c != state.get("error"):
                 state["error"] = ev.c
@@ -1511,7 +2166,8 @@ def _agent_step(ev: _AgentEv, state: dict) -> Step | None:
                             ev.src, "ok" if ev.b == "Connected" else "info")
         return None
     if k == "dialog":
-        level = "ok" if ev.b == "Connected" else ("error" if ev.b == "Connection Failed" else "info")
+        level = "ok" if ev.b in ("Connected", "Internal") else (
+            "error" if ev.b == "Connection Failed" else "info")
         return Step(ev.ts, "ui", f"Dialog: {ev.a or '(none)'} -> {ev.b or '(none)'}", ev.src, level)
     if k == "popup":
         return Step(ev.ts, "ui", ev.a, ev.src, "warn")
@@ -1524,84 +2180,182 @@ def _agent_step(ev: _AgentEv, state: dict) -> Step | None:
     return None
 
 
-def _scan_agent(evs: list[_AgentEv], chain_gap_s: float) -> list[_Detail]:
-    """PanGPA segmentation: a click starts an attempt; the dialog result ends it."""
-    out: list[_Detail] = []
-    cur: _Detail | None = None
-    state: dict = {}
-    last = None
-
-    def finish(d: _Detail, outcome: str, ts: datetime) -> None:
-        d.ui_outcome, d.end = outcome, ts
-        if outcome == "failed" and not d.error_raw:
-            d.error_raw = state.get("error", "")
-        out.append(d)
-
-    for ev in evs:
-        if cur is not None and last is not None and \
-                (ev.ts - last).total_seconds() > chain_gap_s:
-            finish(cur, "abandoned", last)
-            cur = None
-        if ev.kind == "click":
-            if cur is not None:
-                finish(cur, "abandoned", last or ev.ts)
-            cur = _Detail(KIND_LOGIN, ev.ts, trigger="user-click")
-            cur.sources.add(SRC_AGENT)
-            cur.details["click_time"] = _iso(ev.ts)
-            state = {}
-            last = ev.ts
-        if cur is None:
-            continue
-        last = ev.ts
-        step = _agent_step(ev, state)
-        if step is not None:
-            cur.steps.append(step)
-        if ev.kind == "cmd":
-            if ev.a == "user_credential":
-                cur.cycles += 1
-            if ev.b:
-                cur.user = cur.user or ev.b
-            if ev.c:
-                cur.portal = cur.portal or ev.c
-            if ev.a == "disconnect":
-                finish(cur, "cancelled", ev.ts)
-                cur = None
-        elif ev.kind == "svc" and ev.a == "status":
-            cur.protocol = ev.d or cur.protocol
-            cur.tunnel_ip = ev.e or cur.tunnel_ip
-            user, _, portal = ev.f.partition("\t")
-            cur.user = cur.user or user
-            cur.portal = cur.portal or portal
-        elif ev.kind == "disc":
-            finish(cur, "cancelled", ev.ts)
-            cur = None
-        elif ev.kind == "dialog":
-            if ev.a == "Connecting" and ev.b == "Connected":
-                finish(cur, "connected", ev.ts)
-                cur = None
-            elif ev.b == "Connection Failed":
-                finish(cur, "failed", ev.ts)
-                cur = None
-    if cur is not None:
-        finish(cur, "abandoned", last or cur.start)
-    return out
+_TRIGGER_RANK = {"user-click": 5, "sign-out": 4, "rediscovery": 3, "gui-start": 2}
 
 
-def _agent_restore_steps(evs: list[_AgentEv], times: list[datetime], start: datetime,
-                         end: datetime) -> list[Step]:
-    """PanGPA steps of an auto-restore window: status text, dialog changes, errors."""
-    lo = bisect.bisect_left(times, start - timedelta(seconds=1))
+def _enrich_agent(att: Attempt, evs: list[_AgentEv], times: list[datetime]) -> None:
+    """Agent steps, trigger and UI state of one attempt (time window of the attempt)."""
+    end = att.end or att.start
+    lo = bisect.bisect_left(times, att.start - timedelta(seconds=3))
     hi = bisect.bisect_right(times, end + timedelta(seconds=3))
+    if lo >= hi:
+        return
     state: dict = {}
     steps: list[Step] = []
+    ui = ""
+    trig = ""
+    cancel_ev = False
     for ev in evs[lo:hi]:
-        if ev.kind in ("svc", "dialog", "popup", "error"):
-            if ev.kind == "svc" and ev.a != "status":
-                continue
-            st = _agent_step(ev, state)
+        if att.kind == KIND_RESTORE and (ev.kind not in ("svc", "dialog", "popup", "error")
+                                         or ev.kind == "svc" and ev.a != "status"):
+            continue
+        near_start = -3 <= (ev.ts - att.start).total_seconds() <= 1.5
+        if near_start and att.kind != KIND_RESTORE:
+            t = {"click": "user-click", "signout": "sign-out", "rediscovery": "rediscovery",
+                 "hello": "gui-start"}.get(ev.kind)
+            if t and _TRIGGER_RANK[t] > _TRIGGER_RANK.get(trig, 0):
+                trig = t
+            if ev.kind == "click":
+                att.details["click_time"] = _iso(ev.ts)
+        if ev.kind == "cancelsaml":
+            cancel_ev = True
+        if ev.kind == "dialog" and ev.b in _UI_SETTLED and ev.ts >= att.start - timedelta(seconds=1):
+            ui = ev.b
+        if ev.kind == "embedded":
+            att.details.setdefault("saml_browser", "embedded browser")
+        st = _agent_step(ev, state)
+        if st is not None:
+            steps.append(st)
+    if not steps:
+        return
+    att.steps.extend(steps)
+    if SRC_AGENT not in att.sources:
+        att.sources.append(SRC_AGENT)
+    if trig and att.kind != KIND_RESTORE:
+        att.trigger = trig
+    if ui:
+        att.details["ui_state"] = ui
+        if SRC_EVENT not in att.sources and att.outcome == "abandoned" and \
+                _UI_SETTLED[ui] != "cancelled":
+            att.outcome = _UI_SETTLED[ui]
+            att.details["outcome_source"] = "agent_log"
+            att.details.pop("abandon_reason", None)
+    if cancel_ev and att.outcome == "cancelled" and att.kind != KIND_RESTORE:
+        att.details["cancel_evidence"] = "explicit"
+
+
+AGENT_GROUP_GAP_S = 900     # automatic rediscoveries closer than this are one group row
+
+
+def _agent_only(evs: list[_AgentEv], covered: list[tuple[datetime, datetime]],
+                group_gap_s: float = AGENT_GROUP_GAP_S) -> list[_Detail]:
+    """Attempts of the periods that no service/event log covers, from the UI dialog states.
+
+    ``Dialog Status is going to change from X to Y`` : an attempt starts at ``-> Connecting`` and
+    ends at the next settled state (Connected, Internal, Connection Failed, Not Connected).
+    Automatic rediscoveries (Internal -> Connecting -> Internal, same state, no error, no user
+    action) are collapsed into one group row per run (``details.collapsed``).
+    """
+    def inside(ts):
+        return any(a <= ts <= b for a, b in covered)
+
+    rows: list[dict] = []
+    cur: dict | None = None
+    last_trig: dict = {}
+    for ev in evs:
+        if inside(ev.ts):
+            continue
+        if ev.kind in ("click", "signout", "rediscovery", "hello"):
+            last_trig[ev.kind] = ev.ts
+        if ev.kind == "cmd" and ev.a == "portal":
+            last_trig["portal"] = ev.ts
+            if cur is not None:
+                cur["user"] = cur["user"] or ev.b if ev.b != "___empty_username___" else cur["user"]
+                cur["portal"] = cur["portal"] or ev.c
+        if cur is not None:
+            if ev.kind in ("click", "signout", "cmd", "cancelsaml", "disc", "popup", "hello") and not (
+                    ev.kind == "cmd" and ev.a in ("pan_msg_ping",)):
+                cur["user_action"] = cur["user_action"] or ev.kind in (
+                    "click", "signout", "cancelsaml", "disc") or (ev.kind == "cmd" and ev.a in (
+                        "disconnect", "user_credential", "invalid-gateway-credential",
+                        "gateway-credential-cancel"))
+            if ev.kind == "svc" and ev.a == "status":
+                if ev.c:
+                    cur["error"] = ev.c
+                cur["protocol"] = ev.d or cur["protocol"]
+                cur["tunnel_ip"] = ev.e or cur["tunnel_ip"]
+            st = _agent_step(ev, cur["state"])
             if st is not None:
-                steps.append(st)
-    return steps
+                cur["steps"].append(st)
+        if ev.kind != "dialog":
+            continue
+        if ev.b == "Connecting" and ev.a != "Connecting":
+            if cur is not None:
+                cur["end"], cur["result"] = cur["last"], "abandoned"
+                rows.append(cur)
+            origin = ev.a
+            cur = {"start": ev.ts, "last": ev.ts, "origin": origin, "error": "", "user": "",
+                   "portal": "", "protocol": "", "tunnel_ip": "", "user_action": False,
+                   "steps": [], "state": {}, "result": "", "end": None,
+                   "trig": {k: v for k, v in last_trig.items()
+                            if -0.0 <= (ev.ts - v).total_seconds() <= 6}}
+            st = _agent_step(ev, cur["state"])
+            if st is not None:
+                cur["steps"].append(st)
+            continue
+        if cur is not None:
+            cur["last"] = ev.ts
+            if ev.b in _UI_SETTLED:
+                cur["end"], cur["result"] = ev.ts, ev.b
+                rows.append(cur)
+                cur = None
+    if cur is not None:
+        cur["end"], cur["result"] = cur["last"], "abandoned"
+        rows.append(cur)
+
+    out: list[_Detail] = []
+    group: _Detail | None = None
+    for row in rows:
+        res = row["result"]
+        same = res and res == row["origin"] and not row["error"] and not row["user_action"] \
+            and row["origin"] in ("Internal", "Connected")
+        outcome = _UI_SETTLED.get(res, "abandoned")
+        if same:
+            if group is not None and (row["start"] - group.end).total_seconds() <= group_gap_s \
+                    and group.details["collapsed_state"] == res:
+                group.end = row["end"]
+                group.details["collapsed"] += 1
+                group.cycles += 1
+                group.steps.extend(row["steps"][-2:])
+                continue
+            group = _Detail(KIND_RECONNECT, row["start"], row["end"], outcome, "rediscovery",
+                            sources={SRC_AGENT}, cycles=1)
+            group.details.update({"collapsed": 1, "collapsed_state": res, "agent_only": True})
+            group.steps.extend(row["steps"])
+            out.append(group)
+            continue
+        group = None
+        t = row["trig"]
+        if "click" in t:
+            kind, trig = KIND_LOGIN, "user-click"
+        elif "signout" in t:
+            kind, trig = KIND_LOGIN, "sign-out"
+        elif "hello" in t:
+            kind, trig = KIND_LOGIN, "gui-start"
+        elif "rediscovery" in t or row["origin"] in ("Internal", "Connected"):
+            kind, trig = KIND_RECONNECT, "rediscovery"
+        else:
+            kind, trig = KIND_LOGIN, "unknown"
+        d = _Detail(kind, row["start"], row["end"], outcome, trig, row["portal"], "", row["user"],
+                    row["protocol"], row["tunnel_ip"], sources={SRC_AGENT})
+        d.steps = row["steps"]
+        d.details.update({"agent_only": True, "ui_origin": row["origin"] or "(none)",
+                          "ui_state": res or "(none)"})
+        if res == "Not Connected":
+            d.details["cancel_evidence"] = "inferred"
+        if outcome == "abandoned":
+            d.details["abandon_reason"] = "no settled UI state in the agent log"
+        if outcome == "failed":
+            d.error_raw = row["error"] or "Connection Failed"
+            d.error_stage = "ui"
+        out.append(d)
+    for d in out:
+        if d.details.get("collapsed", 0) > 1:
+            d.steps = d.steps[:40]
+            d.details["collapsed_note"] = (
+                f"{d.details['collapsed']} automatic rediscoveries that settled back to "
+                f"{d.details['collapsed_state']} without an error")
+    return out
 
 
 # ---------------------------------------------------------------------------- merging
@@ -1617,45 +2371,6 @@ def _nearest(starts: list[datetime], used: set, ts: datetime, tol: float) -> int
     return best
 
 
-def _merge_details(service: list[_Detail], agent: list[_Detail], tol: float) -> list[_Detail]:
-    """Join the service chains and the agent clicks that describe the same login attempt."""
-    logins = [d for d in service if d.kind == KIND_LOGIN]
-    others = [d for d in service if d.kind != KIND_LOGIN]
-    starts = [d.start for d in logins]
-    used: set = set()
-    out: list[_Detail] = list(others)
-    for ag in sorted(agent, key=lambda d: d.start):
-        j = _nearest(starts, used, ag.start, tol)
-        if j < 0:
-            out.append(ag)
-            continue
-        used.add(j)
-        sd = logins[j]
-        sd.steps.extend(ag.steps)
-        sd.sources |= ag.sources
-        sd.ui_outcome = ag.ui_outcome
-        sd.trigger = "user-click"
-        sd.details["click_time"] = ag.details.get("click_time")
-        sd.start = min(sd.start, ag.start)
-        sd.portal = sd.portal or ag.portal
-        sd.user = sd.user or ag.user
-        sd.protocol = ag.protocol or sd.protocol
-        sd.tunnel_ip = ag.tunnel_ip or sd.tunnel_ip
-        sd.error_raw = ag.error_raw or sd.error_raw
-        sd.cycles = max(sd.cycles, ag.cycles)
-        ends = [x for x in (sd.end, ag.end) if x is not None]
-        sd.end = max(ends) if ends else None
-    out.extend(logins)
-    for d in out:
-        if d.kind != KIND_LOGIN:
-            continue
-        if d.ui_outcome in ("connected", "failed", "cancelled"):
-            d.outcome = d.ui_outcome
-        else:
-            d.outcome = d.outcome or "abandoned"
-    return sorted(out, key=lambda d: d.start)
-
-
 def _attach(att: Attempt, d: _Detail) -> None:
     """Fold a detailed-log attempt into an event-log attempt (event log stays authoritative)."""
     att.sources.extend(s for s in sorted(d.sources) if s not in att.sources)
@@ -1665,17 +2380,25 @@ def _attach(att: Attempt, d: _Detail) -> None:
     att.gateway = att.gateway or d.gateway
     att.protocol = att.protocol or d.protocol
     att.tunnel_ip = att.tunnel_ip or d.tunnel_ip
-    if att.kind == KIND_LOGIN:
-        if d.trigger == "user-click" or (d.trigger == "auto" and att.trigger == "unknown"):
+    if att.kind in (KIND_LOGIN, KIND_PRELOGON):
+        if d.kind == KIND_PRELOGON:
+            att.kind = KIND_PRELOGON
+        if d.trigger and d.trigger != "unknown" and att.trigger in ("unknown", "sso", "auto"):
             att.trigger = d.trigger
         if d.disconnect and att.disconnect is None:
             att.disconnect = d.disconnect
-        if d.outcome in ("connected", "failed", "cancelled") and d.outcome != att.outcome:
-            att.details["outcome_mismatch"] = {"detail_log": d.outcome, "event_log": att.outcome}
+        if d.outcome and d.outcome != att.outcome:
+            if d.outcome == "internal" and att.outcome == "abandoned":
+                att.outcome = "internal"
+                att.details["outcome_source"] = "service_log"
+            elif d.outcome != "abandoned":
+                att.details["outcome_mismatch"] = {"detail_log": d.outcome, "event_log": att.outcome}
         if d.cycles > att.cycles:
             att.details["detail_cycles"] = d.cycles
         if d.error_raw and not att.error_text and att.outcome == "failed":
-            att.set_error(d.error_raw)
+            att.set_error(d.error_raw, d.error_stage)
+    if d.category and not att.error_category:
+        att.error_category = d.category
     for k, v in d.details.items():
         att.details.setdefault(k, v)
 
@@ -1689,13 +2412,50 @@ def _from_detail(d: _Detail) -> Attempt:
     att.steps = list(d.steps)
     att.disconnect = d.disconnect
     att.details = dict(d.details)
+    att.error_category = d.category
     if d.kind == KIND_RESTORE:
         att.details.setdefault("cause", att.details.get("service_cause", "unknown"))
-    if att.outcome in ("failed", "expired"):
-        att.set_error(d.error_raw or "attempt failed")
-    if att.outcome == "cancelled" and att.kind == KIND_LOGIN:
+    if att.outcome in ("failed", "expired") and (d.error_raw or att.outcome == "failed"):
+        att.set_error(d.error_raw or "attempt failed", d.error_stage)
+    elif att.outcome == "expired" and att.details.get("expired_reason") == "saml-timeout":
+        att.set_error(d.error_raw, d.error_stage)
+    if att.outcome == "cancelled" and att.kind != KIND_RESTORE:
         att.details.setdefault("cancel_evidence", "inferred")
+    if att.outcome == "abandoned" and d.error_raw:
+        att.set_error(d.error_raw, d.error_stage)
     return att
+
+
+_CAT_RULES = [
+    ("certificate", re.compile(r"client cert", re.IGNORECASE)),
+    ("saml", re.compile(r"saml", re.IGNORECASE)),
+    ("auth", re.compile(r"authentication failed|rejected the credentials|Auth failed for portal", re.IGNORECASE)),
+    ("gateway-cert", re.compile(r"certificate", re.IGNORECASE)),
+    ("portal-unreachable", re.compile(
+        r"invalid portal|portal pre-login failed|portal is unresponsive|pre-login to the portal|"
+        r"portal pre-login|unreachable or the portal", re.IGNORECASE)),
+    ("gateway-unreachable", re.compile(
+        r"gateway|no network connectivity|no reply from remote|failed to discover|tunnel creation|"
+        r"remote host", re.IGNORECASE)),
+    ("timeout", re.compile(r"timed.?out|timeout", re.IGNORECASE)),
+]
+
+
+def categorize(att: Attempt) -> str:
+    """Structured error category of an attempt (``""`` when it has no error)."""
+    if att.outcome == "cancelled":
+        return "cancelled"
+    if att.details.get("expired_reason") == "saml-timeout":
+        return "timeout"
+    if att.outcome not in ("failed", "expired", "abandoned"):
+        return ""
+    text = f"{att.error_text} {att.error_raw}"
+    if not text.strip():
+        return "other" if att.outcome == "failed" else ""
+    for cat, rx in _CAT_RULES:
+        if rx.search(text):
+            return cat
+    return "other"
 
 
 # ---------------------------------------------------------------------------- aggregates
@@ -1733,11 +2493,11 @@ def _find_storms(attempts: list[Attempt], min_failures: int, max_gap_s: float) -
 
 
 def _summary(attempts: list[Attempt], top_n: int) -> dict:
-    by_kind = {k: _count([a for a in attempts if a.kind == k]) for k in (KIND_LOGIN, KIND_RESTORE)}
+    by_kind = {k: _count([a for a in attempts if a.kind == k]) for k in KINDS}
     days: dict = {}
     for a in attempts:
         day = days.setdefault(a.start.date().isoformat(),
-                              {k: {o: 0 for o in OUTCOMES} for k in (KIND_LOGIN, KIND_RESTORE)})
+                              {k: {o: 0 for o in OUTCOMES} for k in KINDS})
         day[a.kind][a.outcome] += 1
     errs: dict = {}
     for a in attempts:
@@ -1846,25 +2606,28 @@ def _build(bundle, chain_gap_s, match_tol_s, max_text, storm_min, storm_gap_s, t
     svc_stats, agent_stats = ParseStats(), ParseStats()
     svc_recs, used_svc = _read_service(bundle, svc_stats)
     agent_evs, used_agent = _read_agent(bundle, agent_stats)
-    svc_details = _scan_service(svc_recs, chain_gap_s, hip_window_s) if svc_recs else []
-    agent_details = _scan_agent(agent_evs, chain_gap_s) if agent_evs else []
-    details = _merge_details(svc_details, agent_details, match_tol_s)
+    engine_svc = _SvcEngine(svc_recs, chain_gap_s, hip_window_s) if svc_recs else None
+    details = engine_svc.run() if engine_svc else []
+    for d in details:
+        _make_steps(svc_recs, d, login=d.kind != KIND_RESTORE)
+    _service_post(svc_recs, details, hip_window_s)
 
     # ---- match detailed attempts to event-log attempts
     cross = {"matched": 0, "outcome_agree": 0, "outcome_differ": [], "detail_only": 0,
              "event_only_in_detail_window": 0}
-    by_kind = {k: sorted((a for a in attempts if a.kind == k), key=lambda a: a.start)
+    group = {KIND_LOGIN: KIND_LOGIN, KIND_PRELOGON: KIND_LOGIN, KIND_RESTORE: KIND_RESTORE}
+    by_kind = {k: sorted((a for a in attempts if group.get(a.kind) == k), key=lambda a: a.start)
                for k in (KIND_LOGIN, KIND_RESTORE)}
     used: dict = {KIND_LOGIN: set(), KIND_RESTORE: set()}
     starts = {k: [a.start for a in v] for k, v in by_kind.items()}
     new: list[Attempt] = []
     ev_last = ev_stats.last
     for d in details:
-        j = _nearest(starts[d.kind], used[d.kind], d.start, match_tol_s) \
-            if by_kind[d.kind] else -1
+        g = group.get(d.kind)
+        j = _nearest(starts[g], used[g], d.start, match_tol_s) if g and by_kind[g] else -1
         if j >= 0:
-            used[d.kind].add(j)
-            att = by_kind[d.kind][j]
+            used[g].add(j)
+            att = by_kind[g][j]
             _attach(att, d)
             cross["matched"] += 1
             if "outcome_mismatch" in att.details:
@@ -1876,18 +2639,20 @@ def _build(bundle, chain_gap_s, match_tol_s, max_text, storm_min, storm_gap_s, t
             cross["detail_only"] += 1
     attempts.extend(new)
 
-    # ---- agent window steps of auto-restores
+    # ---- agent log: steps, trigger and UI state of every attempt, then agent-only periods
     if agent_evs:
         times = [e.ts for e in agent_evs]
-        a_first, a_last = times[0], times[-1]
         for a in attempts:
-            if a.kind != KIND_RESTORE or not (a_first <= a.start <= a_last):
-                continue
-            steps = _agent_restore_steps(agent_evs, times, a.start, a.end or a.start)
-            if steps:
-                a.steps.extend(steps)
-                if SRC_AGENT not in a.sources:
-                    a.sources.append(SRC_AGENT)
+            _enrich_agent(a, agent_evs, times)
+        covered = []
+        for stt in (ev_stats, svc_stats):
+            if stt.first is not None and stt.last is not None:
+                covered.append((stt.first - timedelta(seconds=30), stt.last + timedelta(seconds=30)))
+        for d in _agent_only(agent_evs, covered):
+            a = _from_detail(d)
+            a.id = ""
+            attempts.append(a)
+            cross["agent_only"] = cross.get("agent_only", 0) + 1
 
     for a in attempts:
         if a.has_detail:
@@ -1895,6 +2660,9 @@ def _build(bundle, chain_gap_s, match_tol_s, max_text, storm_min, storm_gap_s, t
             if SRC_SERVICE in a.sources:
                 a.steps = _tidy(a.steps)
         a._post = []
+    for a in attempts:
+        if not a.error_category:
+            a.error_category = categorize(a)
     _apply_text_cap(attempts, max_text)
     attempts.sort(key=lambda a: (a.start, a.kind))
     for i, a in enumerate(attempts, 1):

@@ -27,11 +27,21 @@ All example values are synthetic. Conventions used in examples:
 
 ## 1. Bundle inventory
 
+The analyzer reads three kinds of input, all in memory and with the same safety rules: a
+"Collect Logs" `.zip`, a tar archive (`.tgz`, `.tar.gz`, `.tar`, `.tar.bz2`, `.tar.xz`; detected by content,
+not by extension) and a folder. Files are found by base name, so they may sit in a sub-folder; when a base
+name occurs twice the safe member wins, then the shallowest path, then the smallest path (recorded in the
+bundle warnings). Absolute paths, `..`, links and special members are skipped. Some real bundles (tar) hold
+only `PanGPS.log` + `PanGPS.1..9.log`, `PanGPA.log` + `PanGPA.1.log` and sometimes `PanGPMsi.log`: no event
+log, registry dump or system files. The agent log rotates like the service log (`PanGPA.1.log` is older
+than `PanGPA.log`; numbers above 9 are possible) and the two logs do not cover the same period.
+
 | File | Purpose | Used by the analyzer |
 |---|---|---|
 | `pan_gp_event.log`, `pan_gp_event.log.old` | High-level event log (one line per event) | Yes: primary attempt timeline |
 | `PanGPA.log` | UI agent (PanGPA.exe) log: clicks, dialog states, status XML | Yes: enrichment (click, UI outcome) |
-| `PanGPS.log`, `PanGPS.1.log` ... `PanGPS.8.log` | Service (PanGPS.exe) log, very verbose | Yes: detailed flow, settings, tunnel facts, restore attempts |
+| `PanGPS.log`, `PanGPS.1.log` ... `PanGPS.9.log` | Service (PanGPS.exe) log, very verbose | Yes: detailed flow, settings, tunnel facts, restore attempts |
+| `PanGPMsi.log` | Windows Installer log (UTF-16LE, DD/MM/YYYY dates, BOM may be damaged) | Yes: install, upgrade and remove events |
 | `regval.txt` | Dump of GlobalProtect registry values | Yes: client settings |
 | `pan_gp_hrpt.xml` | Last HIP report | Yes: host/interface snapshot (stale) |
 | `pan_gp_trb.log` | JSON troubleshooting report (last failed connection only) | Yes: auth methods, error stage (stale) |
@@ -293,7 +303,14 @@ PREFIX = re.compile(
 ```
 
 - Levels: `Debug`, `Info ` (trailing space), `Error`, `Dump ` (padded to 5, so the regex allows an optional
-  space). No Warn/Fatal/Trace. **The level is not an importance indicator**: e.g. `Unable to verify server
+  space), and `Warn` (rare, e.g. `Service start pending...`). No Fatal/Trace.
+- **The source number changes between client builds**, even inside one bundle (e.g. the portal marker is 3211
+  in one build and 3218 in the next, `msgtype = ...` is 573, 1043 or 1057). The analyzer never keys on it:
+  every rule matches the message text.
+- Real bundles have hundreds of glued records per file (a record without line terminator followed directly
+  by the next prefix, often an empty message), timestamps that step backwards by a few milliseconds
+  (threads, or the installer process writing into the same file), `\r\r\n` inside XML payloads and XML
+  continuations of about 650 lines. The parser tokenises the whole text, keeps file order and never sorts. **The level is not an importance indicator**: e.g. `Unable to verify server
   cert...`, `Auth failed empty password for portal`, `portal status is User authentication failed.` and
   `Tunnel retry done: failed retry` are all `Debug`. No `Error` record marked a failed login in the sample.
 - `P<pid>` is the service process id (changes at service restart); `T<tid>` the thread id. Ids are reused
@@ -432,7 +449,7 @@ gateway (\S+)`, `^sent HIP report check to (\S+)\.`, `^Response status of HIP re
 
 ### 4.3 State backbone
 
-`--Set state to X` (Debug, source 8727) is the cleanest timeline source:
+`--Set state to X` (Debug) is the cleanest timeline source:
 `Connected`, `Restoring VPN Connection`, `Disconnecting...`, `Disconnected` (usually 3 lines in a row),
 `Retrieving configuration...` (portal in progress), `Discovering network...`, `Connecting...` (tunnel
 creation), `User logs off`, `OnDemand mode.` (idle, waiting for Connect). The same states appear in the
@@ -471,6 +488,28 @@ Two kinds of attempt exist; a parser must model both.
 Disconnect events of an established session (`Disconnect(Network change) called`, `Disconnect() called`,
 `logout: user=...`) end the **connected period**, not an attempt.
 
+**Marker rules for service-log-only bundles** (validated on two bundles of another client build). The
+`<src>` number in the prefix differs between builds (the same message has another number), so a parser
+matches message text only. The log has NO explicit "attempt begins" record; the start is inferred:
+- `----Portal Processing starts----` opens a portal cycle; `----Portal refresh configuration starts----` is a
+  refresh and not an attempt; `----Network Discover starts----` opens an attempt without portal contact when
+  none is open. Lock, unlock and wake alone never open one.
+- `SSO starts.` (just after the cycle start) marks the first cycle of a new attempt.
+- Pre-logon cycle: `This portal message is from prelogon thread` or `Portal <host>, user pre-logon`.
+- SAML: `Saml auth`, `Skip portal prelgoin for saml`, `Portal's saml request timeout is N`,
+  `Prelogin use-default-browser = yes|no`; a prompt not answered within the timeout ends with
+  `msgtype = disconnect` and is `expired`.
+- Internal network: `NetworkDiscoverThread: network type is internal.` then `gateway X does not need
+  tunnel.`; the state still becomes `Connected` without a tunnel (outcome `internal`).
+- Errors: `portal status is Client Cert Required` / `Invalid portal`, `TSLog: Set error_stage = X, error =
+  Y`, `Failed to pre-login to the portal`, `number of successfully returned gateways is 0`,
+  `User canceled login to gateway X`, `msgtype = gateway-credential-cancel`. `Failed to create tunnel to
+  gateway X.` after `Connected` is a late message, not a failure.
+- Chaining: a cycle that ended without an outcome is chained to the next one only for the same pid and portal,
+  never between pre-logon and user cycles, within the logged SAML timeout or else 600 s.
+- Agent-only periods: `Dialog Status is going to change from X to Y.` transitions of PanGPA stand in for the
+  service markers; rediscoveries that repeat every few minutes are collapsed.
+
 Algorithm: tokenise files in chronological order; drop noise early; state machine on `--Set state to X` with
 boundaries at the two START markers; a change of `pid` or `PanGPS service exits` closes any open attempt as
 "service restart". Never use the log level or `Unable to verify server cert` as a failure criterion.
@@ -483,8 +522,9 @@ because the laptop slept longer than the 1800 s grace period.
 
 The raw portal config XML is not logged. Effective settings are visible in:
 
-- `ResponseToClient.txt_output:` status XML (best source). Marker: record with source 8450, level `Dump`,
-  empty message on the prefix line, then `ResponseToClient.txt_output: <?xml ...` on the next physical line;
+- `ResponseToClient.txt_output:` status XML (best source). Marker: a `Dump` record whose message (or first
+  continuation line) starts with `ResponseToClient.txt_output: ` (do not test the source number, it was 8450
+  in the first sample only), empty message on the prefix line, then `ResponseToClient.txt_output: <?xml ...` on the next physical line;
   always followed by `Send response to client for request <type>`. `<type>` values: `status`, `hip`,
   `user_credential`, `sleep`, `hello`. 72 dumps in the sample; 0.7 to 1.9 KB (short status) or 10 to 11 KB
   (with the full `<hip-report>`).
@@ -658,6 +698,16 @@ path only; no query or body, so no cookies). The `IPADDR` tells which portal/gat
   and a locally administered MAC such as `02-00-00-00-00-01`.
 - The HIP report is a snapshot taken while connected (sample: one day before collection); it can contradict
   the live snapshot.
+
+### 6.3b `PanGPMsi.log` (Windows Installer log)
+
+UTF-16LE text; in one bundle the BOM is damaged (`EF BF BD EF BF BD` instead of `FF FE`), so the first 6
+bytes are skipped and the rest decoded as UTF-16LE. One session per run between
+`=== Logging started: DD/MM/YYYY  HH:MM:SS ===` and `=== Logging stopped: ... ===` (dates are day first,
+times 24 h). The outcome is the line `MSI (s) (..) [HH:MM:SS:mmm]: Product: GlobalProtect -- Installation|Removal|
+Configuration ... completed successfully.` and the version the `Property(S): ProductVersion` line (the MSI
+version has no build number). An upgrade made by the GUI appears as a removal followed within seconds by an
+installation; the `PORTAL` property of the installation is the pre-set portal.
 
 ### 6.4 Other static files (not used; format notes)
 
