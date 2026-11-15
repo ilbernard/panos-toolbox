@@ -15,6 +15,10 @@ TOOLS = {
         "panos_toolbox.firewall.console",
         "Desktop GUI: connect to Panorama, list managed firewalls, run actions",
     ),
+    ("gp", "analyze"): (
+        "panos_toolbox.gp.analyzer",
+        "HTML report from a GlobalProtect client log bundle (config, login timeline)",
+    ),
     ("tsf", "analyze"): (
         "panos_toolbox.tsf.analyzer",
         "Throughput/CPU HTML report from a Tech Support File (dp-monitor.*)",
