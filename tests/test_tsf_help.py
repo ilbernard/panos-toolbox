@@ -70,8 +70,10 @@ def test_tabs_have_a_normal_and_an_advanced_view():
     assert '<label class="advtoggle" id="advwrap"' in tpl and 'id="advanced"' in tpl
     assert '.advtoggle{margin-left:auto' in tpl
     assert "NORMAL_TABS=['chart','sys','mp']" in tpl
-    assert "'panosToolbox.tsfReport.advanced'" in tpl
-    assert 'try{ return localStorage.getItem' in tpl and 'try{ localStorage.setItem' in tpl
+    assert 'localStorage' not in tpl and 'tsfReport.advanced' not in tpl   # always opens unticked
+    assert tpl.index('id="tab-mp"') < tpl.index('id="tab-sys"') < tpl.index('id="tab-cpu"') < tpl.index('id="tab-pow"')
+    assert "hasMp?['mp']:[], hasSys?['sys']:[], hasG?['cpu']:[]" in tpl
+    assert 'id="devinfo"' in tpl and 'id="isys"' not in tpl
     assert 'Normal and Advanced view' in SECTION_HELP['chart']
 
 

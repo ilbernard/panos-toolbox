@@ -139,6 +139,7 @@ summary{cursor:pointer}
 .itbl td.tl,.itbl th.tl{text-align:left}
 .legsq{display:inline-block;width:14px;height:4px;margin:0 4px 2px 12px}
 .isys td,.isys th{cursor:default;position:static;text-align:left}
+.devinfo{width:auto;margin:0 0 12px}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -149,15 +150,16 @@ TEMPLATE_BODY = r'''</style>
 <div id="gltip" role="tooltip" hidden></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
+<table class="stats isys devinfo" id="devinfo" style="display:none"></table>
 <div><span class="badge astatus" id="astatus" style="display:none" tabindex="0"></span></div>
 <div class="utc" id="utc"></div>
 <details id="warn" style="display:none;margin:0 0 16px"><summary id="warnsum"></summary><ul id="warnlist"></ul></details>
 
 <div class="tabs" id="tabs" role="tablist" aria-label="Report sections">
   <button type="button" role="tab" id="tab-chart" aria-controls="p-chart" aria-selected="true">Dataplane</button>
-  <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-mp" aria-controls="p-mp" aria-selected="false" tabindex="-1" style="display:none">Management plane</button>
   <button type="button" role="tab" id="tab-sys" aria-controls="p-sys" aria-selected="false" tabindex="-1" style="display:none">System health</button>
+  <button type="button" role="tab" id="tab-cpu" aria-controls="p-cpu" aria-selected="false" tabindex="-1" style="display:none">CPU load by group</button>
   <button type="button" role="tab" id="tab-pow" aria-controls="p-pow" aria-selected="false" tabindex="-1" style="display:none">POW performance</button>
   <button type="button" role="tab" id="tab-ifc" aria-controls="p-ifc" aria-selected="false" tabindex="-1" style="display:none">Interface Errors</button>
   <button type="button" role="tab" id="tab-cov" aria-controls="p-cov" aria-selected="false" tabindex="-1" style="display:none">Source coverage</button>
@@ -219,19 +221,6 @@ TEMPLATE_BODY = r'''</style>
   </div>
 </section>
 
-<section class="panel" id="p-cpu" role="tabpanel" aria-labelledby="tab-cpu" hidden>
-  <div class="sechead"><h2>CPU load by group</h2>__HB_cpu__</div>__HP_cpu__
-  <div class="bar">
-    <label>DP <select id="gdp"></select></label>
-    <button id="greset" type="button">Reset zoom</button>
-    <button id="gall" type="button">All</button>
-    <button id="gnone" type="button">None</button>
-  </div>
-  <div class="leg" id="gleg" style="margin-bottom:10px"></div>
-  <div class="cw" id="gwrap"><svg id="gchart" role="img" aria-label="CPU load by group over time"></svg><div class="tip" id="gtip"></div></div>
-  <table class="stats" id="gstats"></table>
-</section>
-
 <section class="panel" id="p-mp" role="tabpanel" aria-labelledby="tab-mp" hidden>
   <div class="sechead"><h2>Management plane</h2>__HB_mp__</div>__HP_mp__
   <p class="hint" id="mpinfo"></p>
@@ -260,6 +249,19 @@ TEMPLATE_BODY = r'''</style>
   <ul class="banner" id="sysbanner"></ul>
   <div class="sep"><div class="sechead"><h2>Details</h2>__HB_sysdetail__</div>__HP_sysdetail__
   <div id="sysdetails"></div></div>
+</section>
+
+<section class="panel" id="p-cpu" role="tabpanel" aria-labelledby="tab-cpu" hidden>
+  <div class="sechead"><h2>CPU load by group</h2>__HB_cpu__</div>__HP_cpu__
+  <div class="bar">
+    <label>DP <select id="gdp"></select></label>
+    <button id="greset" type="button">Reset zoom</button>
+    <button id="gall" type="button">All</button>
+    <button id="gnone" type="button">None</button>
+  </div>
+  <div class="leg" id="gleg" style="margin-bottom:10px"></div>
+  <div class="cw" id="gwrap"><svg id="gchart" role="img" aria-label="CPU load by group over time"></svg><div class="tip" id="gtip"></div></div>
+  <table class="stats" id="gstats"></table>
 </section>
 
 <section class="panel" id="p-pow" role="tabpanel" aria-labelledby="tab-pow" hidden>
@@ -297,7 +299,6 @@ TEMPLATE_BODY = r'''</style>
 
 <section class="panel" id="p-ifc" role="tabpanel" aria-labelledby="tab-ifc" hidden>
   <div class="sechead"><h2>Interface errors</h2>__HB_ifc__</div>__HP_ifc__
-  <table class="stats isys" id="isys"></table>
   <details id="iwarn" style="display:none;margin:8px 0 12px"><summary id="iwarnsum"></summary><ul id="iwarnlist"></ul></details>
   <div class="sechead" style="margin-top:12px"><h3>Findings</h3>__HB_iflags__</div>__HP_iflags__
   <ul class="banner" id="ibanner"></ul>
@@ -456,6 +457,17 @@ $('#title').textContent = D.kind + ' - ' + D.name;
 $('#sub').textContent = hasSamples ? ('Period ' + iso(TMIN) + ' - ' + iso(TMAX) + ' UTC | dp-monitor files read: ' + D.files + ' | generated ' + D.generated + ' UTC') : (D.pow && D.pow.collected_at ? 'Collected at ' + D.pow.collected_at : (D.ifc && D.ifc.system.collected_at ? 'Collected at ' + D.ifc.system.collected_at : ''));
 $('#utc').textContent = 'Reminder: all times in this report are in UTC. The original firewall timestamps' + (D.offsets.length ? ' (detected offsets: ' + D.offsets.join(', ') + ')' : '') + ' have been converted.' + (SERIES[0]==='ALL' ? ' The ALL series is the sum across DPs (for session table utilization and the dataplane health metrics it is the maximum value).' : '');
 $('#utc').style.display = hasSamples ? '' : 'none';
+
+// Device identity (show system info) in the report header, whichever tab is shown.
+(function(){
+  const S = D.ifc && D.ifc.system; if(!S || !(S.hostname||S.model||S.sw_version)) return;
+  const t = $('#devinfo'), hr = t.createTHead().insertRow(), br = t.createTBody().insertRow();
+  [['Hostname', S.hostname||'unknown'], ['Model', S.model||'unknown'], ['PAN-OS', S.sw_version||'unknown'],
+   ['Uptime', S.uptime ? S.uptime+' ('+S.uptime_text+')' : 'unknown'], ['Captured', S.collected_at||'unknown']].forEach(c=>{
+    const th = document.createElement('th'); th.textContent = c[0]; hr.appendChild(th); br.insertCell().textContent = c[1];
+  });
+  t.style.display = '';
+})();
 if (D.warnings.length){ $('#warn').style.display=''; $('#warnsum').textContent = D.warnings.length + ' warnings while reading'; D.warnings.forEach(w=>{const li=document.createElement('li'); li.textContent=w; $('#warnlist').appendChild(li);}); }
 
 // CHART-HELPERS-BEGIN
@@ -1242,10 +1254,6 @@ function ifSimpleTable(t, head, rows, fill){
   rows.forEach(r=>{ const tr = tb.insertRow(); fill(tr, r); });
 }
 function renderIfcStatic(){
-  const S = IF.system;
-  ifSimpleTable($('#isys'), ['Hostname','Model','PAN-OS','Uptime','Captured'], [S], (tr,s)=>{
-    [s.hostname||'unknown', s.model||'unknown', s.sw_version||'unknown', s.uptime ? s.uptime+' ('+s.uptime_text+')' : 'unknown', s.collected_at||'unknown'].forEach(x=>{ tr.insertCell().textContent = x; });
-  });
   const ul = $('#ibanner'); ul.replaceChildren();
   if(!IF.banner.length){ const li = document.createElement('li'); li.textContent = 'No interface flags with the current thresholds.'; ul.appendChild(li); }
   IF.banner.forEach(b=>{ const li = document.createElement('li'); li.className = 'lvl-'+b.level; li.textContent = b.text; ul.appendChild(li); });
@@ -1631,13 +1639,11 @@ if(hasMp) renderMpStatic();
 
 # Tab wiring, keyboard handling, initial tab, closing script and document tags.
 JS_TABS = r'''// Normal view: dataplane (health and throughput), system health and management plane. Every other tab is advanced and is shown with the Advanced box.
-const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasG?['cpu']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
-const NORMAL_TABS=['chart','sys','mp'], ADV_KEY='panosToolbox.tsfReport.advanced';
+const ALL_TABS=[].concat(hasSamples||hasDph?['chart']:[], hasMp?['mp']:[], hasSys?['sys']:[], hasG?['cpu']:[], hasPow?['pow']:[], hasIfc?['ifc']:[], hasCov?['cov']:[]);
+const NORMAL_TABS=['chart','sys','mp'];
 const hasNormalTab=ALL_TABS.some(k=>NORMAL_TABS.includes(k)), hasAdvTab=ALL_TABS.some(k=>!NORMAL_TABS.includes(k));
-// localStorage can throw (file:// in some browsers, private mode): the choice is then simply not remembered.
-const loadAdv=()=>{ try{ return localStorage.getItem(ADV_KEY)==='1'; }catch(e){ return false; } };
-const saveAdv=v=>{ try{ localStorage.setItem(ADV_KEY, v?'1':'0'); }catch(e){} };
-let advanced = hasNormalTab ? loadAdv() : true;   // no normal tab: the advanced ones are the only content
+// Always starts unticked (nothing is remembered between openings).
+let advanced = !hasNormalTab;   // no normal tab: the advanced ones are the only content
 let TABS=[];                                      // the visible tabs, in order
 function applyTabs(){
   TABS=ALL_TABS.filter(k=>advanced||NORMAL_TABS.includes(k));
@@ -1648,7 +1654,7 @@ function applyTabs(){
   $('#advwrap').title=hasNormalTab?'Show the advanced tabs (CPU load by group, POW performance, Interface Errors, Source coverage)':'This report has no throughput, system health or management plane data, so the advanced tabs are always shown.';
 }
 function setAdvanced(v){
-  advanced=!!v||!hasNormalTab; if(hasNormalTab) saveAdv(advanced);
+  advanced=!!v||!hasNormalTab;
   applyTabs(); if(!TABS.includes(activeTab)) showTab(TABS[0]);
 }
 ALL_TABS.forEach(k=>{ $('#tab-'+k).onclick=()=>showTab(k); });
