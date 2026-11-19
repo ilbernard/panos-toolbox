@@ -78,12 +78,12 @@ Slugs: `system_info`, `clock`, `state_inflight`, `state_backlogs_threshold`,
 |---|---|---|
 | 0 | Branch `feature/runtime-analyzer`, this plan | Done |
 | 1 | Reconnaissance (lab VM, historical log), `command-notes.md` | Done |
-| 2 | `transport.py`, `ssh.py`, allow-list, `FakeTransport` | To do |
-| 3 | `store.py`, `capture.py` (scheduler, inflight, offenders), CLI `capture` | To do |
-| 4 | Parsers: session, counters, backlog, packet buffer, resource monitor | To do |
-| 5 | `analysis.py`: time series, thresholds, findings | To do |
-| 6 | Report HTML, per-section help, flag documentation test | To do |
-| 7 | CLI registration, `pyproject` extra, README, `CLAUDE.md`, user docs, ruff | To do |
+| 2 | `transport.py`, `ssh.py`, allow-list, `FakeTransport` | Done |
+| 3 | `store.py`, `capture.py` (scheduler, inflight, offenders), CLI `capture` | Done |
+| 4 | Parsers: session, counters, backlog, packet buffer, resource monitor | Done |
+| 5 | `analysis.py`: time series, thresholds, findings | Done |
+| 6 | Report HTML, per-section help, flag documentation test | Done |
+| 7 | CLI registration, `pyproject` extra, README, `CLAUDE.md`, user docs, ruff | Done |
 | 8 | Live validation on the lab, independent spot check | To do |
 | 9 | Merge into `develop` | Only on Alberto's order |
 | Future | XML API transport (keygen from user/password, POST body, key kept in memory; run keygen before opening SSH because a new key can end the user's sessions), via Panorama with `target=<serial>`; validation on a physical firewall with a real offender | Deferred |

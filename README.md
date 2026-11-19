@@ -9,6 +9,7 @@ Strata Cloud Manager (SCM), exposed through one CLI: `panos-toolbox <area> <tool
 | `scm/`      | Strata Cloud Manager automation           | `pan-scm-sdk`    |
 | `tsf/`      | Offline Tech Support File analysis        | none (stdlib)    |
 | `gp/`       | Offline GlobalProtect client log analysis | none (stdlib)    |
+| `runtime/`  | Live firewall sampling over SSH + offline report | `paramiko` (capture only; the report is stdlib) |
 
 ## Quick start (no install)
 
@@ -38,6 +39,8 @@ To use `panos-toolbox` from anywhere without managing a venv, install it with
 | `panos-toolbox tsf analyze <tsf.tgz ...> [-o DIR] [--open] [--pow-*] [--if-*]` | Interactive HTML report (throughput, pps, cps, sessions, CPU by group) from a TSF's `dp-monitor.*` files, plus a POW performance tab from `debug dataplane pow performance` output in `tmp/cli/*.txt` (workgroups, functions, histograms, per-core view, heuristic anomaly flags); an Interface Errors tab from `show counter interface all` / `show interface ...` output (per-interface physical, hardware and flow drop counters, link state, flags, cross-check with the global counters); every tab and panel has its own collapsible help and counter names show a glossary tooltip; output goes to `./output/` by default |
 
 | `panos-toolbox gp analyze <GlobalProtectLogs.zip ...> [-o DIR] [--open] [--chain-gap S] [--gp-*] [--debug]` | Interactive HTML report from the "Collect Logs" bundle of a GlobalProtect Windows client: client configuration with a freshness badge per source, connection attempt timeline (logins and auto-restores, outcomes, error texts, phase steps where detailed logs exist, retry storms), automatic findings and source coverage; every tab has its own collapsible help. The report contains user and host names in clear text. See [docs/gp/analyzer.md](docs/gp/analyzer.md) |
+| `panos-toolbox runtime capture --host H --user U [--interval S] [--duration S] [--key-file F]` | Samples a firewall over SSH: every X s the POW performance, global counter delta, session info, resource monitor and management load; every X/6 s ingress-backlogs, packet-buffer-protection and its latency, with `show session id` for each real offender. Inflight monitoring is switched on for the capture and always left OFF. The password is asked at the prompt. Needs `.[runtime]`. See [docs/runtime/analyzer.md](docs/runtime/analyzer.md) |
+| `panos-toolbox runtime report <capture folder ...> [-o DIR] [--open] [--threshold KEY=VALUE]` | One offline HTML report from a capture folder: POW per interval, counters, ingress backlogs, packet buffer, sessions, resource monitor, findings. Standard library only. The report contains firewall counters and session details in clear text |
 
 Run `panos-toolbox` with no arguments for the full list.
 
@@ -132,9 +135,10 @@ src/panos_toolbox/
   scm/            SCM tools + client.py
   tsf/            offline TSF tools (analyzer.py, pow_perf.py, pow_glossary.py, interface_errors.py, if_glossary.py, report_*.py)
   gp/             offline GlobalProtect log tools (bundle.py, logs.py, client_config.py, timeline.py, checks.py, analyzer.py, report_*.py)
+  runtime/        firewall sampling over SSH (capture.py, ssh.py, store.py) and its offline report (parse_*.py, analysis.py, analyzer.py, report_*.py)
 scripts/          zero-install launchers (run from a checkout)
 tests/            pytest suite (no real devices)
-docs/             contributor docs (docs/console/ for the console tool, docs/gp/ for the GlobalProtect analyzer)
+docs/             contributor docs (docs/console/ for the console tool, docs/gp/ for the GlobalProtect analyzer, docs/runtime/ for the runtime analyzer)
 CLAUDE.md         context file for Claude Code sessions
 ```
 
