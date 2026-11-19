@@ -220,7 +220,7 @@ summarises the previous minute.</li>
 </ul>""",
     "throughput": """
 <p>Traffic through the firewall, computed from the byte counters of <code>show counter
-interface all</code>, read at the start of every fast tick (default: every interval/6
+interface all</code>, read at the end of every fast tick, as the least important command (default: every interval/6
 seconds, see the Overview tab for the interval actually obtained). A rate is the difference
 of two readings divided by the time between them, measured on the local clock at the middle
 of each command, so it is an average over that interval.</p>

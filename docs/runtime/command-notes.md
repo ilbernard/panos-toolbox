@@ -26,7 +26,7 @@ serials and must never be copied into the repository.
 | `show session packet-buffer-protection` | Short form when inactive: `Packet buffer count based`, `Congestion: 3/14666 (0.02%)`, `System resource usage is low, packet buffer protection not activated.` Extended form (from the historical log): congestion, drop probability and threshold, table `Session/IP Address | Zone | PCS | Percentage | State | Packets Total | Dropped | Time till discard`. |
 | `show session packet-buffer-protection buffer-latency` | `Latest latency: N ms`, `Last 10 seconds average/maximum latency (ms):` and ten `avg/max` pairs. |
 | `show session packet-buffer-protection zones` | Enabled zones. |
-| `show counter interface all` | Cumulative per-interface counters (MAC, CPU and logical blocks), parsed by `tsf.interface_errors`; used for the throughput charts (`bytes received` / `bytes transmitted`, else `rx-bytes` / `tx-bytes`). Size and duration on a production firewall still to be measured (read once per fast tick). |
+| `show counter interface all` | Cumulative per-interface counters (MAC, CPU and logical blocks), parsed by `tsf.interface_errors`; used for the throughput charts (`bytes received` / `bytes transmitted`, else `rx-bytes` / `tx-bytes`). Size and duration on a production firewall still to be measured (read once per fast tick, last and dropped first when late). |
 | `show session ingress_backlogs_threshold` / `_duration` | Single number (lab: 80 and 3). |
 
 ## ingress-backlogs

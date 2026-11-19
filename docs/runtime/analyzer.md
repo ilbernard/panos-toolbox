@@ -93,7 +93,7 @@ Resources, Capture log. Every tab and panel has its own collapsed help. Times ar
   Delta samples in which another client reset the global baseline (`DELTA_FOREIGN_SAMPLER`)
   are **excluded** from the rate chart (a gap) and from every statistic (max, mean, sum, number
   of samples); the mean divides by the valid samples. They stay visible in the samples strip.
-- **Throughput** (needs `show counter interface all`, read at the start of every fast tick, so at
+- **Throughput** (needs `show counter interface all`, read at the end of every fast tick (skipped first when ticks run late), so at
   X/6): total of the physical ports (received, transmitted, sum) with the `show session info`
   figure as a cross-check, and one chart per configured interface. Rates come from differences
   of the byte counters over the local clock; a counter that goes backwards is a gap. The

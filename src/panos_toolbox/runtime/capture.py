@@ -2,8 +2,9 @@
 
 Every ``--interval`` seconds a full cycle runs (POW, global counter delta, session info,
 resource monitor, management plane load); every ``--backlog-interval`` seconds (default
-interval/6, minimum 1 s) a fast tick runs (interface counters for the throughput charts first,
-then ingress-backlogs, packet-buffer-protection and its latency). For every real session reported by ingress-backlogs the tool also runs
+interval/6, minimum 1 s) a fast tick runs (ingress-backlogs, packet-buffer-protection and its
+latency, then, as the least important, the interface counters for the throughput charts; those
+are skipped when the tick is already a full period late). For every real session reported by ingress-backlogs the tool also runs
 ``show session id <id>``. Inflight monitoring is switched on at the start and always left OFF at
 the end, with a loud warning when the final ``no`` cannot be confirmed.
 
@@ -99,6 +100,7 @@ class Capture:
         self.cycles = 0
         self.fast_ticks = 0
         self.skipped = 0
+        self.iface_skipped = 0
         self.foreign = 0
         self.last_delta: float | None = None
         self.available = {"ingress_backlogs": True, "pbp": True, "pbp_latency": True,
@@ -217,11 +219,8 @@ class Capture:
             return None
         return text
 
-    def fast_tick(self, label: str) -> None:
+    def fast_tick(self, label: str, due: float | None = None) -> None:
         self.fast_ticks += 1
-        # First, so that the throughput series is the least starved when ticks overrun.
-        if self.cfg.iface_counters:
-            self._optional("iface_counters", C.IFACE_COUNTERS, tick=label)
         text = self._optional("ingress_backlogs", C.BACKLOG, tick=label)
         if text is not None:
             sections = parse_backlog(text)
@@ -236,6 +235,12 @@ class Capture:
                 self.run(f"show session id {sid}", id=sid, tick=label)
         self._optional("pbp", C.PBP, tick=label)
         self._optional("pbp_latency", C.PBP_LAT, tick=label)
+        # Last and first to go: throughput matters less than the overload indicators.
+        if self.cfg.iface_counters:
+            if due is not None and self.clock.monotonic() > due + self.cfg.backlog_interval:
+                self.iface_skipped += 1
+            else:
+                self._optional("iface_counters", C.IFACE_COUNTERS, tick=label)
 
     def cycle(self, n: int) -> None:
         self.run(C.MGMT_LOAD, cycle=n)
@@ -272,7 +277,7 @@ class Capture:
                 if cfg.max_cycles and self.cycles >= cfg.max_cycles:
                     break
             else:
-                self.fast_tick(f"t{j}")
+                self.fast_tick(f"t{j}", due_b)
                 now = clock.monotonic()
                 j, s2 = next_index(t0, b, j, due_b, now)
                 self.skipped += s2
@@ -293,6 +298,7 @@ class Capture:
             "cycles": self.cycles,
             "fast_ticks": self.fast_ticks,
             "skipped_ticks": self.skipped,
+            "iface_counters_skipped": self.iface_skipped,
             "delta_foreign_sampler_events": self.foreign,
             "available": dict(self.available),
             "stopped_by_user": self.stopped_by_user,

@@ -265,15 +265,27 @@ def test_capture_main_builds_report_and_survives_ctrl_c(tmp_path, monkeypatch):
     assert "stopped_by_user" in (folders[0] / "manifest.json").read_text()
 
 
-def test_iface_counters_run_first_in_every_fast_tick(tmp_path):
+def test_iface_counters_run_last_in_every_fast_tick(tmp_path):
     cap, tr, _, _ = build(tmp_path)
     cap.execute()
     cmds = tr.commands()
-    n = count(tr, C.IFACE_COUNTERS)
-    assert n == count(tr, C.PBP) == count(tr, C.BACKLOG) > 1
+    assert count(tr, C.IFACE_COUNTERS) == count(tr, C.PBP) > 1
     for i, c in enumerate(cmds):
-        if c == C.BACKLOG:
-            assert cmds[i - 1] == C.IFACE_COUNTERS  # first command of the tick
+        if c == C.IFACE_COUNTERS:
+            assert cmds[i - 1] == C.PBP_LAT  # after the overload indicators
+
+
+def test_iface_counters_are_dropped_first_when_the_tick_is_late(tmp_path):
+    # every command takes 3 s: ticks run late, throughput is what gets skipped
+    clock = SimClock()
+    fw = Fw(clock)
+    tr = FakeTransport(fw.responses(), clock, cost=3.0)
+    w = CaptureWriter(tmp_path / "cap")
+    cap = Capture(tr, w, CaptureConfig(interval=60, duration=120), clock=clock,
+                  reconnect=lambda: tr, out=lambda s: None)
+    m = cap.execute()
+    assert m["iface_counters_skipped"] > 0
+    assert count(tr, C.IFACE_COUNTERS) < count(tr, C.PBP)
 
 
 def test_no_iface_counters_option_and_invalid_syntax(tmp_path):
