@@ -43,7 +43,11 @@ SECTION_TITLES = {
     "ss_active": "Active sessions by protocol",
     "ss_rates": "Session rates",
     "resources": "Resources",
+    "throughput": "Throughput",
+    "tp_total": "Total throughput",
+    "tp_ifaces": "Throughput per interface",
     "res_cpu": "Data plane CPU over time",
+    "res_heat": "CPU per core heatmap",
     "res_groups": "CPU per group",
     "res_util": "Resource utilization",
     "res_mgmt": "Management plane load",
@@ -110,7 +114,13 @@ report; they are hints, not proof of a fault.</li>
     "pow_groups": """
 <p>Average microseconds per call for the selected group in every interval (difference of
 <code>ac-total-us</code> divided by the difference of <code>ac-count</code>). Pick another
-group with the selector. Hover a point for the exact value, call count and maximum.</p>""",
+group with the selector. Hover a point for the exact value, call count and maximum.</p>
+<p><b>Scale.</b> The groups differ by several orders of magnitude (a few microseconds for the
+forwarding stages, hundreds of thousands for the management flow), so with every group shown
+the default (<i>Auto</i>) is a <b>logarithmic</b> scale: each gridline is ten times the one
+below and a ten-fold change looks the same wherever it happens. A single group is drawn
+<i>linear</i> by default. The selector forces either. On the log scale an interval with no
+calls (average 0 or empty) is a gap, because zero cannot be drawn.</p>""",
     "pow_funcs": """
 <p>The functions that used the most total time over the capture (the number is limited by
 <code>top_pow_funcs</code>). Columns show the largest and the mean of the per-interval
@@ -122,7 +132,9 @@ second; the report uses that rate.</p>
 <ul>
 <li><b>The delta baseline is global on the firewall.</b> Any other client that runs the same
 command (another admin, a script, a monitoring tool) resets it, so one sample then covers a
-shorter window. Such samples are marked as foreign in the samples strip.</li>
+shorter window. Such samples are marked as foreign in the samples strip and are <b>left out of
+the charts (a gap) and of every statistic</b>: the other client took part of the window, so
+the rate of that sample is measured on a short and arbitrary slice.</li>
 <li>Counters that never appear in a sample are not listed; a counter that appears late is
 listed with its first-seen sample.</li>
 </ul>""",
@@ -132,20 +144,20 @@ which it appeared, the maximum, mean and last rate per second and the sum of the
 Click a header to sort, use the search box for name or description and the severity buttons
 to filter.</p>
 <ul>
-<li>The mean rate divides by all delta samples, including those where the counter did not
-appear.</li>
+<li>The mean rate divides by the valid delta samples (foreign ones excluded), including those
+where the counter did not appear.</li>
 <li>A high rate of a <code>drop</code> counter is not always a problem; read the
 description and compare with the traffic level.</li>
 </ul>""",
     "ct_rates": """
 <p>Rate per second of the busiest counters (the number is limited by <code>top_counters</code>)
-in every delta sample. A missing counter in a sample is drawn as zero. Hover a point for the
-value.</p>""",
+in every delta sample. A missing counter in a sample is drawn as zero; a foreign sample is a
+gap in the line. Hover a point for the value.</p>""",
     "ct_samples": """
 <p>One box per delta sample with the elapsed time the firewall reported. A marked box is a
 foreign sampler: the elapsed time is clearly shorter than the capture interval, which means
-another client read and reset the counters in between. Rates stay correct (they use the
-elapsed time), but the sample covers only part of the cycle.</p>""",
+another client read and reset the counters in between. The sample covers only part of the
+cycle, so it is excluded from the rate chart and from the counter statistics.</p>""",
     "backlog": """
 <p>Ingress backlog usage per data plane, from the ingress backlog command sampled on the
 fast tick. It shows how full the atomic and total backlog are and which sessions hold the
@@ -205,6 +217,52 @@ resources</code>, sampled once per cycle.</p>
 <li>Resource monitor values are 60 second figures kept by the firewall, so one sample
 summarises the previous minute.</li>
 <li>If the firewall does not support the command, the data plane panels say so.</li>
+</ul>""",
+    "throughput": """
+<p>Traffic through the firewall, computed from the byte counters of <code>show counter
+interface all</code>, read at the start of every fast tick (default: every interval/6
+seconds, see the Overview tab for the interval actually obtained). A rate is the difference
+of two readings divided by the time between them, measured on the local clock at the middle
+of each command, so it is an average over that interval.</p>
+<ul>
+<li>A counter that goes backwards (interface reset or flap) gives a gap, never a negative rate.</li>
+<li>If the firewall does not have the command, or the capture was made with
+<code>--no-iface-counters</code>, the tab says so.</li>
+<li>Counters are not dropped when the tick overruns: a skipped tick only makes the interval
+longer; the rate stays correct.</li>
+</ul>""",
+    "tp_total": """
+<p>Sum over the <b>physical ports</b> only (so sub-interfaces, aggregates and tunnels are not
+counted twice): received, transmitted and their sum, in Mbit/s. The dashed grey line is
+received + transmitted. The red dots are the throughput that the firewall prints in <code>show
+session info</code> once per cycle, drawn on the nearest interval as a cross-check; the two
+come from different counters (physical port bytes against the data plane's own figure), so
+they can differ by the traffic that does not become a session (for example dropped or
+management traffic) and by the averaging window.</p>""",
+    "tp_ifaces": """
+<p>One chart per configured interface, received and transmitted in Mbit/s, busiest first.
+For an interface with logical counters (every configured interface, including sub-interfaces,
+aggregates and tunnels) those are used; a physical port without configuration is listed only
+if it carried traffic during the capture. Use the filter and the sort selector; the checkbox
+hides interfaces without any traffic. At most 60 charts are drawn. Logical counters can differ
+a little from the physical port counters of the total (they count what the data plane
+processed).</p>""",
+    "res_heat": """
+<p>One row per data plane core and one cell per second, rebuilt from the per-second table
+of <code>show running resource-monitor</code>. Each sample holds the last 60 seconds, so
+consecutive samples overlap when the interval is shorter than 60 s: the report chains them
+by finding the shift at which the overlapping rows match (the local clock is only used as a
+starting point) and keeps one value per second. Seconds not covered by any sample stay grey
+("no data"), they are never drawn as 0.</p>
+<ul>
+<li>The colour goes from white (0%) to red (100%); a cell with a dark outline is at or above
+<code>cpu_core_warn</code>. When the picture is wider than the screen each pixel column shows
+the maximum of the seconds in it.</li>
+<li>The <b>peak</b> column is the highest value of each core in the capture.</li>
+<li>A core the firewall prints as <code>*</code> (usually core 0) is not drawn.</li>
+<li>Row order of the firewall output is newest first (checked on overlapping samples); the
+exact second of a row can be off by a second or two.</li>
+<li>For captures longer than a few hours each cell is the maximum of several seconds.</li>
 </ul>""",
     "res_cpu": """
 <p>Per cycle: the busiest core (maximum over the last 60 seconds) and the highest of the core
@@ -296,9 +354,11 @@ FLAG_HELP = {
     "DELTA_FOREIGN_SAMPLER": _f(
         "Another client reset the delta counters",
         "The firewall keeps one global delta baseline. A sample whose elapsed time is shorter "
-        "than expected means another client read the counters in between.",
+        "than expected means another client read the counters in between; that sample is "
+        "left out of the counter charts and statistics.",
         "Stop other tools or admins that run 'show counter global filter delta yes' during "
-        "the capture, or accept that those samples cover part of the cycle."),
+        "the capture. The affected samples are excluded from the charts and statistics; "
+        "many of them leave gaps in the counter history."),
     "INFLIGHT_LEFT_ON": _f(
         "Inflight monitoring may still be ON",
         "The capture switches inflight monitoring on and must switch it off; it could not "

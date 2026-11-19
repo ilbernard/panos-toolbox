@@ -56,6 +56,35 @@ def delta_text(n, drop_rate=0, elapsed=30.0):
             + "\n".join(rows) + f"\n{dash}\nTotal counters shown: {len(rows)}\n{dash}\n")
 
 
+def iface_text(now, mbps=(1.0, 2.0)):
+    """``show counter interface all`` with byte counters that grow linearly with time:
+    ethernet1/1 receives ``mbps[0]`` and transmits ``mbps[1]`` Mbit/s; ethernet1/2 is a physical
+    port without configuration and without traffic; ethernet1/1.7 is a configured sub-interface
+    (logical counters only) at 0.5 Mbit/s each way."""
+    rx, tx = int(now * mbps[0] * 125000), int(now * mbps[1] * 125000)
+    sub = int(now * 62500)
+    dash = "-" * 80
+
+    def hw(name, rxb, txb):
+        return (f"Interface: {name}\n{dash}\n{dash}\nPhysical port counters read from MAC:\n{dash}\n"
+                f"rx-bytes                      {rxb}\ntx-bytes                      {txb}\n{dash}\n\n"
+                f"Hardware interface counters read from CPU:\n{dash}\n"
+                f"bytes received                           {rxb}\n"
+                f"bytes transmitted                        {txb}\n"
+                f"packets received                         {rxb // 1000}\n"
+                f"packets transmitted                      {txb // 1000}\n{dash}\n\n")
+
+    def lg(name, rxb, txb):
+        return (f"Interface: {name}\nLogical interface counters read from CPU:\n{dash}\n"
+                f"bytes received                           {rxb}\n"
+                f"bytes transmitted                        {txb}\n"
+                f"packets received                         {rxb // 1000}\n"
+                f"packets transmitted                      {txb // 1000}\n{dash}\n\n")
+    return ("\nHardware interface counters:\n" + dash + "\n\n" + hw("ethernet1/1", rx, tx)
+            + hw("ethernet1/2", 0, 0) + "Logical interface counters:\n" + dash + "\n\n"
+            + lg("ethernet1/1", rx, tx) + lg("ethernet1/1.7", sub, sub))
+
+
 def build_capture(root, scenario=(), interval=30, duration=95, clock=None):
     """Runs a capture on a FakeTransport and returns the capture folder path."""
     clock = clock or SimClock()
@@ -92,6 +121,7 @@ def build_capture(root, scenario=(), interval=30, duration=95, clock=None):
         C.BACKLOG: backlog if "no-backlog" not in scenario else "Invalid syntax.\n",
         C.PBP: (EXTENDED if "pbp-active" in scenario else SHORT),
         C.PBP_LAT: LATENCY,
+        C.IFACE_COUNTERS: (lambda c: iface_text(clock.now)) if "iface" in scenario else "\n",
         C.PBP_ZONES: "zone1\n",
         C.BACKLOG_THRESHOLD: "80\n",
         C.BACKLOG_DURATION: "3\n",

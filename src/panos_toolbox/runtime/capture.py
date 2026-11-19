@@ -2,8 +2,8 @@
 
 Every ``--interval`` seconds a full cycle runs (POW, global counter delta, session info,
 resource monitor, management plane load); every ``--backlog-interval`` seconds (default
-interval/6, minimum 1 s) a fast tick runs (ingress-backlogs, packet-buffer-protection and its
-latency). For every real session reported by ingress-backlogs the tool also runs
+interval/6, minimum 1 s) a fast tick runs (interface counters for the throughput charts first,
+then ingress-backlogs, packet-buffer-protection and its latency). For every real session reported by ingress-backlogs the tool also runs
 ``show session id <id>``. Inflight monitoring is switched on at the start and always left OFF at
 the end, with a loud warning when the final ``no`` cannot be confirmed.
 
@@ -75,6 +75,7 @@ class CaptureConfig:
     pow_all: bool = False
     inflight: bool = True
     max_offenders: int = 10
+    iface_counters: bool = True  # "show counter interface all" in every fast tick
 
     def __post_init__(self):
         if self.interval < 1:
@@ -101,7 +102,7 @@ class Capture:
         self.foreign = 0
         self.last_delta: float | None = None
         self.available = {"ingress_backlogs": True, "pbp": True, "pbp_latency": True,
-                          "resource_monitor": True}
+                          "resource_monitor": True, "iface_counters": True}
         self.seen_ids: set = set()
         self.warnings: list = []
         self.stopped_by_user = False
@@ -218,6 +219,9 @@ class Capture:
 
     def fast_tick(self, label: str) -> None:
         self.fast_ticks += 1
+        # First, so that the throughput series is the least starved when ticks overrun.
+        if self.cfg.iface_counters:
+            self._optional("iface_counters", C.IFACE_COUNTERS, tick=label)
         text = self._optional("ingress_backlogs", C.BACKLOG, tick=label)
         if text is not None:
             sections = parse_backlog(text)
@@ -358,6 +362,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="do not run 'set session inflight_monitoring yes/no'")
     ap.add_argument("--max-offenders", type=int, default=10,
                     help="show session id queries per fast tick (default 10)")
+    ap.add_argument("--no-iface-counters", action="store_true",
+                    help="do not run 'show counter interface all' in the fast ticks "
+                         "(no throughput charts, shorter ticks)")
     ap.add_argument("--no-compress", action="store_true", help="write plain text raw files")
     ap.add_argument("--outdir", default=".", help="where the capture folder is created")
     ap.add_argument("--no-report", action="store_true",
@@ -372,7 +379,8 @@ def main(argv=None) -> int:
         cfg = CaptureConfig(interval=args.interval, backlog_interval=args.backlog_interval,
                             duration=args.duration, max_cycles=args.max_cycles,
                             pow_all=args.pow_all, inflight=not args.no_inflight_monitoring,
-                            max_offenders=args.max_offenders)
+                            max_offenders=args.max_offenders,
+                            iface_counters=not args.no_iface_counters)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -131,7 +131,7 @@ def test_unavailable_commands_probed_once(tmp_path):
     cap, tr, _, _ = build(tmp_path, backlog=INVALID, pbp="invalid", resmon="invalid")
     m = cap.execute()
     assert m["available"] == {"ingress_backlogs": False, "pbp": False, "pbp_latency": False,
-                              "resource_monitor": False}
+                              "resource_monitor": False, "iface_counters": True}
     assert count(tr, C.BACKLOG) == 1 and count(tr, C.PBP) == 1 and count(tr, C.RESMON) == 1
     assert m["cycles"] == 3
 
@@ -263,3 +263,26 @@ def test_capture_main_builds_report_and_survives_ctrl_c(tmp_path, monkeypatch):
     folders = [p for p in tmp_path.iterdir() if p.is_dir()]
     assert len(folders) == 1 and (folders[0] / "manifest.json").exists()
     assert "stopped_by_user" in (folders[0] / "manifest.json").read_text()
+
+
+def test_iface_counters_run_first_in_every_fast_tick(tmp_path):
+    cap, tr, _, _ = build(tmp_path)
+    cap.execute()
+    cmds = tr.commands()
+    n = count(tr, C.IFACE_COUNTERS)
+    assert n == count(tr, C.PBP) == count(tr, C.BACKLOG) > 1
+    for i, c in enumerate(cmds):
+        if c == C.BACKLOG:
+            assert cmds[i - 1] == C.IFACE_COUNTERS  # first command of the tick
+
+
+def test_no_iface_counters_option_and_invalid_syntax(tmp_path):
+    cap, tr, _, _ = build(tmp_path, cfg=CaptureConfig(interval=30, duration=95,
+                                                      iface_counters=False))
+    cap.execute()
+    assert count(tr, C.IFACE_COUNTERS) == 0
+    cap, tr, _, _ = build(tmp_path / "b")
+    tr.responses[C.IFACE_COUNTERS] = INVALID
+    m = cap.execute()
+    assert m["available"]["iface_counters"] is False
+    assert count(tr, C.IFACE_COUNTERS) == 1  # probed once, then skipped

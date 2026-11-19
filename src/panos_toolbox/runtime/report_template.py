@@ -130,7 +130,7 @@ pre.det{margin:4px 0;padding:8px 12px;background:#f7f9fb;border:1px solid var(--
 
 _TABS = [("overview", "Overview"), ("findings", "Findings"), ("pow", "POW"),
          ("counters", "Counters"), ("backlog", "Ingress backlogs"), ("pbp", "Packet buffer"),
-         ("sessions", "Sessions"), ("resources", "Resources"), ("capture", "Capture log")]
+         ("sessions", "Sessions"), ("throughput", "Throughput"), ("resources", "Resources"), ("capture", "Capture log")]
 
 _TABS_HTML = "\n".join(
     f'<button type="button" role="tab" id="tab-{i}" aria-controls="p-{i}" '
@@ -165,8 +165,9 @@ const D = __DATA__;
 const META = D.meta || {}, SS = (D.session || {}).series || [], LOAD = D.load || [], DL = D.delta || {samples:[], counters:[], top:{t:[], series:{}}};
 const POW = D.pow || {intervals:[], groups:{}, funcs:{}, banner:[]}, BL = D.backlog || {available:false, series:[], special_tags:[], offenders:[]};
 const PBP = D.pbp || {available:false, series:[], latency:[], entries:[]}, RM = D.resmon || {available:false, series:[], last_groups:{}, last_util:{}};
+const TP = D.throughput || {available:false, t:[], total:{rx_bps:[], tx_bps:[]}, interfaces:{}};
 const CAP = D.capture || {commands:[], cycles:[]}, FND = D.findings || [], TH = D.thresholds || {}, FH = D.flag_help || {};
-const TABS = ['overview','findings','pow','counters','backlog','pbp','sessions','resources','capture'];
+const TABS = ['overview','findings','pow','counters','backlog','pbp','sessions','throughput','resources','capture'];
 const LEVELS = ['critical','warning','info'];
 const PALETTE = ['#1f6f8b','#d9822b','#2f855a','#8e44ad','#b42318','#5d6b7a','#b59a00','#0e7490','#d1478a','#6b8e23'];
 const $ = s => document.querySelector(s);
@@ -326,16 +327,24 @@ function lineChart(host, o){
     clear(box);
     const W = Math.max(480, Math.floor(wrap.clientWidth || host.clientWidth || 1000)), H = o.height || 260;
     const L = 62, R = 16, Tp = 22, B = 34, pw = W - L - R, ph = H - Tp - B;
-    const vis = series.filter((s, i) => !hidden.has(i));
-    let mx = 0; vis.forEach(s => s.values.forEach(v => { if(isNum(v) && v > mx) mx = v; }));
-    const ymax = o.yMax != null ? Math.max(o.yMax, mx) : niceCeil(mx || 1);
-    const ymin = o.yMin != null ? o.yMin : 0, yr = (ymax - ymin) || 1;
+    const vis0 = series.filter((s, i) => !hidden.has(i));
+    // Logarithmic scale (o.log): values <= 0 cannot be drawn and become gaps.
+    const LOG = !!o.log && vis0.some(s => s.values.some(v => isNum(v) && v > 0));
+    const vis = LOG ? vis0.map(s => Object.assign({}, s, {values:s.values.map(v => isNum(v) && v > 0 ? v : null)})) : vis0;
+    let mx = 0, mn = Infinity; vis.forEach(s => s.values.forEach(v => { if(isNum(v)){ if(v > mx) mx = v; if(v > 0 && v < mn) mn = v; } }));
+    const lo = LOG ? Math.floor(Math.log10(mn)) : 0, hi = LOG ? Math.max(lo + 1, Math.ceil(Math.log10(mx))) : 0;
+    const ymax = LOG ? Math.pow(10, hi) : (o.yMax != null ? Math.max(o.yMax, mx) : niceCeil(mx || 1));
+    const ymin = LOG ? Math.pow(10, lo) : (o.yMin != null ? o.yMin : 0), yr = (ymax - ymin) || 1;
     let t0 = Math.min(...T), t1 = Math.max(...T);
     if(t1 === t0){ t0 -= 30e3; t1 += 30e3; }
-    const span = t1 - t0, X = t => L + (t - t0) / span * pw, Y = v => Tp + ph - (v - ymin) / yr * ph;
+    const span = t1 - t0, X = t => L + (t - t0) / span * pw;
+    const Y = LOG ? (v => Tp + ph - (Math.log10(v) - lo) / (hi - lo) * ph) : (v => Tp + ph - (v - ymin) / yr * ph);
     const svg = S('svg', {width:W, height:H, viewBox:'0 0 ' + W + ' ' + H, role:'img', 'aria-label':o.title || 'chart'});
-    for(let i = 0; i <= 4; i++){
-      const v = ymin + yr * i / 4, y = Y(v);
+    const ticks = [];
+    if(LOG){ const st = Math.max(1, Math.ceil((hi - lo) / 6)); for(let e = lo; e <= hi; e += st) ticks.push(Math.pow(10, e)); }
+    else for(let i = 0; i <= 4; i++) ticks.push(ymin + yr * i / 4);
+    for(const v of ticks){
+      const y = Y(v);
       svg.appendChild(S('line', {x1:L, x2:W - R, y1:y, y2:y, class:'gl'}));
       svg.appendChild(S('text', {x:L - 6, y:y + 4, 'text-anchor':'end', class:'ax', text:fmtN(v)}));
     }
@@ -346,7 +355,7 @@ function lineChart(host, o){
       svg.appendChild(S('text', {x:x, y:H - 16, 'text-anchor':i === 0 ? 'start' : i === nt ? 'end' : 'middle', class:'ax', text:timeLabel(t, span)}));
     }
     svg.appendChild(S('text', {x:W - R, y:H - 3, 'text-anchor':'end', class:'ax', text:'UTC'}));
-    if(o.unit) svg.appendChild(S('text', {x:L, y:12, 'text-anchor':'end', class:'ax', text:o.unit}));
+    if(o.unit || LOG) svg.appendChild(S('text', {x:L, y:12, 'text-anchor':'end', class:'ax', text:(o.unit || '') + (LOG ? ' (log)' : '')}));
     svg.appendChild(S('line', {x1:L, x2:L, y1:Tp, y2:Tp + ph, class:'axl'}));
     svg.appendChild(S('line', {x1:L, x2:W - R, y1:Tp + ph, y2:Tp + ph, class:'axl'}));
     for(const s of vis){
@@ -511,14 +520,17 @@ function renderPow(){
     gb.appendChild(noData('POW needs at least two samples with data to compute per-interval figures.'));
   } else {
     const holder = E('div');
+    let cur = '*', scale = 'auto';
     const show = key => {
-      clear(holder);
+      cur = key; clear(holder);
       const sel = key === '*' ? names : [key];
-      lineChart(holder, {t:T, unit:'us', title:'POW average microseconds per call', legend:sel.length > 1,
+      const log = scale === 'log' || (scale === 'auto' && sel.length > 1);
+      lineChart(holder, {t:T, unit:'us', log, title:'POW average microseconds per call', legend:sel.length > 1,
         series:sel.map(n => ({name:n, values:groups[n].avg_us})),
         extra:i => sel.length === 1 ? ['calls in interval: ' + fmtN(groups[sel[0]].count[i]), 'max-us (reported): ' + fmtN(groups[sel[0]].max_us[i])] : []});
     };
-    gb.appendChild(E('div', {class:'bar'}, selectBox('Group', [['*', '(all groups)'], ...names.map(n => [n, n])], show)));
+    gb.appendChild(E('div', {class:'bar'}, selectBox('Group', [['*', '(all groups)'], ...names.map(n => [n, n])], show),
+      selectBox('Scale', [['auto', 'Auto (log for all groups)'], ['log', 'Logarithmic'], ['linear', 'Linear']], v => { scale = v; show(cur); })));
     gb.appendChild(holder); show('*');
   }
   root.appendChild(gb);
@@ -561,6 +573,7 @@ function renderCounters(){
       seg.appendChild(b);
     });
     tb.appendChild(E('div', {class:'bar'}, inp, seg));
+    if(DL.excluded) tb.appendChild(E('p', {class:'hint', text:'Statistics use the ' + DL.valid + ' valid delta sample(s); ' + DL.excluded + ' sample(s) in which another client reset the delta counters are left out.'}));
     tb.appendChild(tab.el);
   }
   root.appendChild(tb);
@@ -572,12 +585,12 @@ function renderCounters(){
     return h;
   })()));
   const strip = E('div', {class:'strip'});
-  sm.forEach((s, i) => strip.appendChild(E('div', {class:'sbox' + (s.foreign ? ' foreign' : ''), title:s.foreign ? 'Another client reset the delta baseline during this window' : ''},
+  sm.forEach((s, i) => strip.appendChild(E('div', {class:'sbox' + (s.foreign ? ' foreign' : ''), title:s.foreign ? 'Another client reset the delta baseline during this window: left out of the charts and statistics' : ''},
     E('b', {text:'#' + (i + 1) + '  ' + hms(s.t) + ' UTC'}), E('span', {text:'elapsed ' + (isNum(s.elapsed) ? fmtX(s.elapsed) + ' s' : 'n/a') + ', ' + s.n_counters + ' counters'}),
-    s.foreign ? E('div', null, badge('critical', 'FOREIGN SAMPLER')) : null)));
+    s.foreign ? E('div', null, badge('critical', 'FOREIGN SAMPLER'), ' excluded') : null)));
   const nf = sm.filter(s => s.foreign).length;
   root.appendChild(sub('Delta samples', 'ct_samples', sm.length ? strip : noData(),
-    nf ? E('p', {class:'hint', text:nf + ' sample(s) were shortened by another client that reset the delta counters.'}) : null));
+    nf ? E('p', {class:'hint', text:nf + ' sample(s) were shortened by another client that reset the delta counters. They are shown as gaps in the rate chart and are left out of the counter statistics.'}) : null));
 }
 '''
 
@@ -666,6 +679,81 @@ function renderSessions(){
   });
   c.appendChild(g); root.appendChild(c);
 }
+// ---- CPU heatmap: one row per core, one cell per second (see analysis._cpu_heat)
+const heatColor = v => isNum(v) ? 'rgba(180,35,24,' + (0.06 + 0.94 * v / 100).toFixed(2) + ')' : '';
+function cpuHeat(host, H){
+  const ids = (H.cores || []).map(String), n = ids.length, stepMs = (H.step_s || 1) * 1000;
+  const ncell = n ? H.cells[ids[0]].length : 0;
+  if(!n || !ncell){ host.appendChild(noData('No per-second CPU data in this capture.')); return; }
+  const t0 = H.t0_ms, span = ncell * stepMs, thr = +(TH.cpu_core_warn || 80);
+  const wrap = E('div', {class:'chart'}), box = E('div'); wrap.appendChild(box); host.appendChild(wrap);
+  function draw(){
+    clear(box);
+    const W = Math.max(480, Math.floor(wrap.clientWidth || host.clientWidth || 1000));
+    const L = 62, PK = 46, Rr = 16 + PK, T = 16, B = 28, LEG = 26, pw = W - L - Rr;
+    const rp = Math.min(18, Math.max(8, Math.floor(420 / n))), ph = n * rp;
+    const nb = Math.max(1, Math.floor(pw / 2)), bw = pw / nb, bt = span / nb;
+    const svg = S('svg', {width:W, height:T + ph + B + LEG, viewBox:'0 0 ' + W + ' ' + (T + ph + B + LEG), role:'img', 'aria-label':'CPU per core heatmap'});
+    svg.appendChild(S('rect', {x:L, y:T, width:pw, height:ph, fill:'#eef1f4'}));
+    const cols = [];  // per row: value per pixel column
+    ids.forEach((id, k) => {
+      const row = H.cells[id], vals = new Array(nb).fill(null), y = T + k * rp;
+      let pk = null;
+      for(let j = 0; j < row.length; j++){
+        const v = row[j]; if(!isNum(v)) continue;
+        if(pk === null || v > pk) pk = v;
+        const a = Math.floor(j * stepMs / bt), b = Math.max(a, Math.ceil((j + 1) * stepMs / bt) - 1);
+        for(let c = a; c <= Math.min(b, nb - 1); c++) if(vals[c] === null || v > vals[c]) vals[c] = v;
+      }
+      cols.push(vals);
+      let i = 0;
+      while(i < nb){
+        const v = vals[i]; if(v === null){ i++; continue; }
+        let j = i; while(j + 1 < nb && vals[j + 1] === v) j++;
+        const hot = v >= thr;
+        svg.appendChild(S('rect', {x:L + i * bw, y, width:(j - i + 1) * bw, height:rp + 0.3, fill:heatColor(v), stroke:hot ? '#1c2530' : null, 'stroke-width':hot ? 1 : null}));
+        i = j + 1;
+      }
+      const fs = Math.max(8, Math.min(11, rp - 1)), yc = y + rp / 2 + fs * 0.35;
+      svg.appendChild(S('text', {x:L - 6, y:yc, 'text-anchor':'end', class:'ax', 'font-size':fs, text:'core ' + id}));
+      if(pk !== null){
+        svg.appendChild(S('rect', {x:W - Rr + 4, y, width:PK - 8, height:rp + 0.3, fill:heatColor(pk)}));
+        if(rp >= 8) svg.appendChild(S('text', {x:W - Rr + 4 + (PK - 8) / 2, y:yc, 'text-anchor':'middle', 'font-size':fs, fill:pk >= 55 ? '#fff' : '#1c2530', text:String(pk)}));
+      }
+    });
+    svg.appendChild(S('text', {x:W - Rr + 4 + (PK - 8) / 2, y:T - 3, 'text-anchor':'middle', class:'ax', text:'peak'}));
+    const nt = Math.max(2, Math.min(8, Math.floor(pw / 110)));
+    for(let i = 0; i <= nt; i++){
+      const t = t0 + span * i / nt, x = L + pw * i / nt;
+      svg.appendChild(S('line', {x1:x, x2:x, y1:T + ph, y2:T + ph + 4, class:'axl'}));
+      svg.appendChild(S('text', {x, y:T + ph + 17, 'text-anchor':i === 0 ? 'start' : i === nt ? 'end' : 'middle', class:'ax', text:timeLabel(t, span)}));
+    }
+    svg.appendChild(S('text', {x:W - Rr, y:T + ph + 17 + 9, 'text-anchor':'end', class:'ax', text:'UTC'}));
+    svg.appendChild(S('line', {x1:L, x2:L + pw, y1:T + ph, y2:T + ph, class:'axl'}));
+    const ly = T + ph + B + 4, gid = 'hmg' + Math.random().toString(36).slice(2, 8);
+    svg.appendChild(S('defs', null, S('linearGradient', {id:gid, x1:0, x2:1, y1:0, y2:0}, S('stop', {offset:0, 'stop-color':heatColor(0)}), S('stop', {offset:1, 'stop-color':heatColor(100)}))));
+    svg.appendChild(S('text', {x:L, y:ly + 9, class:'ax', text:'0%'}));
+    svg.appendChild(S('rect', {x:L + 26, y:ly, width:140, height:11, fill:'url(#' + gid + ')', stroke:'#d8dde3'}));
+    svg.appendChild(S('text', {x:L + 172, y:ly + 9, class:'ax', text:'100%'}));
+    svg.appendChild(S('rect', {x:L + 226, y:ly, width:14, height:11, fill:'#eef1f4', stroke:'#d8dde3'}));
+    svg.appendChild(S('text', {x:L + 246, y:ly + 9, class:'ax', text:'no data'}));
+    svg.appendChild(S('rect', {x:L + 316, y:ly + 0.5, width:14, height:10, fill:heatColor(thr), stroke:'#1c2530', 'stroke-width':1}));
+    svg.appendChild(S('text', {x:L + 336, y:ly + 9, class:'ax', text:'at or above ' + thr + '% (cpu_core_warn)'}));
+    const ov = S('rect', {x:L, y:T, width:pw, height:ph, fill:'transparent'});
+    ov.addEventListener('mousemove', ev => {
+      const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (W / r.width), py = (ev.clientY - r.top) * (W / r.width);
+      const k = Math.max(0, Math.min(n - 1, Math.floor((py - T) / rp))), c = Math.max(0, Math.min(nb - 1, Math.floor((px - L) / bw)));
+      const a = t0 + c * bt, b = a + bt, v = cols[k][c];
+      tipShow(ev, ['core ' + ids[k], isoOf(a) + ' - ' + isoOf(b) + ' UTC', isNum(v) ? 'max ' + v + ' %' : 'no data']);
+    });
+    ov.addEventListener('mouseleave', tipHide);
+    svg.appendChild(ov); box.appendChild(svg);
+  }
+  CHARTS.push({draw, wrap}); draw();
+  const um = H.unmeasured || [];
+  if(um.length) host.appendChild(E('p', {class:'hint', text:'Not measured by the firewall (printed as *): core ' + um.join(', core ') + '. Not drawn.'}));
+  if((H.step_s || 1) > 1) host.appendChild(E('p', {class:'hint', text:'Long capture: every cell is the maximum of ' + H.step_s + ' seconds.'}));
+}
 function renderResources(){
   const root = clear($('#b-resources'));
   const ser = RM.series || [];
@@ -675,6 +763,9 @@ function renderResources(){
     const a = sub('Data plane CPU per cycle', 'res_cpu');
     lineChart(a, {t:T, unit:'%', yMax:100, title:'Core CPU', series:[{name:'busiest core (max 60 s)', values:ser.map(x => x.core_max)}, {name:'highest core average (60 s)', values:ser.map(x => x.core_avg)}]});
     root.appendChild(a);
+    const hm = sub('CPU per core (heatmap)', 'res_heat');
+    if(RM.heat) cpuHeat(hm, RM.heat); else hm.appendChild(noData('No per-second CPU table could be parsed.'));
+    root.appendChild(hm);
     const g = sub('CPU per group', 'res_groups'), cols = E('div', {class:'cols two'});
     const l = E('div', null, E('h4', {text:'Busiest group per cycle', style:'margin:6px 0'}));
     lineChart(l, {t:T, unit:'%', yMax:100, title:'Busiest group', height:220, series:[{name:'busiest group %', values:ser.map(x => x.group_max_pct)}], extra:i => ['group: ' + (ser[i].group_max_name || 'n/a')]});
@@ -686,6 +777,63 @@ function renderResources(){
   const ld = sub('Management plane load average', 'res_mgmt');
   lineChart(ld, {t:tsOf(LOAD), title:'Load average', series:[{name:'1 min', values:LOAD.map(x => x.load1)}, {name:'5 min', values:LOAD.map(x => x.load5)}, {name:'15 min', values:LOAD.map(x => x.load15)}]});
   root.appendChild(ld);
+}
+// ================= Throughput (from "show counter interface all" in every fast tick)
+const bpsM = v => isNum(v) ? v / 1e6 : null;
+function renderThroughput(){
+  const root = clear($('#b-throughput'));
+  if(!TP.available){ root.appendChild(naMsg('the interface counters (show counter interface all)')); return; }
+  const T = (TP.t || []).map(ms), rx = (TP.total.rx_bps || []).map(bpsM), tx = (TP.total.tx_bps || []).map(bpsM);
+  const sum = rx.map((v, i) => isNum(v) && isNum(tx[i]) ? v + tx[i] : null);
+  // the figure the firewall reports in "show session info" (kbps), once per cycle, put on the nearest interval
+  const ref = T.map(() => null), half = (TP.dt || []).map(d => d * 500);
+  SS.forEach(x => { const t = ms(x.t); if(!isNum(x.kbps) || !isFinite(t)) return;
+    let best = -1, bd = Infinity; T.forEach((u, i) => { const dd = Math.abs(u - t); if(dd < bd){ bd = dd; best = i; } });
+    if(best >= 0 && bd <= Math.max(half[best] || 0, 1000)) ref[best] = x.kbps / 1000; });
+  const a = sub('Total throughput', 'tp_total');
+  lineChart(a, {t:T, unit:'Mbit/s', title:'Total throughput of the physical ports', legend:true, series:[
+    {name:'received (all physical ports)', values:rx}, {name:'transmitted (all physical ports)', values:tx},
+    {name:'received + transmitted', values:sum, dash:'5 4', color:PALETTE[5]},
+    {name:'firewall figure (show session info, per cycle)', values:ref, color:PALETTE[4]}],
+    extra:i => ['interval: ' + fmtX((TP.dt || [])[i]) + ' s']});
+  const peak = Math.max(0, ...sum.filter(isNum)), ok = sum.filter(isNum);
+  a.appendChild(E('p', {class:'hint', text:'Peak received + transmitted ' + fmtX(peak) + ' Mbit/s, mean ' + fmtX(ok.length ? ok.reduce((p, q) => p + q, 0) / ok.length : 0) +
+    ' Mbit/s over ' + ok.length + ' interval(s); average interval ' + fmtX((TP.dt || []).reduce((p, q) => p + q, 0) / Math.max(1, (TP.dt || []).length)) + ' s.' +
+    ((TP.total.rx_bps || []).some(v => v == null) ? ' Some intervals have no total (a port counter went backwards).' : '')}));
+  root.appendChild(a);
+
+  const names = Object.keys(TP.interfaces || {});
+  const rows = names.map(n => { const f = TP.interfaces[n], r = f.rx_bps.map(bpsM), t = f.tx_bps.map(bpsM);
+    const s2 = r.map((v, i) => (isNum(v) ? v : 0) + (isNum(t[i]) ? t[i] : 0));
+    return {name:n, f, r, t, peak:Math.max(0, ...s2), mean:s2.length ? s2.reduce((p, q) => p + q, 0) / s2.length : 0}; });
+  const b = sub('Throughput per interface', 'tp_ifaces');
+  if(!rows.length) b.appendChild(noData('No interface counters were parsed.'));
+  else {
+    let q = '', busy = true, order = 'peak';
+    const grid = E('div', {class:'cols two'}), note = E('p', {class:'hint'});
+    const LIMIT = 60;
+    const paint = () => {
+      clear(grid);
+      let list = rows.filter(r => (!busy || r.peak > 0) && (!q || r.name.toLowerCase().includes(q)));
+      list.sort((x, y) => order === 'name' ? x.name.localeCompare(y.name, undefined, {numeric:true}) : y.peak - x.peak);
+      const total = list.length; list = list.slice(0, LIMIT);
+      list.forEach(r => { const h = E('div', null, E('h4', {text:r.name + '   peak ' + fmtX(r.peak) + ' Mbit/s, mean ' + fmtX(r.mean) + ' Mbit/s', style:'margin:8px 0 0'}));
+        lineChart(h, {t:T, unit:'Mbit/s', title:'Throughput of ' + r.name, height:170, series:[{name:'received', values:r.r, color:PALETTE[0]}, {name:'transmitted', values:r.t, color:PALETTE[1]}], legend:true});
+        grid.appendChild(h); });
+      note.textContent = (total > LIMIT ? 'Showing the first ' + LIMIT + ' of ' + total + ' interfaces. ' : total + ' interface(s). ') +
+        (TP.skipped_idle ? TP.skipped_idle + ' physical port(s) without configuration and without traffic are not listed. ' : '') + (TP.resets ? TP.resets + ' counter reset(s) left a gap.' : '');
+      if(!total) grid.appendChild(noData('No interface matches.'));
+      redrawCharts();
+    };
+    const inp = E('input', {type:'search', size:'24', placeholder:'Filter by name', 'aria-label':'Filter interfaces'});
+    inp.addEventListener('input', () => { q = inp.value.trim().toLowerCase(); paint(); });
+    const cb = E('input', {type:'checkbox', checked:true, 'aria-label':'Only interfaces with traffic'});
+    cb.addEventListener('change', () => { busy = cb.checked; paint(); });
+    b.appendChild(E('div', {class:'bar'}, inp, E('label', null, cb, ' only interfaces with traffic'),
+      selectBox('Sort by', [['peak', 'peak throughput'], ['name', 'name']], v => { order = v; paint(); })));
+    b.appendChild(note); b.appendChild(grid); paint();
+  }
+  root.appendChild(b);
 }
 function renderCapture(){
   const root = clear($('#b-capture'));
@@ -701,7 +849,7 @@ function renderCapture(){
 JS_MAIN = r'''
 // ================= Tabs and start
 const built = {};
-const RENDER = {overview:renderOverview, findings:renderFindings, pow:renderPow, counters:renderCounters, backlog:renderBacklog, pbp:renderPbp, sessions:renderSessions, resources:renderResources, capture:renderCapture};
+const RENDER = {overview:renderOverview, findings:renderFindings, pow:renderPow, counters:renderCounters, backlog:renderBacklog, pbp:renderPbp, sessions:renderSessions, throughput:renderThroughput, resources:renderResources, capture:renderCapture};
 let cur = 'overview';
 function showTab(id, noHash){
   if(!TABS.includes(id)) id = 'overview';

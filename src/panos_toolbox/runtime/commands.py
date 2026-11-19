@@ -22,6 +22,7 @@ BACKLOG = "show running resource-monitor ingress-backlogs"
 PBP = "show session packet-buffer-protection"
 PBP_LAT = "show session packet-buffer-protection buffer-latency"
 PBP_ZONES = "show session packet-buffer-protection zones"
+IFACE_COUNTERS = "show counter interface all"
 
 INFLIGHT_ON = "set session inflight_monitoring yes"
 INFLIGHT_OFF = "set session inflight_monitoring no"
@@ -46,6 +47,7 @@ SLUGS = {
     PBP: "pbp",
     PBP_LAT: "pbp_latency",
     PBP_ZONES: "state_pbp_zones",
+    IFACE_COUNTERS: "iface_counters",
     INFLIGHT_ON: "inflight_set",
     INFLIGHT_OFF: "inflight_set",
     INFLIGHT_STATE: "state_inflight",

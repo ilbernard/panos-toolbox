@@ -80,13 +80,28 @@ panos-toolbox runtime report runtime_FW_20260101T000000Z --open
 ```
 
 One offline HTML file next to the folder (`<folder>_runtime.html`), standard library only.
-Tabs: Overview, Findings, POW, Counters, Ingress backlogs, Packet buffer, Sessions, Resources,
-Capture log. Every tab and panel has its own collapsed help. Times are UTC.
+Tabs: Overview, Findings, POW, Counters, Ingress backlogs, Packet buffer, Sessions, Throughput,
+Resources, Capture log. Every tab and panel has its own collapsed help. Times are UTC.
 
 - **POW** shows per-interval average microseconds, computed from differences of the `ac-count`
   and `ac-total-us` columns between consecutive samples (the "current window" columns keep
   growing and are not comparable between samples).
+- The POW "average time per call by group" chart has a scale selector: auto (logarithmic with
+  every group shown, linear for one group), logarithmic or linear. The groups span about five
+  orders of magnitude, so the log scale is the useful one for the overview.
 - **Counters** aggregates the delta counters over the capture; rates are the firewall's own.
+  Delta samples in which another client reset the global baseline (`DELTA_FOREIGN_SAMPLER`)
+  are **excluded** from the rate chart (a gap) and from every statistic (max, mean, sum, number
+  of samples); the mean divides by the valid samples. They stay visible in the samples strip.
+- **Throughput** (needs `show counter interface all`, read at the start of every fast tick, so at
+  X/6): total of the physical ports (received, transmitted, sum) with the `show session info`
+  figure as a cross-check, and one chart per configured interface. Rates come from differences
+  of the byte counters over the local clock; a counter that goes backwards is a gap. The
+  command is the heaviest of the fast tick on a firewall with many interfaces: check its cost in
+  the Overview tab and use `--no-iface-counters` to leave it out.
+- **Resources** has a CPU heatmap (core x second) rebuilt from the overlapping 60 s tables of
+  `show running resource-monitor`: samples are chained by matching the overlapping rows (rows
+  are newest first), so the resolution is one second wherever the interval is at most 60 s.
 - **Ingress backlogs** shows atomic and total usage, special tags (workgroups) and offending
   sessions with the `show session id` output.
 - Thresholds can be overridden with `--threshold KEY=VALUE` (repeatable); the keys are

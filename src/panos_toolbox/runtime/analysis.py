@@ -7,14 +7,19 @@
                pps, kbps, cps)
 ``load``       management plane load averages per cycle
 ``delta``      ``samples`` (elapsed time, foreign sampler flag), ``counters`` (aggregated per
-               counter) and ``top`` (rate series of the busiest counters)
+               counter) and ``top`` (rate series of the busiest counters). Samples in which
+               another client reset the delta baseline (``foreign``) are left out of the
+               counters and of the series (``null`` points); ``valid`` counts the others
 ``pow``        per-interval figures from differences of the ``ac-*`` columns: ``intervals``,
                ``groups`` and ``funcs`` (``avg_us``, ``count``, ``max_us`` series), plus the
                evaluation banner of the last sample
 ``backlog``    ``available``, ``series`` (atomic/total per slot and DP), ``special_tags``,
                ``offenders`` (with the ``show session id`` output)
 ``pbp``        ``available``, congestion ``series``, ``latency`` series, last table ``entries``
-``resmon``     ``available``, per-cycle CPU/utilization summary, last per-group CPU
+``throughput`` ``available``, per-interval rates in bit/s (``total`` of the physical ports and
+               one series per configured interface), from ``show counter interface all``
+``resmon``     ``available``, per-cycle CPU/utilization summary, last per-group CPU, ``heat``
+               (core x second CPU grid rebuilt from the overlapping 60 s windows)
 ``findings``   list of ``{code, level, title, detail, t}``; ``level`` is critical/warning/info
 ``capture``    per-command timing statistics and the duration of every cycle
 ``thresholds`` the thresholds used
@@ -34,6 +39,7 @@ from ..tsf import pow_perf
 from . import commands as C
 from .parse_backlog import is_unavailable, parse_backlog
 from .parse_counters import parse_delta
+from .parse_iface import parse_iface_counters
 from .parse_pbp import parse_pbp, parse_pbp_latency
 from .parse_resmon import parse_resmon, summarize_resmon
 from .parse_session import parse_mgmt_load, parse_session_info
@@ -107,13 +113,18 @@ def _load_series(samples):
 
 
 def _delta(samples, th):
+    """Delta counters. A sample in which another client reset the firewall's delta baseline
+    covers only a part of the window (the rest went to the other client), so its rates are
+    measured over a short and arbitrary slice: it is left out of every statistic and series."""
     out_samples, agg = [], {}
     for s in samples:
         p = parse_delta(s.text)
-        out_samples.append({"t": s.t, "elapsed": p["elapsed_s"],
-                            "foreign": s.attrs.get("foreign_sampler") == "1",
+        foreign = s.attrs.get("foreign_sampler") == "1"
+        out_samples.append({"t": s.t, "elapsed": p["elapsed_s"], "foreign": foreign,
                             "n_counters": len(p["counters"]),
                             "total_declared": p["total_declared"]})
+        if foreign:
+            continue
         for name, c in p["counters"].items():
             a = agg.setdefault(name, {"name": name, "severity": c["severity"],
                                       "category": c["category"], "aspect": c["aspect"],
@@ -123,21 +134,26 @@ def _delta(samples, th):
             a["sum_value"] += c["value"]
             a["rates"][len(out_samples) - 1] = c["rate"]
     n = len(out_samples)
+    valid = [i for i, x in enumerate(out_samples) if not x["foreign"]]
     counters = []
     for a in agg.values():
         rates = a.pop("rates")
         a["max_rate"] = max(rates.values())
-        a["mean_rate"] = round(sum(rates.values()) / n, 2) if n else 0
-        a["last_rate"] = rates.get(n - 1, 0)
+        a["mean_rate"] = round(sum(rates.values()) / len(valid), 2) if valid else 0
+        last = valid[-1] if valid else None
+        a["last_rate"] = rates.get(last, 0) if last is not None else 0
         a["_rates"] = rates
         counters.append(a)
     counters.sort(key=lambda c: (-c["max_rate"], c["name"]))
     top = {"t": [x["t"] for x in out_samples], "series": {}}
+    skip = {i for i, x in enumerate(out_samples) if x["foreign"]}
     for c in counters[: th["top_counters"]]:
-        top["series"][c["name"]] = [c["_rates"].get(i, 0) for i in range(n)]
+        top["series"][c["name"]] = [None if i in skip else c["_rates"].get(i, 0)
+                                    for i in range(n)]
     for c in counters:
         del c["_rates"]
-    return {"samples": out_samples, "counters": counters, "top": top}
+    return {"samples": out_samples, "counters": counters, "top": top, "valid": len(valid),
+            "excluded": n - len(valid)}
 
 
 def _pow_rows(sample):
@@ -263,7 +279,7 @@ def _resmon(samples, manifest):
     if samples and is_unavailable(samples[0].text):
         avail = False
     out = {"available": bool(samples) and avail, "series": [], "last_groups": {},
-           "last_util": {}}
+           "last_util": {}, "heat": None}
     if not out["available"]:
         return out
     for s in samples:
@@ -279,7 +295,172 @@ def _resmon(samples, manifest):
             "util_max": m["util_max_60s"]})
         out["last_groups"] = p["groups"]
         out["last_util"] = m["util_max_60s"]
+    out["heat"] = _cpu_heat(samples)
     return out
+
+
+def _epoch(t):
+    return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+        tzinfo=timezone.utc).timestamp()
+
+
+def _throughput(samples, manifest):
+    """Bit/s per interval from the cumulative byte counters of ``show counter interface all``.
+
+    The time base is the local clock (middle of the command) because the counters carry no
+    time of their own. A counter that goes backwards (reset, interface flap) gives a gap, not a
+    negative rate. ``total`` sums the physical ports only (CPU counters, else MAC), so
+    sub-interfaces, aggregates and tunnels are not counted twice. An interface that is not
+    configured (no logical counters) and never carried a byte is left out."""
+    avail = manifest.get("available", {}).get("iface_counters", True)
+    if samples and is_unavailable(samples[0].text):
+        avail = False
+    out = {"available": bool(samples) and avail, "t": [], "dt": [],
+           "total": {"rx_bps": [], "tx_bps": []}, "interfaces": {}, "skipped_idle": 0,
+           "resets": 0}
+    if not out["available"]:
+        return out
+    prev, n = None, 0
+    for s in samples:
+        cur = parse_iface_counters(s.text)
+        if not cur:
+            continue
+        try:
+            ep = _epoch(s.t) + s.dur / 2
+        except ValueError:
+            continue
+        if prev is not None and ep - prev[0] >= 0.25:
+            dtm = ep - prev[0]
+            old = prev[1]
+            out["t"].append(s.t)
+            out["dt"].append(round(dtm, 3))
+            tot = [0, 0]
+            tot_ok = True
+            for name, c in cur.items():
+                o = old.get(name)
+                ser = out["interfaces"].setdefault(
+                    name, {"src": c["src"], "logical": c["logical"], "hw": c["hw"],
+                           "rx_bps": [None] * n, "tx_bps": [None] * n})
+                rx = tx = None
+                if o is not None and o["src"] == c["src"]:
+                    drx, dtx = c["rx"] - o["rx"], c["tx"] - o["tx"]
+                    if drx >= 0 and dtx >= 0:
+                        rx, tx = round(drx * 8 / dtm), round(dtx * 8 / dtm)
+                    else:
+                        out["resets"] += 1
+                ser["rx_bps"].append(rx)
+                ser["tx_bps"].append(tx)
+                if c["hw"] and c["hw_rx"] is not None:
+                    if o is not None and o["hw"] and o["hw_rx"] is not None and \
+                            c["hw_rx"] >= o["hw_rx"] and c["hw_tx"] >= o["hw_tx"]:
+                        tot[0] += c["hw_rx"] - o["hw_rx"]
+                        tot[1] += c["hw_tx"] - o["hw_tx"]
+                    else:
+                        tot_ok = False
+            for ser in out["interfaces"].values():  # interface missing from this sample
+                while len(ser["rx_bps"]) < n + 1:
+                    ser["rx_bps"].append(None)
+                    ser["tx_bps"].append(None)
+            out["total"]["rx_bps"].append(round(tot[0] * 8 / dtm) if tot_ok else None)
+            out["total"]["tx_bps"].append(round(tot[1] * 8 / dtm) if tot_ok else None)
+            n += 1
+        prev = (ep, cur)
+    for name in list(out["interfaces"]):
+        ser = out["interfaces"][name]
+        if not ser["logical"] and not any(v for v in ser["rx_bps"] + ser["tx_bps"] if v):
+            del out["interfaces"][name]
+            out["skipped_idle"] += 1
+    out["available"] = n > 0
+    return out
+
+
+def _cpu_heat(samples, max_cells=8000):
+    """Core x second CPU grid rebuilt from the per-second tables of ``resource-monitor``.
+
+    Every sample holds the last 60 seconds, newest first (row i is the second i s before the
+    sample: verified on overlapping samples). Consecutive samples overlap when the interval is
+    shorter than 60 s, so the windows are chained: the shift between two samples is searched
+    around the local clock difference as the one for which the overlapping rows match best (the
+    local clock has a jitter of a second or two). Where two windows cover the same second, the
+    one closer to its own sample time wins. Returns None without per-second data, otherwise
+    ``{t0_ms, step_s, cores, cells: {core: [value|None, ...]}}`` where cell j covers
+    ``[t0_ms + j*step_s*1000, +step_s*1000)`` and holds the maximum of the seconds in it
+    (``step_s`` > 1 only for very long captures)."""
+    wins = []
+    for s in samples:
+        p = parse_resmon(s.text)
+        cores = (p.get("seconds") or {}).get("cpu_cores") or {}
+        cores = {c: v for c, v in cores.items() if v}
+        if not cores:
+            continue
+        try:
+            wins.append((_epoch(s.t) + s.dur / 2, cores))
+        except ValueError:
+            continue
+    if not wins:
+        return None
+
+    def score(prev, cur, k):
+        same = total = 0
+        for core, a in prev.items():
+            b = cur.get(core)
+            if not b:
+                continue
+            for i in range(min(len(a), len(b) - k)):
+                x, y = a[i], b[i + k]
+                if x is None or y is None:
+                    continue
+                total += 1
+                same += x == y
+        return (same / total, total) if total else (0.0, 0)
+
+    anchor = round(wins[0][0])
+    slots = {}  # core -> {second: (age, value)}
+    for j, (ep, cores) in enumerate(wins):
+        if j:
+            pep, pcores = wins[j - 1]
+            dt_ = ep - pep
+            guess = max(1, round(dt_))
+            length = max(len(v) for v in cores.values())
+            k = guess
+            if guess < length:
+                best = None
+                for cand in range(max(1, guess - 3), min(length - 1, guess + 3) + 1):
+                    ratio, total = score(pcores, cores, cand)
+                    key = (ratio, -abs(cand - dt_))
+                    if total >= 10 and ratio >= 0.9 and (best is None or key > best[0]):
+                        best = (key, cand)
+                if best:
+                    k = best[1]
+            anchor += k
+        for core, vals in cores.items():
+            d = slots.setdefault(core, {})
+            for age, v in enumerate(vals):
+                sec_ = anchor - age
+                if sec_ not in d or age < d[sec_][0]:
+                    d[sec_] = (age, v)
+    lo = min(min(d) for d in slots.values())
+    hi = max(max(d) for d in slots.values())
+    span = hi - lo + 1
+    step = max(1, -(-span // max_cells))
+    ncell = -(-span // step)
+    cells, unmeasured = {}, []
+    for core in sorted(slots):
+        row = [None] * ncell
+        for sec_, (_, v) in slots[core].items():
+            if v is None:
+                continue
+            j = (sec_ - lo) // step
+            if row[j] is None or v > row[j]:
+                row[j] = v
+        if any(v is not None for v in row):
+            cells[str(core)] = row
+        else:
+            unmeasured.append(core)  # typically core 0, printed as '*' by the firewall
+    if not cells:
+        return None
+    return {"t0_ms": (lo - 1) * 1000, "step_s": step, "cores": sorted(int(c) for c in cells),
+            "unmeasured": unmeasured, "cells": cells}
 
 
 # ------------------------------------------------------------------------------ capture log
@@ -404,8 +585,9 @@ def _findings(blob, th, reader):
     if foreign:
         f.append(_finding("DELTA_FOREIGN_SAMPLER", "warning",
                           f"Another client reset the delta counters {foreign} time(s)",
-                          "Rates use the elapsed time printed by the firewall, but part of the "
-                          "window was consumed by the other client."))
+                          "The firewall's delta baseline is global: the window of each affected "
+                          "sample was split with the other client, so it is shown as a gap in "
+                          "the counter charts and left out of the counter statistics."))
     interval = meta.get("interval_s") or 0
     times = [s.t for s in reader.samples("session_info")]
     if interval and len(times) > 1:
@@ -439,9 +621,12 @@ def _findings(blob, th, reader):
                               f"{c['slug']}: {c['failed']} of {c['n']} samples without a prompt",
                               "The output of those samples may be partial."))
     for key, label in (("ingress_backlogs", "ingress-backlogs"), ("pbp", "packet-buffer-protection"),
-                       ("resource_monitor", "resource-monitor")):
-        if not blob[{"ingress_backlogs": "backlog", "pbp": "pbp",
-                     "resource_monitor": "resmon"}[key]]["available"]:
+                       ("resource_monitor", "resource-monitor"),
+                       ("iface_counters", "counter interface all")):
+        if key == "iface_counters" and meta["available"].get("iface_counters", True):
+            continue  # only an explicit 'Invalid syntax' counts (older or --no-iface-counters captures)
+        if not blob[{"ingress_backlogs": "backlog", "pbp": "pbp", "resource_monitor": "resmon",
+                     "iface_counters": "throughput"}[key]]["available"]:
             f.append(_finding("CMD_NOT_AVAILABLE", "info", f"{label} is not available here",
                               "The firewall answered 'Invalid syntax' (platform or version)."))
     f.sort(key=lambda x: (LEVEL_ORDER[x["level"]], x["code"], x["t"]))
@@ -498,6 +683,7 @@ def analyze(folder, thresholds=None) -> dict:
         "backlog": _backlog(reader.samples("ingress_backlogs"),
                             reader.samples("session_id"), manifest),
         "pbp": _pbp(reader.samples("pbp"), reader.samples("pbp_latency"), manifest, th),
+        "throughput": _throughput(reader.samples("iface_counters"), manifest),
         "resmon": _resmon(reader.samples("resource_monitor"), manifest),
         "capture": _capture_log(reader, manifest),
         "thresholds": th,
