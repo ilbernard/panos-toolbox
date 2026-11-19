@@ -14,11 +14,14 @@ hostnames, IPs and serials: keep it out of the repository.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import getpass
 import platform
 import re
+import signal
 import sys
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -306,10 +309,27 @@ class Capture:
                 self.stopped_by_user = True
                 self.say("\nStopped by the user.")
             self.run(C.CLOCK)
+        except KeyboardInterrupt:  # Ctrl+C during setup: still clean up and keep what we have
+            self.stopped_by_user = True
+            self.say("\nStopped by the user.")
         finally:
-            self.inflight_off()
-            self.w.write_manifest(self.manifest())
+            with _shielded():  # a second Ctrl+C must not skip the inflight monitoring "no"
+                self.inflight_off()
+                self.w.write_manifest(self.manifest())
         return self.manifest()
+
+
+@contextlib.contextmanager
+def _shielded():
+    """Ignores Ctrl+C while the firewall is being put back in its normal state."""
+    old = None
+    with contextlib.suppress(ValueError):  # not the main thread: nothing to shield
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGINT, old)
 
 
 # ---------------------------------------------------------------------- CLI
@@ -340,6 +360,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="show session id queries per fast tick (default 10)")
     ap.add_argument("--no-compress", action="store_true", help="write plain text raw files")
     ap.add_argument("--outdir", default=".", help="where the capture folder is created")
+    ap.add_argument("--no-report", action="store_true",
+                    help="do not build the HTML report when the capture ends")
+    ap.add_argument("--open", action="store_true", help="open the report in the browser")
     return ap
 
 
@@ -378,8 +401,15 @@ def main(argv=None) -> int:
         print(f"Capture folder: {folder}")
         cap = Capture(transport, writer, cfg, reconnect=open_session)
         result = cap.execute()
+    except KeyboardInterrupt:  # before the sampling started: nothing to report
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
     except TransportError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        if writer is not None:  # connection lost mid-capture: report what was collected
+            writer.close()
+            writer = None
+            _finish_report(folder, args)
         return 1
     finally:
         if transport:
@@ -394,7 +424,28 @@ def main(argv=None) -> int:
     print(f"\nDone: {result['cycles']} cycles, {result['fast_ticks']} fast ticks, "
           f"{result['delta_foreign_sampler_events']} foreign-sampler events, "
           f"{result['skipped_ticks']} skipped ticks.")
-    print(f"Report: panos-toolbox runtime report {folder}")
+    return _finish_report(folder, args)
+
+
+def _finish_report(folder: Path, args) -> int:
+    """Builds the HTML report from the capture just written (also after Ctrl+C)."""
+    if args.no_report:
+        print(f"Report: panos-toolbox runtime report {folder}")
+        return 0
+    from .analyzer import build_report
+
+    try:
+        blob, target = build_report(folder)
+    except Exception as exc:  # noqa: BLE001  # the raw capture is safe on disk whatever happens here
+        print(f"ERROR building the report: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"The capture is kept; retry with: panos-toolbox runtime report {folder}")
+        return 1
+    sev = {lv: sum(1 for f in blob["findings"] if f["level"] == lv)
+           for lv in ("critical", "warning", "info")}
+    print(f"Report: {target}  (findings: {sev['critical']} critical, "
+          f"{sev['warning']} warning, {sev['info']} info)")
+    if args.open:
+        webbrowser.open(target.resolve().as_uri())
     return 0
 
 

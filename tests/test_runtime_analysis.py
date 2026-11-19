@@ -11,7 +11,7 @@ def test_quiet_capture_has_series_and_no_alarm(tmp_path):
     blob = analyze(build_capture(tmp_path))
     m = blob["meta"]
     assert m["cycles"] == 4 and m["firewall"]["model"] == "PA-DEMO"
-    assert "hostname" not in str(m) and "lab-fw" not in str(m)
+    assert m["firewall"]["hostname"] == "lab-fw" and m["generated_utc"]
     assert len(blob["session"]["series"]) == 4 and blob["session"]["series"][0]["util_pct"] == 25.0
     assert len(blob["load"]) == 4
     assert len(blob["resmon"]["series"]) == 4 and blob["resmon"]["last_groups"]

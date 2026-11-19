@@ -59,6 +59,26 @@ def _summary_line(name: str, blob: dict, out: Path) -> str:
             f"{sev['warning']} warning, {sev['info']} info -> {out}")
 
 
+def build_report(src: Path, outdir=None, thresholds=None, used=None):
+    """Analyzes a capture folder and writes the HTML report next to it (or into ``outdir``).
+    Returns ``(blob, path)``. Raises ValueError when ``src`` is not a capture folder."""
+    if not src.is_dir():
+        raise ValueError("not a capture folder")
+    blob = analysis.analyze(src, thresholds)
+    out = Path(outdir) if outdir else src.resolve().parent
+    out.mkdir(parents=True, exist_ok=True)
+    name = src.resolve().name
+    target = out / f"{name}{SUFFIX}.html"
+    n = 1
+    while used is not None and target in used:
+        n += 1
+        target = out / f"{name}{SUFFIX}_{n}.html"
+    if used is not None:
+        used.add(target)
+    target.write_text(render(blob), encoding="utf-8")
+    return blob, target
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="panos-toolbox runtime report", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -104,19 +124,7 @@ def main(argv=None) -> int:
     for raw in args.inputs:
         src = Path(raw)
         try:
-            if not src.is_dir():
-                raise ValueError("not a capture folder")
-            blob = analysis.analyze(src, thresholds or None)
-            outdir = Path(args.outdir) if args.outdir else src.resolve().parent
-            outdir.mkdir(parents=True, exist_ok=True)
-            name = src.resolve().name
-            target = outdir / f"{name}{SUFFIX}.html"
-            n = 1
-            while target in used:
-                n += 1
-                target = outdir / f"{name}{SUFFIX}_{n}.html"
-            used.add(target)
-            target.write_text(render(blob), encoding="utf-8")
+            blob, target = build_report(src, args.outdir, thresholds or None, used)
         except (OSError, ValueError, KeyError) as exc:
             print(f"[ERROR] {raw}: {exc}", file=sys.stderr)
             continue

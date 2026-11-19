@@ -24,6 +24,7 @@ delta baseline is global on the firewall, see docs/runtime/command-notes.md).
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
 import statistics
 from datetime import datetime, timezone
@@ -64,6 +65,7 @@ LEVEL_ORDER = {"critical": 0, "warning": 1, "info": 2}
 _MODEL_RE = re.compile(r"^\s*model:\s*(.+?)\s*$", re.MULTILINE)
 _SW_RE = re.compile(r"^\s*sw-version:\s*(.+?)\s*$", re.MULTILINE)
 _FAMILY_RE = re.compile(r"^\s*family:\s*(.+?)\s*$", re.MULTILINE)
+_HOST_RE = re.compile(r"^\s*hostname:\s*(.+?)\s*$", re.MULTILINE)
 
 
 def _finding(code, level, title, detail="", t=""):
@@ -457,7 +459,8 @@ def analyze(folder, thresholds=None) -> dict:
     sysinfo = (reader.samples("system_info") or [None])[0]
     fw = {}
     if sysinfo:
-        for key, rx in (("model", _MODEL_RE), ("sw_version", _SW_RE), ("family", _FAMILY_RE)):
+        for key, rx in (("hostname", _HOST_RE), ("model", _MODEL_RE), ("sw_version", _SW_RE),
+                         ("family", _FAMILY_RE)):
             m = rx.search(sysinfo.text)
             if m:
                 fw[key] = m.group(1)
@@ -486,6 +489,7 @@ def analyze(folder, thresholds=None) -> dict:
             "last_t": max(all_t) if all_t else None,
             "firewall": fw,
             "has_manifest": bool(manifest),
+            "generated_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         },
         "session": {"series": _session_series(reader.samples("session_info"))},
         "load": _load_series(reader.samples("mgmt_load")),

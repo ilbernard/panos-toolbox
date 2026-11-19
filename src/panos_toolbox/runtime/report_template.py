@@ -719,7 +719,7 @@ $('#tabs').addEventListener('keydown', e => {
 });
 window.addEventListener('hashchange', () => { const h = tabFromHash(); if(h && h !== cur) showTab(h, true); });
 (function head(){
-  $('#sub').textContent = 'Capture ' + (META.folder || '') + ' | ' + (META.firewall && META.firewall.model ? META.firewall.model + ' ' + (META.firewall.sw_version || '') + ' | ' : '') + (META.first_t ? sec(META.first_t) + ' to ' + sec(META.last_t) + ' UTC' : 'no samples');
+  $('#sub').textContent = 'Capture ' + (META.folder || '') + ' | ' + (META.firewall && META.firewall.hostname ? META.firewall.hostname + ' | ' : '') + (META.firewall && META.firewall.model ? META.firewall.model + ' ' + (META.firewall.sw_version || '') + ' | ' : '') + (META.first_t ? sec(META.first_t) + ' to ' + sec(META.last_t) + ' UTC' : 'no samples') + (META.generated_utc ? ' | Report generated ' + META.generated_utc + ' UTC' : '');
   const nf = FND.filter(f => f.level !== 'info').length;
   if(nf) $('#tab-findings').appendChild(E('span', {class:'badge n b-' + (FND.some(f => f.level === 'critical') ? 'critical' : 'warning'), text:String(nf)}));
   if((META.warnings || []).length) $('#tab-overview').appendChild(E('span', {class:'badge n b-critical', text:'!'}));

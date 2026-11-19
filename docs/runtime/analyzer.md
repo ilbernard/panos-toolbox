@@ -9,8 +9,16 @@ Plan and decisions: [plan.md](plan.md). Command formats: [command-notes.md](comm
 ```bash
 pip install 'panos-toolbox[runtime]'          # paramiko, capture only
 panos-toolbox runtime capture --host FW --user USER --duration 600
-# or from a checkout: python scripts/runtime_analyzer.py capture --host FW --user USER
+# or from a checkout, no installation (needs only: pip install paramiko):
+python scripts/runtime_analyzer.py --host FW --user USER --duration 0 --open
 ```
+
+When the capture ends (duration, `--max-cycles`, **or Ctrl+C**) the HTML report is built
+automatically next to the capture folder. Ctrl+C is a clean stop: the inflight monitoring is
+switched off, the manifest is written and the report is generated (a second Ctrl+C during that
+shutdown is ignored). If the connection is lost mid-capture the report is built from what was
+collected. The report header shows the firewall hostname (from `show system info`) and the
+generation time (UTC). Use `--no-report` to skip it, `--open` to open it in the browser.
 
 The password is asked at the prompt (or use `--key-file`). Nothing secret is accepted on the
 command line, printed or written to disk. An unknown SSH host key is rejected unless you pass
@@ -27,6 +35,8 @@ command line, printed or written to disk. An unknown SSH host key is rejected un
 | `--max-offenders N` | 10 | `show session id` queries per fast tick |
 | `--no-compress` | off | Plain text raw files instead of gzip |
 | `--outdir DIR` | `.` | Where `runtime_<host>_<UTC>/` is created |
+| `--no-report` | off | Do not build the HTML report at the end |
+| `--open` | off | Open the report in the browser |
 
 What runs:
 

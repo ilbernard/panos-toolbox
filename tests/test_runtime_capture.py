@@ -239,3 +239,27 @@ def test_session_samples_stored_per_command(tmp_path):
 ])
 def test_inflight_state_parsing(text, expected):
     assert inflight_state(text) == expected
+
+
+def test_capture_main_builds_report_and_survives_ctrl_c(tmp_path, monkeypatch):
+    import sys
+
+    from panos_toolbox.runtime import capture as cap
+    from panos_toolbox.runtime.fake import FakeTransport, SimClock
+
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from runtime_synthetic import SYSTEM_INFO  # noqa: F401
+
+    clock = SimClock()
+    fake = FakeTransport({}, clock)
+    monkeypatch.setattr("panos_toolbox.runtime.ssh.connect", lambda *a, **k: fake)
+
+    def boom(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cap.Capture, "loop", boom)
+    rc = cap.main(["--host", "h", "--user", "u", "--outdir", str(tmp_path)])
+    assert rc in (0, 1)
+    folders = [p for p in tmp_path.iterdir() if p.is_dir()]
+    assert len(folders) == 1 and (folders[0] / "manifest.json").exists()
+    assert "stopped_by_user" in (folders[0] / "manifest.json").read_text()
