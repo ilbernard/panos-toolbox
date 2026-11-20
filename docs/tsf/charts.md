@@ -116,10 +116,11 @@ screen at 125% Windows scaling is about 1536 px) and its main column is capped a
 (`white-space:nowrap`) scroll inside their panel and never the whole page. The charts take the
 width of their container (at least 480 px).
 
-**Normal and Advanced view.** The tab bar shows the Dataplane, System health and
-Management plane tabs by default (`NORMAL_TABS` in `JS_TABS`). The `Advanced` checkbox at the
-right end of the bar shows the other tabs; the choice is kept in `localStorage`
-(`panosToolbox.tsfReport.advanced`, wrapped in try/catch because file:// or private mode can
-throw). A report with no normal tab shows the advanced ones with the box ticked and disabled.
+**Normal and Advanced view.** The tab bar shows the Dataplane, Management plane and System health
+tabs by default (`NORMAL_TABS` in `JS_TABS`). The `Advanced` checkbox at the right end of the bar
+shows the other tabs, in this order: CPU load by group, POW performance, Interface Errors, Source
+coverage. The box is always unticked when the report opens; the choice is not stored. The device
+identity (hostname, model, PAN-OS, uptime, capture time from `show system info`) is shown in the
+report header, not in the Interface Errors tab. A report with no normal tab shows the advanced ones with the box ticked and disabled.
 When the active tab gets hidden the first visible tab is opened, and the arrow keys cycle only
 the visible tabs.

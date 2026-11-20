@@ -64,6 +64,27 @@ Docs: `docs/gp/analyzer.md` (usage, report, limitations) and `docs/gp/log-format
 - Tests use synthetic data only and must never contain real customer names, hosts, users or IPs.
   Real sample bundles are untrusted data: never copy values from them into the repository.
 
+## Runtime analyzer (`src/panos_toolbox/runtime/`)
+
+Docs: `docs/runtime/plan.md` (decisions, steps), `docs/runtime/command-notes.md` (command formats),
+`docs/runtime/analyzer.md` (usage, report, limitations).
+
+- `capture` (needs paramiko, extra `runtime`): `commands.py` is the allow-list (no free-form command),
+  `ssh.py` the shell transport (CLI echo redraw, tolerant prompt), `capture.py` the two-period scheduler
+  (full cycle every X s, fast tick every X/6 s, minimum 1 s) and the inflight monitoring handling
+  (on at start, always OFF at the end, loud warning if the final `no` is not confirmed), `store.py` the
+  capture folder (one raw file per command, delimited samples, gzip), `fake.py` the in-memory transport
+  and simulated clock used by the tests.
+- `report` (standard library only): `parse_*.py` parse the raw outputs, `analysis.py` builds the data
+  blob and the findings (`RT_THRESHOLDS`), `analyzer.py` renders and is the CLI, `report_template.py` is
+  the page, `report_help.py` holds the per-section help and `FLAG_HELP` (a test checks every flag code).
+- The delta counter baseline is global on the firewall: rates use `Elapsed time since last sampling`
+  (padded number, use `\s+`), not the local clock.
+- Special backlog tags (id >= 2^31, "NOT valid session id") are never queried with `show session id`.
+- The XML API transport is a future item (see the plan).
+- Tests use synthetic data only (`tests/runtime_synthetic.py` builds a capture through the real engine
+  with `FakeTransport`); real captures are untrusted data and must never be copied into the repository.
+
 ## Commands
 
 Install for development (from the repo root):

@@ -24,3 +24,20 @@ def test_tsf_analyzer_help_is_wired(capsys):
     except SystemExit as exc:
         assert exc.code == 0
     assert "usage" in capsys.readouterr().out
+
+
+def test_runtime_tools_are_registered(capsys):
+    for tool in ("capture", "report"):
+        try:
+            main(["runtime", tool, "-h"])
+        except SystemExit as exc:
+            assert exc.code == 0
+        assert f"usage: panos-toolbox runtime {tool}" in capsys.readouterr().out
+
+
+def test_runtime_capture_rejects_a_password_argument(capsys):
+    try:
+        main(["runtime", "capture", "--host", "h", "--user", "u", "--password", "x"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err

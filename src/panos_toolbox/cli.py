@@ -19,6 +19,14 @@ TOOLS = {
         "panos_toolbox.gp.analyzer",
         "HTML report from a GlobalProtect client log bundle (config, login timeline)",
     ),
+    ("runtime", "capture"): (
+        "panos_toolbox.runtime.capture",
+        "Sample a firewall over SSH (POW, counters, sessions, backlogs, packet buffer)",
+    ),
+    ("runtime", "report"): (
+        "panos_toolbox.runtime.analyzer",
+        "HTML report from a runtime capture folder (time series, findings)",
+    ),
     ("tsf", "analyze"): (
         "panos_toolbox.tsf.analyzer",
         "Throughput/CPU HTML report from a Tech Support File (dp-monitor.*)",
