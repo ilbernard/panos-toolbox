@@ -12,3 +12,5 @@ dist/
 *.tar.gz
 *_throughput.html
 output/
+# runtime captures (real hostnames, IPs and serials)
+runtime_*/
