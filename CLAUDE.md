@@ -20,6 +20,8 @@ See `README.md` ("Layout" section) for the full tree. In short:
 - `src/panos_toolbox/tsf/`: offline Tech Support File analysis (standard library only).
 - `src/panos_toolbox/gp/`: offline GlobalProtect client log analysis (standard library only).
 - `src/panos_toolbox/common/`: config (environment and `.env`), logging, per-user paths.
+  `common/credits.py` is the credits box (git repository and author links) at the top of every
+  HTML report (TSF, TSF summary, GlobalProtect, runtime); edit the links there only.
 - `tests/`: pytest suite. `scripts/`: zero-install launchers.
 
 ## Console tool (Panorama GUI)

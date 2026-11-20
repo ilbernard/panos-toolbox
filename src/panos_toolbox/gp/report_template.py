@@ -11,6 +11,8 @@ or with ``setAttribute``; there is no ``innerHTML``, ``eval`` or inline handler.
 """
 from __future__ import annotations
 
+from panos_toolbox.common.credits import CREDITS_CSS, CREDITS_HTML, CREDITS_PLACEHOLDER
+
 from .report_help import SECTION_TITLES
 
 TEMPLATE_HEAD = r"""<!doctype html>
@@ -168,6 +170,7 @@ TEMPLATE_BODY = r"""</style>
 </head>
 <body>
 <main>
+__CREDITS__
 <h1 id="title">__TITLE__</h1>
 <p class="sub" id="sub"></p>
 <div><span class="astatus" id="astatus" role="button" tabindex="0"></span></div>
@@ -798,5 +801,6 @@ showTab(ST.tab);
 
 _STORE = "\n".join(f'<div data-hid="{i}">__HB_{i}__ __HP_{i}__</div>' for i in SECTION_TITLES)
 
-TEMPLATE = (TEMPLATE_HEAD + TEMPLATE_CSS + TEMPLATE_BODY.replace("__HELPSTORE__", _STORE)
+TEMPLATE = (TEMPLATE_HEAD + TEMPLATE_CSS + CREDITS_CSS
+            + TEMPLATE_BODY.replace("__HELPSTORE__", _STORE).replace(CREDITS_PLACEHOLDER, CREDITS_HTML)
             + JS_CORE + JS_SUMMARY + JS_CONFIG + JS_TIMELINE + JS_REST)

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from panos_toolbox.common.credits import CREDITS_HTML
 from panos_toolbox.gp import analyzer, checks
 
 PORTAL = "vpn.example.com"
@@ -81,7 +82,7 @@ def test_main_writes_report_next_to_input(bundle, capsys):
     assert len(line) == 1 and "2 attempts" in line[0] and "connected 2" in line[0]
     text = out.read_text(encoding="utf-8")
     assert "<!doctype html>" in text and "http://" not in text.replace("http://www.w3.org/2000/svg", "")
-    assert "https://" not in text
+    assert "https://" not in text.replace(CREDITS_HTML, "")
 
 
 def test_summary_line_reports_expired(bundle):

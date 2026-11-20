@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from panos_toolbox.common.credits import CREDITS_HTML, CREDITS_PLACEHOLDER
 from panos_toolbox.tsf import (
     analyzer,
     correlations,
@@ -37,7 +38,7 @@ def test_template_import_and_pieces():
     assert '__DATA__' in tpl and '__TITLE__' in tpl
     for name in ('TEMPLATE_HEAD', 'TEMPLATE_CSS', 'TEMPLATE_BODY', 'JS_CORE', 'JS_POW',
                  'JS_TABS'):
-        piece = getattr(report_template, name)
+        piece = getattr(report_template, name).replace(CREDITS_PLACEHOLDER, CREDITS_HTML)
         assert piece and piece in tpl, name
     # No global Help tab: every section has its own placeholders instead.
     assert 'id="tab-help"' not in tpl and 'id="p-help"' not in tpl
@@ -63,6 +64,16 @@ def test_template_is_fluid_with_1200_minimum_width():
     assert 'min-width:1900px' not in tpl
     assert '.panel{border-top-left-radius:0;overflow-x:auto}' in tpl
     assert 'max-width:1280px' not in tpl
+
+
+def test_header_has_credits_links():
+    """The page header credits the git repository and the author, opening in a new tab."""
+    tpl = analyzer.TEMPLATE
+    head = tpl[tpl.index('<main>'):tpl.index('id="title"')]
+    assert 'class="credits"' in head
+    for url in ('https://github.com/ilbernard/panos-toolbox',
+                'https://www.linkedin.com/in/alberto-bernardi/'):
+        assert f'href="{url}" target="_blank" rel="noopener noreferrer"' in head
 
 
 def test_tabs_have_a_normal_and_an_advanced_view():
