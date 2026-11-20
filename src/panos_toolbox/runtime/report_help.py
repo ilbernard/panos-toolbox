@@ -132,9 +132,21 @@ second; the report uses that rate.</p>
 <ul>
 <li><b>The delta baseline is global on the firewall.</b> Any other client that runs the same
 command (another admin, a script, a monitoring tool) resets it, so one sample then covers a
-shorter window. Such samples are marked as foreign in the samples strip and are <b>left out of
-the charts (a gap) and of every statistic</b>: the other client took part of the window, so
-the rate of that sample is measured on a short and arbitrary slice.</li>
+shorter window. Such samples are marked as foreign in the samples strip. What the report does
+with them is set with <code>runtime report --foreign-samples</code>:
+<ul>
+<li><b>auto</b> (default): leave them out, unless too few clean samples are left (fewer than
+<code>foreign_min_valid</code> or a quarter of the samples): then they are rescaled, so that
+the charts and statistics are never empty.</li>
+<li><b>exclude</b>: left out of every statistic and shown as a gap in the chart.</li>
+<li><b>include</b>: kept exactly as the firewall printed them (short windows are noisy).</li>
+<li><b>rescale</b>: kept, and the counts are multiplied by <code>local_gap / elapsed</code> (our
+time since the previous read over the window the firewall reports): if 5 s passed instead of
+10, the counts are doubled. This estimates what the whole gap would have held, assuming an even
+rate, and helps to spot anomalous patterns. Rates per second are already independent of the
+window, so only the sums of the deltas change. A sample that would need a factor above
+<code>foreign_scale_max</code> is left out: too little data to extrapolate.</li>
+</ul></li>
 <li>Counters that never appear in a sample are not listed; a counter that appears late is
 listed with its first-seen sample.</li>
 </ul>""",
@@ -144,20 +156,24 @@ which it appeared, the maximum, mean and last rate per second and the sum of the
 Click a header to sort, use the search box for name or description and the severity buttons
 to filter.</p>
 <ul>
-<li>The mean rate divides by the valid delta samples (foreign ones excluded), including those
-where the counter did not appear.</li>
+<li>The mean rate is time weighted: the sum of the deltas over the sum of the windows of the
+samples that count, including those where the counter did not appear. Foreign samples count or
+not according to the mode above, and the line under the table says which one was used.</li>
 <li>A high rate of a <code>drop</code> counter is not always a problem; read the
 description and compare with the traffic level.</li>
 </ul>""",
     "ct_rates": """
 <p>Rate per second of the busiest counters (the number is limited by <code>top_counters</code>)
-in every delta sample. A missing counter in a sample is drawn as zero; a foreign sample is a
-gap in the line. Hover a point for the value.</p>""",
+in every delta sample. A missing counter in a sample is drawn as zero. The selector decides
+about the foreign samples: as in the statistics (default), hidden (a gap in the line) or all
+shown, with a red ring on the foreign ones. Rates are per second and do not need rescaling.
+Hover a point for the value.</p>""",
     "ct_samples": """
 <p>One box per delta sample with the elapsed time the firewall reported. A marked box is a
 foreign sampler: the elapsed time is clearly shorter than the capture interval, which means
 another client read and reset the counters in between. The sample covers only part of the
-cycle, so it is excluded from the rate chart and from the counter statistics.</p>""",
+cycle; the box says whether it was excluded, included or scaled (factor shown) according to
+the foreign samples mode.</p>""",
     "backlog": """
 <p>Ingress backlog usage per data plane, from the ingress backlog command sampled on the
 fast tick. It shows how full the atomic and total backlog are and which sessions hold the
@@ -355,10 +371,11 @@ FLAG_HELP = {
         "Another client reset the delta counters",
         "The firewall keeps one global delta baseline. A sample whose elapsed time is shorter "
         "than expected means another client read the counters in between; that sample is "
-        "left out of the counter charts and statistics.",
+        "left out of, kept in or rescaled in the counter statistics according to the foreign "
+        "samples mode (default: left out unless too few clean samples remain).",
         "Stop other tools or admins that run 'show counter global filter delta yes' during "
-        "the capture. The affected samples are excluded from the charts and statistics; "
-        "many of them leave gaps in the counter history."),
+        "the capture. With many affected samples, use --foreign-samples rescale (or include) "
+        "to keep them in the charts and statistics."),
     "INFLIGHT_LEFT_ON": _f(
         "Inflight monitoring may still be ON",
         "The capture switches inflight monitoring on and must switch it off; it could not "
@@ -409,7 +426,7 @@ FLAG_KEYS = {
     "CPU_CORE_HIGH": ["cpu_core_warn", "cpu_core_crit"],
     "CPU_GROUP_HIGH": ["cpu_group_warn"],
     "CYCLE_SLOW": ["cycle_slow_share"],
-    "DELTA_FOREIGN_SAMPLER": [],
+    "DELTA_FOREIGN_SAMPLER": ["foreign_scale_max", "foreign_min_valid"],
     "INFLIGHT_LEFT_ON": [],
     "PBP_ACTIVE": [],
     "PBP_CONGESTION": ["pbp_congestion_warn"],

@@ -59,12 +59,12 @@ def _summary_line(name: str, blob: dict, out: Path) -> str:
             f"{sev['warning']} warning, {sev['info']} info -> {out}")
 
 
-def build_report(src: Path, outdir=None, thresholds=None, used=None):
+def build_report(src: Path, outdir=None, thresholds=None, used=None, foreign_mode="auto"):
     """Analyzes a capture folder and writes the HTML report next to it (or into ``outdir``).
     Returns ``(blob, path)``. Raises ValueError when ``src`` is not a capture folder."""
     if not src.is_dir():
         raise ValueError("not a capture folder")
-    blob = analysis.analyze(src, thresholds)
+    blob = analysis.analyze(src, thresholds, foreign_mode)
     out = Path(outdir) if outdir else src.resolve().parent
     out.mkdir(parents=True, exist_ok=True)
     name = src.resolve().name
@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--open", action="store_true", help="open the report in the default browser")
     ap.add_argument("--debug", action="store_true",
                     help="do not catch unexpected errors: show the full traceback and stop")
+    ap.add_argument("--foreign-samples", choices=analysis.FOREIGN_MODES, default="auto",
+                    help="what to do with delta samples cut short by another client reading the "
+                         "global counters: exclude them, include them as printed, rescale their "
+                         "counts to the whole gap, or auto (exclude, rescale when too few clean "
+                         "samples are left; default)")
     ap.add_argument("--threshold", action="append", default=[], metavar="KEY=VALUE",
                     help="override a finding threshold (repeatable); keys: "
                          + ", ".join(analysis.RT_THRESHOLDS))
@@ -124,7 +129,8 @@ def main(argv=None) -> int:
     for raw in args.inputs:
         src = Path(raw)
         try:
-            blob, target = build_report(src, args.outdir, thresholds or None, used)
+            blob, target = build_report(src, args.outdir, thresholds or None, used,
+                                      args.foreign_samples)
         except (OSError, ValueError, KeyError) as exc:
             print(f"[ERROR] {raw}: {exc}", file=sys.stderr)
             continue
