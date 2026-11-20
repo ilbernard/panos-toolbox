@@ -168,6 +168,14 @@ const D = __DATA__;
 const META = D.meta || {}, SS = (D.session || {}).series || [], LOAD = D.load || [], DL = D.delta || {samples:[], counters:[], top:{t:[], series:{}}};
 const POW = D.pow || {intervals:[], groups:{}, funcs:{}, banner:[]}, BL = D.backlog || {available:false, series:[], special_tags:[], offenders:[]};
 const PBP = D.pbp || {available:false, series:[], latency:[], entries:[]}, RM = D.resmon || {available:false, series:[], last_groups:{}, last_util:{}};
+const FMODE = ((D.delta || {}).mode || {}).effective || 'exclude';
+function foreignNote(){
+  const m = DL.mode || {}, n = DL.foreign || 0;
+  const why = m.reason ? ' (' + m.reason + ')' : '';
+  if(FMODE === 'include') return n + ' delta sample(s) were cut short by another client reading the global counters; they are kept as printed by the firewall' + why + '.';
+  if(FMODE === 'rescale') return n + ' delta sample(s) were cut short by another client reading the global counters; they are kept and their counts are scaled to the whole gap since our previous read (rates per second are unchanged)' + why + '. Samples that would need a factor above ' + (TH.foreign_scale_max || 10) + ' are left out.';
+  return n + ' delta sample(s) were cut short by another client reading the global counters; they are left out of the statistics (' + DL.valid + ' samples used)' + why + '.';
+}
 const TP = D.throughput || {available:false, t:[], total:{rx_bps:[], tx_bps:[]}, interfaces:{}};
 const CAP = D.capture || {commands:[], cycles:[]}, FND = D.findings || [], TH = D.thresholds || {}, FH = D.flag_help || {};
 const TABS = ['overview','findings','pow','counters','backlog','pbp','sessions','throughput','resources','capture'];
@@ -576,24 +584,33 @@ function renderCounters(){
       seg.appendChild(b);
     });
     tb.appendChild(E('div', {class:'bar'}, inp, seg));
-    if(DL.excluded) tb.appendChild(E('p', {class:'hint', text:'Statistics use the ' + DL.valid + ' valid delta sample(s); ' + DL.excluded + ' sample(s) in which another client reset the delta counters are left out.'}));
+    if(DL.foreign) tb.appendChild(E('p', {class:'hint', text:foreignNote()}));
     tb.appendChild(tab.el);
   }
   root.appendChild(tb);
   const top = DL.top || {t:[], series:{}}, names = Object.keys(top.series || {});
   const sm = DL.samples || [];
   root.appendChild(sub('Rate of the busiest counters', 'ct_rates', (function(){
-    const h = E('div');
-    lineChart(h, {t:(top.t || []).map(ms), unit:'/s', title:'Counter rates', legend:true, series:names.map(n => ({name:n, values:top.series[n]})), empty:'No counter rates to draw.'});
+    const h = E('div'), holder = E('div'), nfo = (top.foreign || []).filter(Boolean).length;
+    let how = 'stats';
+    const show = () => {
+      clear(holder);
+      const keep = i => how === 'all' || (how === 'none' ? !(top.foreign || [])[i] : (top.used || [])[i] !== false);
+      const marks = how === 'none' ? [] : (top.foreign || []).map((f, i) => f && keep(i) ? i : -1).filter(i => i >= 0);
+      lineChart(holder, {t:(top.t || []).map(ms), unit:'/s', title:'Counter rates', legend:true, marks,
+        series:names.map(n => ({name:n, values:top.series[n].map((v, i) => keep(i) ? v : null)})), empty:'No counter rates to draw.'});
+    };
+    if(nfo) h.appendChild(E('div', {class:'bar'}, selectBox('Foreign samples', [['stats', 'As in the statistics (' + FMODE + ')'], ['none', 'Hide'], ['all', 'Show all (red rings)']], v => { how = v; show(); })));
+    h.appendChild(holder); show();
     return h;
   })()));
   const strip = E('div', {class:'strip'});
-  sm.forEach((s, i) => strip.appendChild(E('div', {class:'sbox' + (s.foreign ? ' foreign' : ''), title:s.foreign ? 'Another client reset the delta baseline during this window: left out of the charts and statistics' : ''},
+  sm.forEach((s, i) => strip.appendChild(E('div', {class:'sbox' + (s.foreign ? ' foreign' : ''), title:s.foreign ? 'Another client reset the delta baseline during this window (mode: ' + FMODE + ')' : ''},
     E('b', {text:'#' + (i + 1) + '  ' + hms(s.t) + ' UTC'}), E('span', {text:'elapsed ' + (isNum(s.elapsed) ? fmtX(s.elapsed) + ' s' : 'n/a') + ', ' + s.n_counters + ' counters'}),
-    s.foreign ? E('div', null, badge('critical', 'FOREIGN SAMPLER'), ' excluded') : null)));
+    s.foreign ? E('div', null, badge('critical', 'FOREIGN SAMPLER'), s.used ? (FMODE === 'rescale' && isNum(s.scale) ? ' scaled x' + fmtX(s.scale) : ' included') : ' excluded') : null)));
   const nf = sm.filter(s => s.foreign).length;
   root.appendChild(sub('Delta samples', 'ct_samples', sm.length ? strip : noData(),
-    nf ? E('p', {class:'hint', text:nf + ' sample(s) were shortened by another client that reset the delta counters. They are shown as gaps in the rate chart and are left out of the counter statistics.'}) : null));
+    nf ? E('p', {class:'hint', text:foreignNote()}) : null));
 }
 '''
 

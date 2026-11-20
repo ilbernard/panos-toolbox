@@ -91,8 +91,15 @@ Resources, Capture log. Every tab and panel has its own collapsed help. Times ar
   orders of magnitude, so the log scale is the useful one for the overview.
 - **Counters** aggregates the delta counters over the capture; rates are the firewall's own.
   Delta samples in which another client reset the global baseline (`DELTA_FOREIGN_SAMPLER`)
-  are **excluded** from the rate chart (a gap) and from every statistic (max, mean, sum, number
-  of samples); the mean divides by the valid samples. They stay visible in the samples strip.
+  cover only the slice since that read. `runtime report --foreign-samples` decides what to do
+  with them: `exclude` (gap in the chart, left out of every statistic), `include` (as printed),
+  `rescale` (kept, deltas multiplied by `local_gap / elapsed`, e.g. 5 s instead of 10 doubles
+  them, to estimate the whole gap; rates per second are already window independent, so only the
+  sums change; a factor above `foreign_scale_max`, default 10, is too little data and the sample
+  is left out) or `auto` (default: `exclude`, switching to `rescale` when fewer than
+  `foreign_min_valid` samples, default 3, or a quarter of them are clean, so the chart and the
+  statistics are never empty). The mean rate is time weighted (total delta over total window).
+  In the page the rate chart has a selector to hide or show the foreign samples (red rings).
 - **Throughput** (needs `show counter interface all`, read at the end of every fast tick (skipped first when ticks run late), so at
   X/6): total of the physical ports (received, transmitted, sum) with the `show session info`
   figure as a cross-check, and one chart per configured interface. Rates come from differences

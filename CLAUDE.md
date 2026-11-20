@@ -82,6 +82,8 @@ Docs: `docs/runtime/plan.md` (decisions, steps), `docs/runtime/command-notes.md`
   the page, `report_help.py` holds the per-section help and `FLAG_HELP` (a test checks every flag code).
 - The delta counter baseline is global on the firewall: rates use `Elapsed time since last sampling`
   (padded number, use `\s+`), not the local clock.
+  A foreign sample (another client read the baseline) is handled by `--foreign-samples`
+  (`auto|exclude|include|rescale`, see `docs/runtime/analyzer.md`); `auto` never leaves the charts empty.
 - Special backlog tags (id >= 2^31, "NOT valid session id") are never queried with `show session id`.
 - The XML API transport is a future item (see the plan).
 - Tests use synthetic data only (`tests/runtime_synthetic.py` builds a capture through the real engine
@@ -152,6 +154,11 @@ with `@register`. No other registration is needed. Then add tests with a fake se
 
 - The default working branch is `develop`. Create feature branches as `feature/<name>`
   from `develop`, and commit there.
-- Merge `develop` into `main` **only when Alberto explicitly says so**.
-- Never commit directly to `main`. Do not push to `main`.
-- Commit and push only when asked.
+- Commits on `develop` and on `feature/<name>` branches need no confirmation: commit when a piece
+  of work is done and tested, and merge finished feature branches into `develop` (`--no-ff`).
+- Pushing is done when Alberto asks for it.
+- Anything that touches `main` needs Alberto's explicit say: merge `develop` into `main` **only when
+  he says so**, never commit directly to `main`, never push to `main`.
+- Local work dir and the linked git account are both available: if the main working tree is dirty
+  (CRLF noise from OneDrive/Windows, uncommitted changes of Alberto), use a `git worktree` inside the
+  repo (`.worktrees/`, listed in `.git/info/exclude`) and never discard his changes.
