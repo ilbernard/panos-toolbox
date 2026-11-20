@@ -3,7 +3,10 @@
 Placeholders: __KIND__, __TITLE__ and __DATA__ (JSON blob), and __HB_<id>__ / __HP_<id>__
 (help button and collapsible help text of each section, see report_help.py).
 The pieces are concatenated in TEMPLATE; edit one piece to change one part of the page.
+The credits box (__CREDITS__) comes from panos_toolbox.common.credits.
 """
+
+from panos_toolbox.common.credits import CREDITS_CSS, CREDITS_HTML, CREDITS_PLACEHOLDER
 
 # Document start and opening of the style element.
 TEMPLATE_HEAD = r'''<!doctype html>
@@ -148,6 +151,7 @@ TEMPLATE_BODY = r'''</style>
 <body>
 <main>
 <div id="gltip" role="tooltip" hidden></div>
+__CREDITS__
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
 <table class="stats isys devinfo" id="devinfo" style="display:none"></table>
@@ -1935,8 +1939,8 @@ if(hasCov) renderCov();
 '''
 
 TEMPLATE = (TEMPLATE_HEAD +
-            TEMPLATE_CSS +
-            TEMPLATE_BODY +
+            TEMPLATE_CSS + CREDITS_CSS +
+            TEMPLATE_BODY.replace(CREDITS_PLACEHOLDER, CREDITS_HTML) +
             JS_CORE +
             JS_PERCORE +
             JS_POW +

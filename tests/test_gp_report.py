@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from panos_toolbox.common.credits import CREDITS_HTML
 from panos_toolbox.gp import analyzer, checks, report_help
 from panos_toolbox.gp.report_template import TEMPLATE
 
@@ -59,7 +60,8 @@ def test_template_has_no_dangerous_constructs():
     assert "innerHTML" not in js and "outerHTML" not in js and "insertAdjacentHTML" not in js
     assert "eval(" not in js and "document.write" not in js and "new Function" not in js
     assert not re.search(r"\son[a-z]+\s*=", TEMPLATE.replace("onerror", ""))
-    assert not re.search(r"(src|href)=[\"']?https?:", TEMPLATE)
+    # Nothing external is loaded; the only outbound links are the credits box.
+    assert not re.search(r"(src|href)=[\"']?https?:", TEMPLATE.replace(CREDITS_HTML, ""))
 
 
 def test_hostile_values_are_inert():
