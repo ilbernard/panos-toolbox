@@ -140,8 +140,11 @@ summary{cursor:pointer}
 .legsq{display:inline-block;width:14px;height:4px;margin:0 4px 2px 12px}
 .isys td,.isys th{cursor:default;position:static;text-align:left}
 .devinfo{width:auto;margin:0 0 12px}
-.credits{float:right;font-size:12px;color:#666;margin:2px 0 0 16px;text-align:right}
-.credits a{color:inherit;text-decoration:underline}
+.credits{float:right;display:flex;align-items:center;gap:10px;margin:0 0 8px 16px;padding:8px 12px;background:#e8f2f6;border:1px solid #b9d6e1;border-left:4px solid #1f6f8b;border-radius:6px;font-size:13px;color:#1c2530}
+.credits b{color:#1f6f8b}
+.credits a{display:inline-block;padding:3px 10px;border-radius:4px;background:#1f6f8b;color:#fff;font-weight:600;text-decoration:none;white-space:nowrap}
+.credits a:hover,.credits a:focus-visible{background:#17566c;outline:2px solid #17566c;outline-offset:1px}
+@media print{.credits{background:none;border-color:#999}.credits a{background:none;color:#1c2530;text-decoration:underline}}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -150,7 +153,7 @@ TEMPLATE_BODY = r'''</style>
 <body>
 <main>
 <div id="gltip" role="tooltip" hidden></div>
-<div class="credits" id="credits">Generated with <a href="https://github.com/ilbernard/panos-toolbox" target="_blank" rel="noopener noreferrer">panos-toolbox</a> &middot; Author: <a href="https://www.linkedin.com/in/alberto-bernardi/" target="_blank" rel="noopener noreferrer">Alberto Bernardi</a></div>
+<div class="credits" id="credits"><span>Generated with <b>panos-toolbox</b> by <b>Alberto Bernardi</b></span><a href="https://github.com/ilbernard/panos-toolbox" target="_blank" rel="noopener noreferrer">Git repository &#8599;</a><a href="https://www.linkedin.com/in/alberto-bernardi/" target="_blank" rel="noopener noreferrer">LinkedIn &#8599;</a></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
 <table class="stats isys devinfo" id="devinfo" style="display:none"></table>
