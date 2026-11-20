@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from panos_toolbox.common.credits import CREDITS_HTML, CREDITS_PLACEHOLDER
 from panos_toolbox.tsf import (
     analyzer,
     correlations,
@@ -37,7 +38,7 @@ def test_template_import_and_pieces():
     assert '__DATA__' in tpl and '__TITLE__' in tpl
     for name in ('TEMPLATE_HEAD', 'TEMPLATE_CSS', 'TEMPLATE_BODY', 'JS_CORE', 'JS_POW',
                  'JS_TABS'):
-        piece = getattr(report_template, name)
+        piece = getattr(report_template, name).replace(CREDITS_PLACEHOLDER, CREDITS_HTML)
         assert piece and piece in tpl, name
     # No global Help tab: every section has its own placeholders instead.
     assert 'id="tab-help"' not in tpl and 'id="p-help"' not in tpl

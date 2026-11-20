@@ -44,6 +44,8 @@ import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+from panos_toolbox.common.credits import CREDITS_CSS, CREDITS_HTML
+
 from . import archive, correlations, dp_health, if_glossary, log_events, mp_monitor, pow_glossary, system_health
 from .coverage import build_coverage
 from .dp_health import DP_THRESHOLDS, evaluate_dp_health
@@ -655,7 +657,7 @@ def render_index(rows):
                 p=html.escape(str(r.get('peak') or '-')),
                 w=html.escape(str(r.get('warnings', 0)))))
     return ('<!doctype html><meta charset="utf-8"><title>TSF summary</title>'
-            f'<style>{INDEX_CSS}</style>'
+            f'<style>{INDEX_CSS}{CREDITS_CSS}</style>{CREDITS_HTML}'
             '<h1>TSF summary</h1><p>Times in UTC. Rows are sorted by worst module status. '
             'Findings: critical / warning / info across all modules.</p>'
             '<table><tr><th>TSF</th><th>Analysis</th><th>Modules</th><th>Findings</th>'
