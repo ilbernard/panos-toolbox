@@ -140,6 +140,8 @@ summary{cursor:pointer}
 .legsq{display:inline-block;width:14px;height:4px;margin:0 4px 2px 12px}
 .isys td,.isys th{cursor:default;position:static;text-align:left}
 .devinfo{width:auto;margin:0 0 12px}
+.credits{float:right;font-size:12px;color:#666;margin:2px 0 0 16px;text-align:right}
+.credits a{color:inherit;text-decoration:underline}
 '''
 
 # Markup: closing head, header, tabs bar, tab panels.
@@ -148,6 +150,7 @@ TEMPLATE_BODY = r'''</style>
 <body>
 <main>
 <div id="gltip" role="tooltip" hidden></div>
+<div class="credits" id="credits">Generated with <a href="https://github.com/ilbernard/panos-toolbox" target="_blank" rel="noopener noreferrer">panos-toolbox</a> &middot; Author: <a href="https://www.linkedin.com/in/alberto-bernardi/" target="_blank" rel="noopener noreferrer">Alberto Bernardi</a></div>
 <h1 id="title"></h1>
 <p class="sub" id="sub"></p>
 <table class="stats isys devinfo" id="devinfo" style="display:none"></table>

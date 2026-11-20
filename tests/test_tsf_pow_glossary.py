@@ -206,7 +206,12 @@ def test_report_embeds_tooltip_data_and_has_no_help_tab(tmp_path):
     assert set(gl['conf']) == {'D', 'G', 'I', 'U'}
     assert 'role="tooltip"' in page and 'aria-describedby' in page
     assert 'id="tab-help"' not in page and 'id="p-help"' not in page
-    assert 'src="http' not in page and 'href="http' not in page
+    # Offline page: nothing external is loaded. The only outbound links are the header credits.
+    assert 'src="http' not in page and 'url(http' not in page
+    assert sorted(re.findall(r'href="(http[^"]*)"', page)) == [
+        'https://github.com/ilbernard/panos-toolbox',
+        'https://www.linkedin.com/in/alberto-bernardi/',
+    ]
 
 
 def test_unknown_counter_marked_in_tooltip_data(tmp_path):

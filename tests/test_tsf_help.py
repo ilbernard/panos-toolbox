@@ -65,6 +65,16 @@ def test_template_is_fluid_with_1200_minimum_width():
     assert 'max-width:1280px' not in tpl
 
 
+def test_header_has_credits_links():
+    """The page header credits the git repository and the author, opening in a new tab."""
+    tpl = analyzer.TEMPLATE
+    head = tpl[tpl.index('<main>'):tpl.index('id="title"')]
+    assert 'class="credits"' in head
+    for url in ('https://github.com/ilbernard/panos-toolbox',
+                'https://www.linkedin.com/in/alberto-bernardi/'):
+        assert f'href="{url}" target="_blank" rel="noopener noreferrer"' in head
+
+
 def test_tabs_have_a_normal_and_an_advanced_view():
     tpl = report_template.TEMPLATE
     assert '<label class="advtoggle" id="advwrap"' in tpl and 'id="advanced"' in tpl
