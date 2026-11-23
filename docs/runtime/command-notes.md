@@ -27,6 +27,7 @@ serials and must never be copied into the repository.
 | `show session packet-buffer-protection buffer-latency` | `Latest latency: N ms`, `Last 10 seconds average/maximum latency (ms):` and ten `avg/max` pairs. |
 | `show session packet-buffer-protection zones` | Enabled zones. |
 | `show counter interface all` | Cumulative per-interface counters (MAC, CPU and logical blocks), parsed by `tsf.interface_errors`; used for the throughput charts (`bytes received` / `bytes transmitted`, else `rx-bytes` / `tx-bytes`). Size and duration on a production firewall still to be measured (read once per fast tick, last and dropped first when late). |
+| `show session all start-at N` | Optional (`--dump-sessions`), once at the end. `<1-2097152>` "Show next 1K sessions". Two lines per session: `ID Application State Type Flag Src[Sport]/Zone/Proto (xlate[port])` then `Vsys Dst[Dport]/Zone (xlate[port])`. Paged with N = 1, 1025, 2049, ...; not an atomic snapshot. Format and paging semantics still to be confirmed on the lab. |
 | `show session ingress_backlogs_threshold` / `_duration` | Single number (lab: 80 and 3). |
 
 ## ingress-backlogs

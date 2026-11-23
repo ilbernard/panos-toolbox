@@ -165,7 +165,7 @@ __HELPSTORE__
 
 JS_CORE = r'''<script>
 const D = __DATA__;
-const META = D.meta || {}, SS = (D.session || {}).series || [], LOAD = D.load || [], DL = D.delta || {samples:[], counters:[], top:{t:[], series:{}}};
+const META = D.meta || {}, SS = (D.session || {}).series || [], SD = D.sessions_dump || {}, LOAD = D.load || [], DL = D.delta || {samples:[], counters:[], top:{t:[], series:{}}};
 const POW = D.pow || {intervals:[], groups:{}, funcs:{}, banner:[]}, BL = D.backlog || {available:false, series:[], special_tags:[], offenders:[]};
 const PBP = D.pbp || {available:false, series:[], latency:[], entries:[]}, RM = D.resmon || {available:false, series:[], last_groups:{}, last_util:{}};
 const FMODE = ((D.delta || {}).mode || {}).effective || 'exclude';
@@ -680,8 +680,31 @@ function renderPbp(){
 
 JS_SESSIONS = r'''
 // ================= Sessions and resources
+function renderSessionDump(root){
+  const box = sub('Session dump', 'ss_dump');
+  if(!SD.available){
+    box.appendChild(E('p', {class:'msg', text: SD.requested ? 'The session dump was requested but no page was stored.' : 'No session dump in this capture (capture option --dump-sessions).'}));
+    root.appendChild(box); return;
+  }
+  box.appendChild(kvList([['Sessions read', fmtN(SD.sessions) + (SD.truncated ? ' (INCOMPLETE: ' + (SD.reason || 'stopped') + ')' : '')],
+    ['Pages (1K sessions each)', fmtN(SD.pages) + (SD.failed_pages ? ', failed: ' + SD.failed_pages : '')],
+    ['Duplicates skipped', fmtN(SD.duplicates)], ['Sessions with NAT', fmtN(SD.nat)],
+    ['Read between (UTC)', sec(SD.t) + ' - ' + sec(SD.t_end)], ['Command time', fmtX(SD.dump_s) + ' s']]));
+  const g = E('div', {class:'cols'});
+  const table = (title, key) => {
+    const rows = (SD.top || {})[key] || [], tot = SD.sessions || 1;
+    const h = E('div', null, E('h4', {text:title + ' (' + fmtN((SD.distinct || {})[key] || 0) + ' distinct)', style:'margin:6px 0'}));
+    h.appendChild(dataTable([{k:'name', label:'Value', cls:'mono'}, {k:'n', label:'Sessions', cls:'r', num:true},
+      {k:'pct', label:'%', cls:'r', num:true, get:r => r.n * 100 / tot, cell:r => fmtX(Math.round(r.n * 1000 / tot) / 10)}], rows, {sort:'n', dir:-1, cls:'auto'}).el);
+    g.appendChild(h);
+  };
+  [['Application', 'app'], ['State', 'state'], ['Type', 'type'], ['IP protocol', 'proto'], ['Source zone', 'src_zone'], ['Destination zone', 'dst_zone'],
+   ['Zone pair', 'zones'], ['Flag', 'flags'], ['Vsys', 'vsys'], ['Source address', 'src_ip'], ['Destination address', 'dst_ip'], ['Destination port/protocol', 'dst_port']].forEach(([t, k]) => table(t, k));
+  box.appendChild(g); root.appendChild(box);
+}
 function renderSessions(){
   const root = clear($('#b-sessions'));
+  renderSessionDump(root);
   if(!SS.length){ root.appendChild(noData('No session info samples could be parsed.')); return; }
   const T = tsOf(SS), col = k => SS.map(x => x[k]);
   const a = sub('Session table usage', 'ss_table');
