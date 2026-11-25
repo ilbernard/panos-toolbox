@@ -105,12 +105,22 @@ def test_error_answer_stops_the_dump_and_duplicates_are_counted(tmp_path):
     assert cap.sessions_dump["sessions"] == 10 and cap.sessions_dump["duplicates"] == 10
 
 
-def test_inflight_is_still_switched_off_after_the_dump(tmp_path):
+def test_inflight_is_switched_off_before_the_dump(tmp_path):
     cap, tr = _run(tmp_path, {C.sessions_all_cmd(1): sessions_page(1, 5)})
     assert cap.inflight["off_done"]
     cmds = tr.commands()
-    last_dump = max(i for i, c in enumerate(cmds) if c.startswith("show session all"))
-    assert C.INFLIGHT_OFF in cmds[last_dump:]
+    first_dump = min(i for i, c in enumerate(cmds) if c.startswith("show session all"))
+    assert cmds.index(C.INFLIGHT_OFF) < first_dump
+    assert cmds.count(C.INFLIGHT_OFF) == 1  # not repeated at the end
+
+
+def test_inflight_off_even_if_the_dump_is_interrupted(tmp_path):
+    def boom(cmd):
+        raise KeyboardInterrupt
+    cap, tr = _run(tmp_path, {C.sessions_all_cmd(1): boom})
+    cmds = tr.commands()
+    assert C.INFLIGHT_OFF in cmds[: cmds.index(C.sessions_all_cmd(1))]
+    assert cap.inflight["off_done"] and cap.sessions_dump["truncated"]
 
 
 def test_new_flags_are_documented():

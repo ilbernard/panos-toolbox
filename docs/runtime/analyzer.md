@@ -57,8 +57,9 @@ What runs:
 A command the firewall rejects with `Invalid syntax` (for example ingress-backlogs on a
 VM-Series running 11.2) is tried once and then skipped; the report says so.
 
-**Session dump (optional, `--dump-sessions`).** After the last cycle, and before the inflight
-monitoring is switched off, the tool pages through the whole session table with
+**Session dump (optional, `--dump-sessions`).** After the last cycle, and after the inflight
+monitoring has been switched off (so a long or interrupted dump cannot leave it ON), the tool
+pages through the whole session table with
 `show session all start-at N` (the firewall shows the next 1K sessions for each `N`, range
 1-2097152): `N` = 1, 1025, 2049, ... until three consecutive pages come back empty. It stops
 earlier on an error answer, on Ctrl+C or at `--sessions-max-pages` (the dump is then flagged

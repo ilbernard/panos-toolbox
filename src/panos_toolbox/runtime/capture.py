@@ -373,7 +373,7 @@ class Capture:
         }
 
     def execute(self) -> dict:
-        """Preamble, inflight on, sampling loop, inflight off; returns the manifest."""
+        """Preamble, inflight on, sampling loop, inflight off, optional session dump; returns the manifest."""
         try:
             self.preamble()
             self.inflight_on()
@@ -383,6 +383,8 @@ class Capture:
             except KeyboardInterrupt:
                 self.stopped_by_user = True
                 self.say("\nStopped by the user.")
+            with _shielded():  # sampling is over: put inflight monitoring back to OFF first,
+                self.inflight_off()  # so a slow or interrupted session dump cannot leave it ON
             if self.cfg.dump_sessions:
                 self.dump_sessions()
             self.run(C.CLOCK)
