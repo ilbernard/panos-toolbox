@@ -32,6 +32,18 @@ BACKLOG_DURATION = "show session ingress_backlogs_duration"
 BACKLOG_TRIGGER = "show session ingress_backlogs_trigger status"
 
 SESSION_ID_RE = re.compile(r"^show session id \d{1,12}$")
+# Paged dump of the whole session table: ``start-at`` takes 1-2097152 and shows the next 1K sessions.
+SESSIONS_ALL_RE = re.compile(r"^show session all start-at \d{1,7}$")
+SESSIONS_ALL_MAX_START = 2097152
+SESSIONS_ALL_PAGE = 1024
+
+
+def sessions_all_cmd(start: int) -> str:
+    """``show session all start-at <start>`` (start must be 1-2097152)."""
+    if not 1 <= start <= SESSIONS_ALL_MAX_START:
+        raise ValueError(f"start-at out of range 1-{SESSIONS_ALL_MAX_START}: {start}")
+    return f"show session all start-at {start}"
+
 
 # command -> file slug (one raw file per slug)
 SLUGS = {
@@ -56,13 +68,19 @@ SLUGS = {
     BACKLOG_TRIGGER: "state_backlogs_trigger",
 }
 SLUG_SESSION_ID = "session_id"
+SLUG_SESSIONS_ALL = "sessions_all"
 
 ALLOWED = frozenset(SETUP_CLI) | frozenset(SLUGS)
 
 
+def _sessions_all_ok(cmd: str) -> bool:
+    return bool(SESSIONS_ALL_RE.match(cmd)) and \
+        1 <= int(cmd.rsplit(" ", 1)[1]) <= SESSIONS_ALL_MAX_START
+
+
 def check_allowed(cmd: str) -> None:
     """Raises ValueError for any command outside the allow-list."""
-    if cmd not in ALLOWED and not SESSION_ID_RE.match(cmd):
+    if cmd not in ALLOWED and not SESSION_ID_RE.match(cmd) and not _sessions_all_ok(cmd):
         raise ValueError(f"command not in the allow-list: {cmd!r}")
 
 
@@ -71,4 +89,6 @@ def slug_for(cmd: str) -> str:
     check_allowed(cmd)
     if SESSION_ID_RE.match(cmd):
         return SLUG_SESSION_ID
+    if SESSIONS_ALL_RE.match(cmd):
+        return SLUG_SESSIONS_ALL
     return SLUGS[cmd]

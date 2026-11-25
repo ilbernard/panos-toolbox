@@ -96,16 +96,61 @@ def test_broken_capture_does_not_crash(tmp_path):
 
 # ---------------------------------------------------------------- foreign delta samples
 
-def test_foreign_delta_sample_is_left_out_of_series_and_statistics(tmp_path):
+def test_foreign_delta_sample_is_left_out_of_statistics_by_default(tmp_path):
     blob = analyze(build_capture(tmp_path, ("foreign", "drops")))
     d = blob["delta"]
     foreign = [i for i, x in enumerate(d["samples"]) if x["foreign"]]
     assert len(foreign) == 1 and d["excluded"] == 1 and d["valid"] == len(d["samples"]) - 1
-    top = d["top"]["series"]["flow_demo_drop"]
-    assert top[foreign[0]] is None and all(v == 1500 for i, v in enumerate(top) if i != foreign[0])
+    assert d["mode"]["effective"] == "exclude" and d["samples"][foreign[0]]["used"] is False
+    top = d["top"]
+    assert top["used"][foreign[0]] is False and top["foreign"][foreign[0]] is True
+    assert top["series"]["flow_demo_drop"][foreign[0]] == 1500  # kept raw for the page toggle
     c = next(x for x in d["counters"] if x["name"] == "flow_demo_drop")
-    assert c["samples"] == d["valid"] and c["mean_rate"] == 1500.0  # divided by valid samples
+    assert c["samples"] == d["valid"] and c["mean_rate"] == 1500.0
     assert "DELTA_FOREIGN_SAMPLER" in codes(blob)
+
+
+def _drop(blob):
+    return next(x for x in blob["delta"]["counters"] if x["name"] == "flow_demo_drop")
+
+
+def test_foreign_modes_include_and_rescale(tmp_path):
+    folder = build_capture(tmp_path, ("foreign", "drops"))
+    ex = analyze(folder, foreign_mode="exclude")
+    inc = analyze(folder, foreign_mode="include")
+    res = analyze(folder, foreign_mode="rescale")
+    n = len(ex["delta"]["samples"])
+    assert inc["delta"]["valid"] == n and res["delta"]["valid"] == n
+    s = next(x for x in res["delta"]["samples"] if x["foreign"])
+    assert s["local_gap"] == 30.0 and s["elapsed"] == 17.4 and abs(s["scale"] - 30 / 17.4) < 1e-3
+    base, raw = _drop(ex)["sum_value"], _drop(inc)["sum_value"]
+    held = 45000  # the synthetic delta holds the same count in every sample
+    assert raw == base + held
+    assert _drop(res)["sum_value"] == base + round(held * s["scale"])  # scaled to the full gap
+    assert _drop(inc)["max_rate"] == _drop(res)["max_rate"] == 1500  # per second: unchanged
+
+
+def test_auto_rescales_when_too_few_clean_samples_are_left():
+    th = dict(RT_THRESHOLDS)
+    def mk(i, el, foreign):
+        text = (f"Global counters:\nElapsed time since last sampling: {el:.3f} seconds\n\n"
+                "name value rate severity category aspect description\n" + "-" * 80 + "\n"
+                f"c_demo {round(el * 100)} 100 info packet pktproc Demo\n" + "-" * 80
+                + "\nTotal counters shown: 1\n")
+        attrs = {"foreign_sampler": "1", "local_gap": "10.000"} if foreign else {}
+        return Sample(i, f"2026-01-01T00:00:{i * 10:02d}.000Z", 0.1, True, text, attrs)
+
+    # 4 samples, 3 foreign: 1 clean sample is below foreign_min_valid -> rescale
+    samples = [mk(0, 10.0, False), mk(1, 5.0, True), mk(2, 2.5, True), mk(3, 0.5, True)]
+    d = _delta(samples, th)
+    assert d["mode"]["effective"] == "rescale" and "only 1 of 4" in d["mode"]["reason"]
+    used = [x["used"] for x in d["samples"]]
+    assert used == [True, True, True, False]  # x20 is above foreign_scale_max: too little data
+    c = d["counters"][0]
+    assert c["sum_value"] == 1000 + 1000 + 1000  # 500 x2 + 250 x4: each scaled to a 10 s gap
+    assert c["samples"] == 3 and c["mean_rate"] == 100.0
+    # explicit exclude is honoured even then: nothing but the clean sample is left
+    assert _delta(samples, th, "exclude")["valid"] == 1
 
 
 def test_counter_only_in_a_foreign_sample_is_not_listed(tmp_path):
@@ -113,7 +158,7 @@ def test_counter_only_in_a_foreign_sample_is_not_listed(tmp_path):
             "name value rate severity category aspect description\n" + "-" * 80 + "\n"
             "only_here 10 10 info packet pktproc Demo\n" + "-" * 80 + "\nTotal counters shown: 1\n")
     s = Sample(1, "2026-01-01T00:00:00.000Z", 0.1, True, text, {"foreign_sampler": "1"})
-    d = _delta([s], dict(RT_THRESHOLDS))
+    d = _delta([s], dict(RT_THRESHOLDS), "exclude")
     assert d["counters"] == [] and d["excluded"] == 1 and d["valid"] == 0
 
 
@@ -198,3 +243,16 @@ def test_cpu_heatmap_gap_between_windows_stays_empty():
     row = _cpu_heat(samples)["cells"]["1"]
     assert len(row) == 160 and row[60:100].count(None) == 40
     assert _cpu_heat([]) is None
+
+
+def test_foreign_samples_option_on_the_command_line(tmp_path):
+    from panos_toolbox.runtime import analyzer
+    folder = build_capture(tmp_path, ("foreign", "drops"))
+    for mode in ("exclude", "include", "rescale", "auto"):
+        assert analyzer.main([str(folder), "-o", str(tmp_path / mode),
+                              "--foreign-samples", mode]) == 0
+        page = next((tmp_path / mode).glob("*_runtime.html")).read_text(encoding="utf-8")
+        assert f'"requested":"{mode}"' in page
+    import pytest
+    with pytest.raises(SystemExit):
+        analyzer.main([str(folder), "--foreign-samples", "bogus"])

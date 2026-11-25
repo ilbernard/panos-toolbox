@@ -7,9 +7,10 @@
                pps, kbps, cps)
 ``load``       management plane load averages per cycle
 ``delta``      ``samples`` (elapsed time, foreign sampler flag), ``counters`` (aggregated per
-               counter) and ``top`` (rate series of the busiest counters). Samples in which
-               another client reset the delta baseline (``foreign``) are left out of the
-               counters and of the series (``null`` points); ``valid`` counts the others
+               counter) and ``top`` (rate series of the busiest counters, with the ``used`` and
+               ``foreign`` masks). What happens to the samples in which another client reset
+               the delta baseline (``foreign``) depends on ``mode``: exclude, include, rescale or
+               auto (see :func:`_delta`)
 ``pow``        per-interval figures from differences of the ``ac-*`` columns: ``intervals``,
                ``groups`` and ``funcs`` (``avg_us``, ``count``, ``max_us`` series), plus the
                evaluation banner of the last sample
@@ -32,6 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import statistics
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +45,7 @@ from .parse_iface import parse_iface_counters
 from .parse_pbp import parse_pbp, parse_pbp_latency
 from .parse_resmon import parse_resmon, summarize_resmon
 from .parse_session import parse_mgmt_load, parse_session_info
+from .parse_sessions_all import parse_sessions_page
 from .store import CaptureReader
 
 RT_THRESHOLDS = {
@@ -62,6 +65,10 @@ RT_THRESHOLDS = {
     "drop_rate_crit": 1000,
     "cycle_slow_share": 0.5,
     "gap_ratio": 1.5,
+    "foreign_scale_max": 10.0,
+    "foreign_min_valid": 3,
+    "sessions_top_share_warn": 30.0,
+    "sessions_top_n": 15,
     "top_counters": 10,
     "top_pow_funcs": 12,
     "max_pbp_entries": 50,
@@ -112,48 +119,109 @@ def _load_series(samples):
     return out
 
 
-def _delta(samples, th):
-    """Delta counters. A sample in which another client reset the firewall's delta baseline
-    covers only a part of the window (the rest went to the other client), so its rates are
-    measured over a short and arbitrary slice: it is left out of every statistic and series."""
-    out_samples, agg = [], {}
+FOREIGN_MODES = ("auto", "exclude", "include", "rescale")
+
+
+def _foreign_mode(requested, flags, th):
+    """``(effective mode, reason)``. ``auto`` excludes the foreign samples, unless too few clean
+    samples are left (then the chart and the statistics would be empty or meaningless)."""
+    if requested != "auto":
+        return requested, "chosen on the command line"
+    n, bad = len(flags), sum(flags)
+    clean = n - bad
+    if bad and clean < max(th["foreign_min_valid"], -(-n // 4)):
+        return "rescale", (f"only {clean} of {n} delta samples are clean, so the foreign ones "
+                           "are kept and rescaled")
+    return "exclude", "enough clean samples" if bad else "no foreign sample"
+
+
+def _delta(samples, th, mode="auto"):
+    """Delta counters.
+
+    The firewall's delta baseline is global: when another client reads it, our sample covers
+    only the slice since that read (``elapsed``) instead of the whole gap since our previous
+    read (``local_gap``). ``mode`` says what to do with such a *foreign* sample:
+
+    ``exclude``  leave it out of every statistic and series (a gap in the chart);
+    ``include``  keep it exactly as the firewall printed it;
+    ``rescale``  keep it and estimate the counts of the whole gap by multiplying the deltas by
+                 ``local_gap / elapsed`` (rates per second are already independent of the
+                 window and stay as they are). A sample that would need a factor above
+                 ``foreign_scale_max`` carries too little information and is left out;
+    ``auto``     ``exclude``, or ``rescale`` when too few clean samples are left.
+
+    The mean rate is time weighted (total delta over total window)."""
+    parsed, flags = [], []
     for s in samples:
         p = parse_delta(s.text)
         foreign = s.attrs.get("foreign_sampler") == "1"
-        out_samples.append({"t": s.t, "elapsed": p["elapsed_s"], "foreign": foreign,
-                            "n_counters": len(p["counters"]),
+        try:
+            gap = float(s.attrs.get("local_gap", ""))
+        except ValueError:
+            gap = None
+        el = p["elapsed_s"]
+        scale = round(gap / el, 3) if foreign and gap and el else None
+        parsed.append((s, p, foreign, el, gap, scale))
+        flags.append(foreign)
+    effective, reason = _foreign_mode(mode, flags, th)
+    out_samples, agg, used = [], {}, []
+    win_total, win_n, win_known = 0.0, 0, True  # window of the samples that count
+    for i, (s, p, foreign, el, gap, scale) in enumerate(parsed):
+        too_short = foreign and (scale is None or scale > th["foreign_scale_max"])
+        if not foreign or effective == "include":
+            use = True
+        elif effective == "rescale":
+            use = not too_short
+        else:
+            use = False
+        factor = scale if (foreign and effective == "rescale" and use) else 1.0
+        used.append(use)
+        out_samples.append({"t": s.t, "elapsed": el, "local_gap": gap, "foreign": foreign,
+                            "scale": scale, "used": use, "n_counters": len(p["counters"]),
                             "total_declared": p["total_declared"]})
-        if foreign:
+        if not use:
             continue
+        window = el * factor if el else None
         for name, c in p["counters"].items():
             a = agg.setdefault(name, {"name": name, "severity": c["severity"],
                                       "category": c["category"], "aspect": c["aspect"],
                                       "description": c["description"], "samples": 0,
-                                      "sum_value": 0, "rates": {}, "first_seen": len(out_samples)})
+                                      "sum_value": 0, "rates": {}, "first_seen": i + 1})
             a["samples"] += 1
-            a["sum_value"] += c["value"]
-            a["rates"][len(out_samples) - 1] = c["rate"]
+            a["sum_value"] += round(c["value"] * factor)
+            a["rates"][i] = c["rate"]
+        win_n += 1
+        if window:
+            win_total += window
+        else:
+            win_known = False
     n = len(out_samples)
-    valid = [i for i, x in enumerate(out_samples) if not x["foreign"]]
+    last = max((i for i, u in enumerate(used) if u), default=None)
     counters = []
     for a in agg.values():
         rates = a.pop("rates")
         a["max_rate"] = max(rates.values())
-        a["mean_rate"] = round(sum(rates.values()) / len(valid), 2) if valid else 0
-        last = valid[-1] if valid else None
+        if win_known and win_total > 0:
+            a["mean_rate"] = round(a["sum_value"] / win_total, 2)
+        else:  # a sample without elapsed time: plain mean of the rates
+            a["mean_rate"] = round(sum(rates.values()) / win_n, 2) if win_n else 0
         a["last_rate"] = rates.get(last, 0) if last is not None else 0
         a["_rates"] = rates
         counters.append(a)
     counters.sort(key=lambda c: (-c["max_rate"], c["name"]))
-    top = {"t": [x["t"] for x in out_samples], "series": {}}
-    skip = {i for i, x in enumerate(out_samples) if x["foreign"]}
+    # top series: the rate of every sample as printed (foreign ones too), plus the masks, so
+    # that the page can show or hide the foreign samples without a new analysis
+    top = {"t": [x["t"] for x in out_samples], "series": {}, "used": used,
+           "foreign": [x["foreign"] for x in out_samples]}
     for c in counters[: th["top_counters"]]:
-        top["series"][c["name"]] = [None if i in skip else c["_rates"].get(i, 0)
-                                    for i in range(n)]
+        top["series"][c["name"]] = [
+            (parsed[i][1]["counters"].get(c["name"], {}).get("rate", 0)) for i in range(n)]
     for c in counters:
         del c["_rates"]
-    return {"samples": out_samples, "counters": counters, "top": top, "valid": len(valid),
-            "excluded": n - len(valid)}
+    nused = sum(used)
+    return {"samples": out_samples, "counters": counters, "top": top, "valid": nused,
+            "excluded": n - nused, "foreign": sum(flags),
+            "mode": {"requested": mode, "effective": effective, "reason": reason}}
 
 
 def _pow_rows(sample):
@@ -465,6 +533,57 @@ def _cpu_heat(samples, max_cells=8000):
 
 # ------------------------------------------------------------------------------ capture log
 
+def _top(counter, n):
+    return [{"name": k, "n": v} for k, v in counter.most_common(n)]
+
+
+def _sessions_dump(samples, manifest, th):
+    """Aggregates the pages of the session dump (``show session all start-at N``)."""
+    info = dict(manifest.get("sessions_dump") or {})
+    if not samples:
+        return {"available": False, "requested": bool(info.get("requested"))}
+    n = int(th["sessions_top_n"])
+    seen: set = set()
+    dup = 0
+    keys = ("app", "state", "type", "vsys")
+    cnt = {k: Counter() for k in (*keys, "proto", "src_zone", "dst_zone", "zones", "src_ip",
+                                  "dst_ip", "dst_port", "flags")}
+    nat = 0
+    failed = 0
+    for smp in samples:
+        if not smp.ok:
+            failed += 1
+        for r in parse_sessions_page(smp.text):
+            if r["id"] in seen:
+                dup += 1
+                continue
+            seen.add(r["id"])
+            for k in keys:
+                cnt[k][r[k]] += 1
+            cnt["proto"][str(r["src"]["proto"])] += 1
+            cnt["src_zone"][r["src"]["zone"]] += 1
+            cnt["dst_zone"][r["dst"]["zone"]] += 1
+            cnt["zones"][f"{r['src']['zone']} -> {r['dst']['zone']}"] += 1
+            cnt["src_ip"][r["src"]["ip"]] += 1
+            cnt["dst_ip"][r["dst"]["ip"]] += 1
+            cnt["dst_port"][f"{r['dst']['port']}/{r['src']['proto']}"] += 1
+            for flag in r["flags"].split():
+                cnt["flags"][flag] += 1
+            if r["nat_src"] or r["nat_dst"]:
+                nat += 1
+    total = len(seen)
+    return {
+        "available": True, "requested": True,
+        "t": samples[0].t, "t_end": samples[-1].t,
+        "pages": len(samples), "failed_pages": failed, "sessions": total,
+        "duplicates": dup, "nat": nat,
+        "truncated": bool(info.get("truncated")), "reason": info.get("reason", ""),
+        "dump_s": round(sum(s.dur for s in samples), 3),
+        "top": {k: _top(c, n) for k, c in cnt.items()},
+        "distinct": {k: len(c) for k, c in cnt.items()},
+    }
+
+
 def _capture_log(reader, manifest):
     stats, cycles, ticks = {}, {}, {}
     for slug in reader.slugs():
@@ -583,11 +702,17 @@ def _findings(blob, th, reader):
         f.append(_finding("POW_FINDING", level, str(item.get("text", ""))[:300]))
     foreign = sum(1 for x in blob["delta"]["samples"] if x["foreign"])
     if foreign:
+        m = blob["delta"]["mode"]
+        what = {"exclude": "they are shown as gaps in the counter charts and left out of the "
+                           "counter statistics",
+                "include": "they are kept as printed by the firewall (short windows, noisy)",
+                "rescale": "they are kept and their counts are scaled to the whole gap "
+                           "(rates per second are unchanged)"}[m["effective"]]
         f.append(_finding("DELTA_FOREIGN_SAMPLER", "warning",
                           f"Another client reset the delta counters {foreign} time(s)",
-                          "The firewall's delta baseline is global: the window of each affected "
-                          "sample was split with the other client, so it is shown as a gap in "
-                          "the counter charts and left out of the counter statistics."))
+                          f"The firewall's delta baseline is global: the window of each affected "
+                          f"sample was split with the other client. Mode {m['effective']} "
+                          f"({m['reason']}): {what}."))
     interval = meta.get("interval_s") or 0
     times = [s.t for s in reader.samples("session_info")]
     if interval and len(times) > 1:
@@ -629,13 +754,31 @@ def _findings(blob, th, reader):
                      "iface_counters": "throughput"}[key]]["available"]:
             f.append(_finding("CMD_NOT_AVAILABLE", "info", f"{label} is not available here",
                               "The firewall answered 'Invalid syntax' (platform or version)."))
+    sd = blob.get("sessions_dump") or {}
+    if sd.get("available"):
+        if sd["truncated"]:
+            f.append(_finding("SESSIONS_DUMP_TRUNCATED", "warning",
+                              "The session dump is incomplete",
+                              f"{sd['sessions']} sessions in {sd['pages']} pages; "
+                              f"reason: {sd['reason'] or 'unknown'}.", sd["t_end"]))
+        if sd["sessions"]:
+            for key, label in (("src_ip", "source"), ("dst_ip", "destination")):
+                top = sd["top"][key][:1]
+                share = top[0]["n"] * 100.0 / sd["sessions"] if top else 0.0
+                if share >= th["sessions_top_share_warn"]:
+                    f.append(_finding("SESSIONS_TOP_TALKER", "info",
+                                      f"One {label} address holds {share:.0f}% of the sessions",
+                                      f"{top[0]['name']}: {top[0]['n']} of {sd['sessions']} "
+                                      "sessions in the dump.", sd["t"]))
     f.sort(key=lambda x: (LEVEL_ORDER[x["level"]], x["code"], x["t"]))
     return f
 
 
 # ------------------------------------------------------------------------------ entry point
 
-def analyze(folder, thresholds=None) -> dict:
+def analyze(folder, thresholds=None, foreign_mode="auto") -> dict:
+    if foreign_mode not in FOREIGN_MODES:
+        raise ValueError(f"foreign_mode must be one of {FOREIGN_MODES}")
     th = dict(RT_THRESHOLDS)
     th.update(thresholds or {})
     folder = Path(folder)
@@ -678,11 +821,12 @@ def analyze(folder, thresholds=None) -> dict:
         },
         "session": {"series": _session_series(reader.samples("session_info"))},
         "load": _load_series(reader.samples("mgmt_load")),
-        "delta": _delta(reader.samples("delta"), th),
+        "delta": _delta(reader.samples("delta"), th, foreign_mode),
         "pow": _pow(reader.samples("pow"), th),
         "backlog": _backlog(reader.samples("ingress_backlogs"),
                             reader.samples("session_id"), manifest),
         "pbp": _pbp(reader.samples("pbp"), reader.samples("pbp_latency"), manifest, th),
+        "sessions_dump": _sessions_dump(reader.samples("sessions_all"), manifest, th),
         "throughput": _throughput(reader.samples("iface_counters"), manifest),
         "resmon": _resmon(reader.samples("resource_monitor"), manifest),
         "capture": _capture_log(reader, manifest),

@@ -33,6 +33,9 @@ command line, printed or written to disk. An unknown SSH host key is rejected un
 | `--pow-all` | off | Also run `debug dataplane pow performance all` (histograms, doubles the POW size) |
 | `--no-inflight-monitoring` | off | Do not touch `session inflight_monitoring` |
 | `--max-offenders N` | 10 | `show session id` queries per fast tick |
+| `--dump-sessions` | off | At the end of the sampling, dump every active session (see below) |
+| `--sessions-max-pages N` | 500 | Page limit of the session dump (500 pages = about 500K sessions) |
+| `--sessions-pause S` | 0.2 | Seconds between pages of the session dump |
 | `--no-compress` | off | Plain text raw files instead of gzip |
 | `--outdir DIR` | `.` | Where `runtime_<host>_<UTC>/` is created |
 | `--no-report` | off | Do not build the HTML report at the end |
@@ -53,6 +56,21 @@ What runs:
 
 A command the firewall rejects with `Invalid syntax` (for example ingress-backlogs on a
 VM-Series running 11.2) is tried once and then skipped; the report says so.
+
+**Session dump (optional, `--dump-sessions`).** After the last cycle, and after the inflight
+monitoring has been switched off (so a long or interrupted dump cannot leave it ON), the tool
+pages through the whole session table with
+`show session all start-at N` (the firewall shows the next 1K sessions for each `N`, range
+1-2097152): `N` = 1, 1025, 2049, ... until three consecutive pages come back empty. It stops
+earlier on an error answer, on Ctrl+C or at `--sessions-max-pages` (the dump is then flagged
+truncated, with a warning and the `SESSIONS_DUMP_TRUNCATED` finding). Every page is stored in
+`raw/sessions_all.txt.gz`. The command is read-only and the allow-list accepts only
+`show session all start-at <1-2097152>`. A live table moves while it is read, so the dump is not
+an atomic snapshot: ids seen twice are counted as duplicates and skipped. The cost is one command
+per 1K sessions (a table of 1M sessions is about 1000 commands: raise `--sessions-pause` on a
+loaded firewall). The Sessions tab of the report shows the totals and top-N tables
+(application, state, type, protocol, zones, flags, busiest source and destination addresses and
+ports; N is `sessions_top_n`).
 
 **The only change the tool makes on the firewall** is `set session inflight_monitoring yes` at
 the start and `... no` at the end (also on Ctrl+C or an error). The setting is always left OFF,
@@ -91,8 +109,15 @@ Resources, Capture log. Every tab and panel has its own collapsed help. Times ar
   orders of magnitude, so the log scale is the useful one for the overview.
 - **Counters** aggregates the delta counters over the capture; rates are the firewall's own.
   Delta samples in which another client reset the global baseline (`DELTA_FOREIGN_SAMPLER`)
-  are **excluded** from the rate chart (a gap) and from every statistic (max, mean, sum, number
-  of samples); the mean divides by the valid samples. They stay visible in the samples strip.
+  cover only the slice since that read. `runtime report --foreign-samples` decides what to do
+  with them: `exclude` (gap in the chart, left out of every statistic), `include` (as printed),
+  `rescale` (kept, deltas multiplied by `local_gap / elapsed`, e.g. 5 s instead of 10 doubles
+  them, to estimate the whole gap; rates per second are already window independent, so only the
+  sums change; a factor above `foreign_scale_max`, default 10, is too little data and the sample
+  is left out) or `auto` (default: `exclude`, switching to `rescale` when fewer than
+  `foreign_min_valid` samples, default 3, or a quarter of them are clean, so the chart and the
+  statistics are never empty). The mean rate is time weighted (total delta over total window).
+  In the page the rate chart has a selector to hide or show the foreign samples (red rings).
 - **Throughput** (needs `show counter interface all`, read at the end of every fast tick (skipped first when ticks run late), so at
   X/6): total of the physical ports (received, transmitted, sum) with the `show session info`
   figure as a cross-check, and one chart per configured interface. Rates come from differences
@@ -120,6 +145,8 @@ Each finding has a code; the report's Findings tab explains every code (`FLAG_HE
 | `PBP_CONGESTION` | warning | Packet buffer congestion above the threshold |
 | `PBP_LATENCY_HIGH` | warning / critical | Packet buffer latency above 1 s / 3 s |
 | `SESSION_UTIL` | warning / critical | Session table above 70 % / 90 % |
+| `SESSIONS_DUMP_TRUNCATED` | warning | The session dump stopped before the end of the table |
+| `SESSIONS_TOP_TALKER` | info | One source or destination address holds 30 % or more of the dumped sessions |
 | `CPS_SPIKE` | warning | Connection rate peak far above the median |
 | `CPU_CORE_HIGH` | warning / critical | Data plane core average above 80 % / 95 % |
 | `CPU_GROUP_HIGH` | warning | A POW group above 80 % CPU |
@@ -133,6 +160,13 @@ Each finding has a code; the report's Findings tab explains every code (`FLAG_HE
 | `CMD_NOT_AVAILABLE` | info | The firewall does not support the command |
 
 ## Limitations
+
+- The paging of `show session all start-at N` (step 1024, stop on empty pages) follows the
+  command help and community usage; whether `N` is a table position or a session id, and so
+  whether pages overlap, is not verified on a live firewall. The tool is safe either way (gaps
+  are not possible, overlaps are de-duplicated) but check `pages`, `duplicates` and the session
+  count against `show session info` on the lab. The session line format is parsed from the
+  documented layout (two lines per session) with synthetic data only.
 
 - SSH only. The XML API transport is a future item.
 - Multi-DP firewalls and a real ingress-backlogs offender have not been validated against a live

@@ -29,6 +29,7 @@ from typing import Callable
 
 from . import commands as C
 from .parse_backlog import is_unavailable, offending_ids, parse_backlog
+from .parse_sessions_all import parse_sessions_page
 from .store import CaptureWriter
 from .transport import Clock, Transport, TransportError
 
@@ -38,6 +39,7 @@ _ON_RE = re.compile(r"\b(yes|on|enabled|true)\b", re.IGNORECASE)
 _OFF_RE = re.compile(r"\b(no|off|disabled|false)\b", re.IGNORECASE)
 
 MIN_BACKLOG_INTERVAL = 1.0
+SESSIONS_EMPTY_STOP = 3  # consecutive pages without sessions that end the dump
 
 
 def inflight_state(text: str) -> str:
@@ -77,10 +79,17 @@ class CaptureConfig:
     inflight: bool = True
     max_offenders: int = 10
     iface_counters: bool = True  # "show counter interface all" in every fast tick
+    dump_sessions: bool = False  # one paged "show session all start-at N" dump at the end
+    sessions_max_pages: int = 500  # about 500K sessions; a larger table is cut and flagged
+    sessions_pause: float = 0.2  # seconds between pages, to spare the management plane
 
     def __post_init__(self):
         if self.interval < 1:
             raise ValueError("--interval must be at least 1 second")
+        if self.sessions_max_pages < 1:
+            raise ValueError("--sessions-max-pages must be at least 1")
+        if self.sessions_pause < 0:
+            raise ValueError("--sessions-pause cannot be negative")
         if self.backlog_interval is None:
             self.backlog_interval = self.interval / 6
         self.backlog_interval = max(MIN_BACKLOG_INTERVAL, self.backlog_interval)
@@ -108,6 +117,7 @@ class Capture:
         self.seen_ids: set = set()
         self.warnings: list = []
         self.stopped_by_user = False
+        self.sessions_dump: dict = {"requested": cfg.dump_sessions}
         self.inflight = {"wanted": cfg.inflight, "needs_off": False, "off_done": False,
                          "prior": "not read", "note": "not requested"}
         self.started = self.clock.utcnow()
@@ -253,6 +263,60 @@ class Capture:
         self.run(C.DELTA, attrs_fn=self._delta_attrs(started), cycle=n)
         self.fast_tick(f"c{n}")  # covers the coincident fast tick
 
+    def dump_sessions(self) -> None:
+        """Pages through the whole session table (``show session all start-at N``, 1K a page).
+
+        Stops at the end of the table (empty pages), at ``sessions_max_pages`` (truncated, with a
+        warning), on an error answer or on Ctrl+C. Session ids already seen are counted as
+        duplicates (a live table moves while it is read, so this is not an atomic snapshot).
+        """
+        cfg = self.cfg
+        info = self.sessions_dump
+        info.update(pages=0, sessions=0, duplicates=0, truncated=False, reason="")
+        seen: set = set()
+        empty = 0
+        start = 1
+        self.say("Dumping the session table (show session all start-at N) ...")
+        try:
+            while True:
+                if info["pages"] >= cfg.sessions_max_pages:
+                    info.update(truncated=True, reason=f"page limit {cfg.sessions_max_pages}")
+                    break
+                if start > C.SESSIONS_ALL_MAX_START:
+                    info["reason"] = "end of the start-at range"
+                    break
+                text, ok = self.run(C.sessions_all_cmd(start), start=start)
+                info["pages"] += 1
+                if not ok or is_unavailable(text):
+                    info.update(truncated=True, reason="command failed or not available")
+                    self.warnings.append(
+                        f"session dump stopped at start-at {start}: command failed or not available")
+                    break
+                rows = parse_sessions_page(text)
+                new = [r for r in rows if r["id"] not in seen]
+                seen.update(r["id"] for r in rows)
+                info["duplicates"] += len(rows) - len(new)
+                info["sessions"] = len(seen)
+                empty = 0 if rows else empty + 1
+                if info["pages"] % 50 == 0:
+                    self.say(f"      {info['pages']} pages, {info['sessions']} sessions so far")
+                if empty >= SESSIONS_EMPTY_STOP:
+                    info["reason"] = "end of the table"
+                    break
+                start += C.SESSIONS_ALL_PAGE
+                if cfg.sessions_pause:
+                    self.clock.sleep(cfg.sessions_pause)
+        except KeyboardInterrupt:
+            self.stopped_by_user = True
+            info.update(truncated=True, reason="stopped by the user")
+            self.say("\nSession dump interrupted by the user.")
+        if info["truncated"] and info["reason"].startswith("page limit"):
+            self.warnings.append(
+                f"session dump truncated at {info['pages']} pages ({info['sessions']} sessions): "
+                "raise --sessions-max-pages to read the whole table")
+        self.say(f"  session dump: {info['pages']} pages, {info['sessions']} sessions"
+                 + (" (TRUNCATED)" if info["truncated"] else ""))
+
     def loop(self) -> None:
         clock, cfg = self.clock, self.cfg
         x, b = cfg.interval, cfg.backlog_interval
@@ -304,11 +368,12 @@ class Capture:
             "stopped_by_user": self.stopped_by_user,
             "inflight_monitoring": inf["note"],
             "inflight_state_before": inf["prior"],
+            "sessions_dump": dict(self.sessions_dump),
             "warnings": list(self.warnings),
         }
 
     def execute(self) -> dict:
-        """Preamble, inflight on, sampling loop, inflight off; returns the manifest."""
+        """Preamble, inflight on, sampling loop, inflight off, optional session dump; returns the manifest."""
         try:
             self.preamble()
             self.inflight_on()
@@ -318,6 +383,10 @@ class Capture:
             except KeyboardInterrupt:
                 self.stopped_by_user = True
                 self.say("\nStopped by the user.")
+            with _shielded():  # sampling is over: put inflight monitoring back to OFF first,
+                self.inflight_off()  # so a slow or interrupted session dump cannot leave it ON
+            if self.cfg.dump_sessions:
+                self.dump_sessions()
             self.run(C.CLOCK)
         except KeyboardInterrupt:  # Ctrl+C during setup: still clean up and keep what we have
             self.stopped_by_user = True
@@ -371,6 +440,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-iface-counters", action="store_true",
                     help="do not run 'show counter interface all' in the fast ticks "
                          "(no throughput charts, shorter ticks)")
+    ap.add_argument("--dump-sessions", action="store_true",
+                    help="at the end of the capture, dump every active session with a paged "
+                         "'show session all start-at N' (1K sessions per command; heavy on big "
+                         "tables, see --sessions-max-pages)")
+    ap.add_argument("--sessions-max-pages", type=int, default=500,
+                    help="page limit of the session dump (default 500, about 500K sessions; "
+                         "a table cut by the limit is flagged)")
+    ap.add_argument("--sessions-pause", type=float, default=0.2,
+                    help="seconds to wait between pages of the session dump (default 0.2)")
     ap.add_argument("--no-compress", action="store_true", help="write plain text raw files")
     ap.add_argument("--outdir", default=".", help="where the capture folder is created")
     ap.add_argument("--no-report", action="store_true",
@@ -386,7 +464,10 @@ def main(argv=None) -> int:
                             duration=args.duration, max_cycles=args.max_cycles,
                             pow_all=args.pow_all, inflight=not args.no_inflight_monitoring,
                             max_offenders=args.max_offenders,
-                            iface_counters=not args.no_iface_counters)
+                            iface_counters=not args.no_iface_counters,
+                            dump_sessions=args.dump_sessions,
+                            sessions_max_pages=args.sessions_max_pages,
+                            sessions_pause=args.sessions_pause)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
