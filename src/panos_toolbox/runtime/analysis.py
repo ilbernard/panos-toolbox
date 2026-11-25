@@ -33,6 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import statistics
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from .parse_iface import parse_iface_counters
 from .parse_pbp import parse_pbp, parse_pbp_latency
 from .parse_resmon import parse_resmon, summarize_resmon
 from .parse_session import parse_mgmt_load, parse_session_info
+from .parse_sessions_all import parse_sessions_page
 from .store import CaptureReader
 
 RT_THRESHOLDS = {
@@ -65,6 +67,8 @@ RT_THRESHOLDS = {
     "gap_ratio": 1.5,
     "foreign_scale_max": 10.0,
     "foreign_min_valid": 3,
+    "sessions_top_share_warn": 30.0,
+    "sessions_top_n": 15,
     "top_counters": 10,
     "top_pow_funcs": 12,
     "max_pbp_entries": 50,
@@ -529,6 +533,57 @@ def _cpu_heat(samples, max_cells=8000):
 
 # ------------------------------------------------------------------------------ capture log
 
+def _top(counter, n):
+    return [{"name": k, "n": v} for k, v in counter.most_common(n)]
+
+
+def _sessions_dump(samples, manifest, th):
+    """Aggregates the pages of the session dump (``show session all start-at N``)."""
+    info = dict(manifest.get("sessions_dump") or {})
+    if not samples:
+        return {"available": False, "requested": bool(info.get("requested"))}
+    n = int(th["sessions_top_n"])
+    seen: set = set()
+    dup = 0
+    keys = ("app", "state", "type", "vsys")
+    cnt = {k: Counter() for k in (*keys, "proto", "src_zone", "dst_zone", "zones", "src_ip",
+                                  "dst_ip", "dst_port", "flags")}
+    nat = 0
+    failed = 0
+    for smp in samples:
+        if not smp.ok:
+            failed += 1
+        for r in parse_sessions_page(smp.text):
+            if r["id"] in seen:
+                dup += 1
+                continue
+            seen.add(r["id"])
+            for k in keys:
+                cnt[k][r[k]] += 1
+            cnt["proto"][str(r["src"]["proto"])] += 1
+            cnt["src_zone"][r["src"]["zone"]] += 1
+            cnt["dst_zone"][r["dst"]["zone"]] += 1
+            cnt["zones"][f"{r['src']['zone']} -> {r['dst']['zone']}"] += 1
+            cnt["src_ip"][r["src"]["ip"]] += 1
+            cnt["dst_ip"][r["dst"]["ip"]] += 1
+            cnt["dst_port"][f"{r['dst']['port']}/{r['src']['proto']}"] += 1
+            for flag in r["flags"].split():
+                cnt["flags"][flag] += 1
+            if r["nat_src"] or r["nat_dst"]:
+                nat += 1
+    total = len(seen)
+    return {
+        "available": True, "requested": True,
+        "t": samples[0].t, "t_end": samples[-1].t,
+        "pages": len(samples), "failed_pages": failed, "sessions": total,
+        "duplicates": dup, "nat": nat,
+        "truncated": bool(info.get("truncated")), "reason": info.get("reason", ""),
+        "dump_s": round(sum(s.dur for s in samples), 3),
+        "top": {k: _top(c, n) for k, c in cnt.items()},
+        "distinct": {k: len(c) for k, c in cnt.items()},
+    }
+
+
 def _capture_log(reader, manifest):
     stats, cycles, ticks = {}, {}, {}
     for slug in reader.slugs():
@@ -699,6 +754,22 @@ def _findings(blob, th, reader):
                      "iface_counters": "throughput"}[key]]["available"]:
             f.append(_finding("CMD_NOT_AVAILABLE", "info", f"{label} is not available here",
                               "The firewall answered 'Invalid syntax' (platform or version)."))
+    sd = blob.get("sessions_dump") or {}
+    if sd.get("available"):
+        if sd["truncated"]:
+            f.append(_finding("SESSIONS_DUMP_TRUNCATED", "warning",
+                              "The session dump is incomplete",
+                              f"{sd['sessions']} sessions in {sd['pages']} pages; "
+                              f"reason: {sd['reason'] or 'unknown'}.", sd["t_end"]))
+        if sd["sessions"]:
+            for key, label in (("src_ip", "source"), ("dst_ip", "destination")):
+                top = sd["top"][key][:1]
+                share = top[0]["n"] * 100.0 / sd["sessions"] if top else 0.0
+                if share >= th["sessions_top_share_warn"]:
+                    f.append(_finding("SESSIONS_TOP_TALKER", "info",
+                                      f"One {label} address holds {share:.0f}% of the sessions",
+                                      f"{top[0]['name']}: {top[0]['n']} of {sd['sessions']} "
+                                      "sessions in the dump.", sd["t"]))
     f.sort(key=lambda x: (LEVEL_ORDER[x["level"]], x["code"], x["t"]))
     return f
 
@@ -755,6 +826,7 @@ def analyze(folder, thresholds=None, foreign_mode="auto") -> dict:
         "backlog": _backlog(reader.samples("ingress_backlogs"),
                             reader.samples("session_id"), manifest),
         "pbp": _pbp(reader.samples("pbp"), reader.samples("pbp_latency"), manifest, th),
+        "sessions_dump": _sessions_dump(reader.samples("sessions_all"), manifest, th),
         "throughput": _throughput(reader.samples("iface_counters"), manifest),
         "resmon": _resmon(reader.samples("resource_monitor"), manifest),
         "capture": _capture_log(reader, manifest),

@@ -42,6 +42,7 @@ SECTION_TITLES = {
     "ss_table": "Session table usage",
     "ss_active": "Active sessions by protocol",
     "ss_rates": "Session rates",
+    "ss_dump": "Session dump",
     "resources": "Resources",
     "throughput": "Throughput",
     "tp_total": "Total throughput",
@@ -225,6 +226,16 @@ active ones because closing sessions are still counted until they age out.</p>""
 <p>Connections per second (cps), packets per second (pps) and throughput (kbps) as reported
 by the firewall at each sample. They are instantaneous values of that moment, not averages
 over the cycle.</p>""",
+    "ss_dump": """
+<p>Every active session read once at the end of the capture (capture option
+<code>--dump-sessions</code>) with the paged command <code>show session all start-at N</code>,
+1K sessions per page. The tables count sessions by application, state, type, protocol, zone,
+zone pair, flag, and the busiest source and destination addresses and destination ports.</p>
+<p>It is not an atomic snapshot: the table moves while the pages are read, so a few sessions
+can be missing or appear twice (duplicates are counted once and shown in the header). If the
+page limit (<code>--sessions-max-pages</code>) stopped the dump, the header says so and the
+SESSIONS_DUMP_TRUNCATED finding is raised. The full list is in
+<code>raw/sessions_all.txt.gz</code> of the capture folder.</p>""",
     "resources": """
 <p>Dataplane and management resources: CPU per core and per group from <code>show
 running resource-monitor</code> and the management plane load from <code>show system
@@ -407,6 +418,16 @@ FLAG_HELP = {
         "Cycles were further apart than gap_ratio times the interval, or sampling ticks "
         "were skipped because earlier work took too long. Threshold: gap_ratio.",
         "Check the Capture log tab and the network path to the firewall."),
+    "SESSIONS_DUMP_TRUNCATED": _f(
+        "Session dump incomplete",
+        "The paged session dump stopped before the end of the table: page limit, a failed "
+        "command or Ctrl+C. The counts of the Session dump panel cover only what was read.",
+        "Raise --sessions-max-pages, or check the Capture log tab for the failed page."),
+    "SESSIONS_TOP_TALKER": _f(
+        "One address holds many sessions",
+        "A single source or destination address holds at least sessions_top_share_warn "
+        "percent of the sessions in the dump.",
+        "Open the Sessions tab, Session dump panel; look up the address and the application."),
     "SESSION_UTIL": _f(
         "Session table utilization",
         "Session table utilization reached session_util_warn or session_util_crit "
@@ -434,6 +455,8 @@ FLAG_KEYS = {
     "POW_FINDING": ["top_pow_funcs"],
     "SAMPLE_GAP": ["gap_ratio"],
     "SESSION_UTIL": ["session_util_warn", "session_util_crit"],
+    "SESSIONS_DUMP_TRUNCATED": [],
+    "SESSIONS_TOP_TALKER": ["sessions_top_share_warn"],
 }
 
 

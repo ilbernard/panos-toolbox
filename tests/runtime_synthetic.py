@@ -85,6 +85,21 @@ def iface_text(now, mbps=(1.0, 2.0)):
             + lg("ethernet1/1", rx, tx) + lg("ethernet1/1.7", sub, sub))
 
 
+def sessions_page(first_id, n, src="10.1.1.1", app="ssl"):
+    """A synthetic page of ``show session all`` (two lines per session)."""
+    head1 = "ID          Application    State   Type Flag  Src[Sport]/Zone/Proto (translated IP[Port])"
+    head2 = "Vsys                                         Dst[Dport]/Zone (translated IP[Port])"
+    lines = ["-" * 80, head1, head2, "-" * 80]
+    for i in range(n):
+        sid = first_id + i
+        host = src if i % 2 == 0 else f"10.1.2.{i % 250}"
+        lines.append(f"{sid:<11} {app:<14} ACTIVE  FLOW  NS    {host}[{40000 + i % 1000}]/trust/6"
+                     f"  (203.0.113.9[{40000 + i % 1000}])")
+        lines.append("vsys1                                        198.51.100.7[443]/untrust"
+                     "  (198.51.100.7[443])")
+    return "\n".join(lines) + "\n"
+
+
 def build_capture(root, scenario=(), interval=30, duration=95, clock=None):
     """Runs a capture on a FakeTransport and returns the capture folder path."""
     clock = clock or SimClock()
@@ -129,13 +144,17 @@ def build_capture(root, scenario=(), interval=30, duration=95, clock=None):
         C.INFLIGHT_STATE: lambda c: f"Inflight monitoring: {state['inflight']}\n",
         C.INFLIGHT_ON: lambda c: state.__setitem__("inflight", "yes") or "\n",
         C.INFLIGHT_OFF: lambda c: state.__setitem__("inflight", "no") or "\n",
+        C.sessions_all_cmd(1): sessions_page(1, 1024),
+        C.sessions_all_cmd(1025): sessions_page(1025, 1024, app="dns"),
+        C.sessions_all_cmd(2049): sessions_page(2049, 300, src="10.9.9.9"),
         "show session id 4711": "Session 4711\n  c2s flow: source: 10.0.0.1 [trust]\n",
     }
     tr = FakeTransport(responses, clock)
     # the allow-list accepts any numeric id: register the fixed answer for the demo offender
     root.mkdir(parents=True, exist_ok=True)
     writer = CaptureWriter(root / "cap")
-    cap = Capture(tr, writer, CaptureConfig(interval=interval, duration=duration), clock=clock,
+    cap = Capture(tr, writer, CaptureConfig(interval=interval, duration=duration,
+                                    dump_sessions="dump" in scenario, sessions_pause=0.1), clock=clock,
                   reconnect=lambda: tr, out=lambda s: None)
     cap.execute()
     writer.close()

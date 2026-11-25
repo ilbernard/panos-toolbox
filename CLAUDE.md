@@ -84,6 +84,9 @@ Docs: `docs/runtime/plan.md` (decisions, steps), `docs/runtime/command-notes.md`
   (padded number, use `\s+`), not the local clock.
   A foreign sample (another client read the baseline) is handled by `--foreign-samples`
   (`auto|exclude|include|rescale`, see `docs/runtime/analyzer.md`); `auto` never leaves the charts empty.
+- Optional `--dump-sessions`: `Capture.dump_sessions` pages `show session all start-at N` once at the end
+  (allow-list rule in `commands.py`, `parse_sessions_all.py`, `analysis._sessions_dump`, Session dump panel
+  in the Sessions tab).
 - Special backlog tags (id >= 2^31, "NOT valid session id") are never queried with `show session id`.
 - The XML API transport is a future item (see the plan).
 - Tests use synthetic data only (`tests/runtime_synthetic.py` builds a capture through the real engine
