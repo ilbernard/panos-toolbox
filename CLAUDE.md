@@ -80,6 +80,9 @@ Docs: `docs/runtime/plan.md` (decisions, steps), `docs/runtime/command-notes.md`
 - `report` (standard library only): `parse_*.py` parse the raw outputs, `analysis.py` builds the data
   blob and the findings (`RT_THRESHOLDS`), `analyzer.py` renders and is the CLI, `report_template.py` is
   the page, `report_help.py` holds the per-section help and `FLAG_HELP` (a test checks every flag code).
+- `report_dataplane.py` is the CSS and JavaScript of the Dataplane Analysis tab (correlation chart,
+  movable panels, shared cursor/zoom/finding markers). A new time series goes in `metricCatalog()`,
+  a new panel in `panelDefs()` (its id needs a help entry).
 - The delta counter baseline is global on the firewall: rates use `Elapsed time since last sampling`
   (padded number, use `\s+`), not the local clock.
   A foreign sample (another client read the baseline) is handled by `--foreign-samples`

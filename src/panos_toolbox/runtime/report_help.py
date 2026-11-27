@@ -30,11 +30,11 @@ SECTION_TITLES = {
     "ct_table": "Aggregated counters",
     "ct_rates": "Counter rates",
     "ct_samples": "Delta samples",
-    "backlog": "Ingress backlogs",
+    "dataplane": "Dataplane Analysis",
+    "dp_corr": "Correlation",
     "bl_chart": "Backlog usage over time",
     "bl_tags": "Special tags",
     "bl_offenders": "Offending sessions",
-    "pbp": "Packet buffer",
     "pbp_congestion": "Packet buffer congestion",
     "pbp_latency": "Packet buffer latency",
     "pbp_entries": "Packet buffer protection table",
@@ -43,8 +43,6 @@ SECTION_TITLES = {
     "ss_active": "Active sessions by protocol",
     "ss_rates": "Session rates",
     "ss_dump": "Session dump",
-    "resources": "Resources",
-    "throughput": "Throughput",
     "tp_total": "Total throughput",
     "tp_ifaces": "Throughput per interface",
     "res_cpu": "Data plane CPU over time",
@@ -52,9 +50,7 @@ SECTION_TITLES = {
     "res_groups": "CPU per group",
     "res_util": "Resource utilization",
     "res_mgmt": "Management plane load",
-    "capture": "Capture log",
     "cap_cycles": "Cycle durations",
-    "cap_commands": "Commands",
 }
 
 SECTION_HELP = {
@@ -79,8 +75,9 @@ state command is shown in the capture log) and switch it off by hand if needed.<
 <li>"State before" is what the firewall reported when the capture started.</li>
 </ul>""",
     "ov_commands": """
-<p>One row per command that did not exist or was refused on this firewall, and the timing of
-each command that ran (count, average and maximum duration, failures).</p>
+<p>The timing of every command that ran (number of samples, failures, average and maximum
+duration). A slow command on a loaded firewall is itself a sign of load. Commands refused by
+the firewall are listed in the panel above.</p>
 <ul>
 <li><b>Unavailable</b> means the firewall answered "Invalid syntax" for that command (platform
 or software version). Related tabs show a clear message instead of empty charts.</li>
@@ -152,7 +149,7 @@ window, so only the sums of the deltas change. A sample that would need a factor
 listed with its first-seen sample.</li>
 </ul>""",
     "ct_table": """
-<p>One row per counter seen at least once: severity, category, aspect, number of samples in
+<p>One row per counter seen at least once (tick <i>Plot</i> to add it to the chart above): severity, category, aspect, number of samples in
 which it appeared, the maximum, mean and last rate per second and the sum of the deltas.
 Click a header to sort, use the search box for name or description and the severity buttons
 to filter.</p>
@@ -164,8 +161,10 @@ not according to the mode above, and the line under the table says which one was
 description and compare with the traffic level.</li>
 </ul>""",
     "ct_rates": """
-<p>Rate per second of the busiest counters (the number is limited by <code>top_counters</code>)
-in every delta sample. A missing counter in a sample is drawn as zero. The selector decides
+<p>Rate per second in every delta sample. The chart opens on the busiest counters (their number
+is <code>top_counters</code>); any other counter can be added with <i>Add or remove counters</i>
+or by ticking <i>Plot</i> in the table below. <i>Busiest</i> restores the initial set and the
+scale can be made logarithmic when the rates differ widely. A missing counter in a sample is drawn as zero. The selector decides
 about the foreign samples: as in the statistics (default), hidden (a gap in the line) or all
 shown, with a red ring on the foreign ones. Rates are per second and do not need rescaling.
 Hover a point for the value.</p>""",
@@ -175,14 +174,41 @@ foreign sampler: the elapsed time is clearly shorter than the capture interval, 
 another client read and reset the counters in between. The sample covers only part of the
 cycle; the box says whether it was excluded, included or scaled (factor shown) according to
 the foreign samples mode.</p>""",
-    "backlog": """
-<p>Ingress backlog usage per data plane, from the ingress backlog command sampled on the
-fast tick. It shows how full the atomic and total backlog are and which sessions hold the
-largest share.</p>
+    "dataplane": """
+<p>Everything about the data plane on one time axis: CPU, throughput, ingress backlogs and
+packet buffer, with a correlation chart on top to look for the moment where several figures
+move together.</p>
 <ul>
-<li>The command needs inflight monitoring, which the capture enables for its duration and
-always leaves OFF.</li>
-<li>If the firewall does not support the command, this tab says so and has no data.</li>
+<li><b>Zoom and cursor.</b> All time charts of this tab share the time window and the cursor.
+Drag on any chart to zoom them all, double click or use <i>Reset zoom</i> to go back.</li>
+<li><b>Panels.</b> Move a panel by dragging its <i>move</i> handle (or with the arrows), make it
+half or full width, or hide it; hidden panels are listed in the bar at the top. Charts line up
+in time only between panels of the same width.</li>
+<li><b>Finding markers</b> are the dotted lines at the time of the findings that have one
+(usually the first or the peak sample); hover near a line to read it.</li>
+<li>The layout and the selected metrics are saved in this browser (shared by the runtime
+reports opened in it); <i>Reset layout</i> restores the defaults. If the browser does not allow
+storage they last until the page is closed.</li>
+<li>Backlog and packet buffer commands run on the fast tick and need inflight monitoring, which
+the capture enables for its duration and always leaves OFF. A command the firewall does not
+support leaves a message in its panels.</li>
+</ul>""",
+    "dp_corr": """
+<p>Overlay any metric of the capture: CPU (also per core and per second), resources, sessions,
+throughput (total and per interface), ingress backlogs, packet buffer, global counters, POW
+group times and management load. Use <i>Add or remove metrics</i> to search and tick them.</p>
+<ul>
+<li><b>Scale.</b> The units differ, so by default every series is drawn as a percentage of its
+own maximum over the whole capture: compare the <b>shape and timing</b>, not the heights. The
+legend shows each maximum and the tooltip the real value. The other scale keeps the percent
+metrics on their real 0-100 axis.</li>
+<li>Every series keeps its own sample times; nothing is interpolated. Lines join consecutive
+samples, and the tooltip shows the time of the sample used when it differs from the cursor.</li>
+<li>Resource monitor, session, counter and POW figures come once per cycle, backlog, packet
+buffer and throughput once per fast tick, the per-core CPU once per second. Several resource
+monitor figures summarise the previous 60 seconds, so they lag a short spike.</li>
+<li>Counter samples left out by the foreign samples mode are gaps.</li>
+<li>A line moving with another is a hint, not proof that one causes the other.</li>
 </ul>""",
     "bl_chart": """
 <p>Atomic and total backlog usage in percent per slot and data plane over time. Use the
@@ -195,14 +221,6 @@ not sessions. The values show the largest share seen. A special tag has no sessi
 <p>Real sessions that held a large share of the backlog. For each one the capture ran
 <code>show session id</code> right away; the output is shown as text in the detail box. The
 session may be gone by the time you read it, so the saved text is the evidence.</p>""",
-    "pbp": """
-<p>Packet buffer usage and latency from the packet buffer protection commands. Congestion
-shows how much of the buffer is in use, latency how long packets wait in it, and the table
-lists the addresses that the protection currently tracks.</p>
-<ul>
-<li>If the firewall does not support the commands, this tab says so.</li>
-<li>Protection "active" means the firewall started to act on the offenders.</li>
-</ul>""",
     "pbp_congestion": """
 <p>Buffer congestion in percent over time (used divided by total). Sample points where the
 protection was active are drawn with a red marker.</p>""",
@@ -236,33 +254,16 @@ can be missing or appear twice (duplicates are counted once and shown in the hea
 page limit (<code>--sessions-max-pages</code>) stopped the dump, the header says so and the
 SESSIONS_DUMP_TRUNCATED finding is raised. The full list is in
 <code>raw/sessions_all.txt.gz</code> of the capture folder.</p>""",
-    "resources": """
-<p>Dataplane and management resources: CPU per core and per group from <code>show
-running resource-monitor</code> and the management plane load from <code>show system
-resources</code>, sampled once per cycle.</p>
-<ul>
-<li>Resource monitor values are 60 second figures kept by the firewall, so one sample
-summarises the previous minute.</li>
-<li>If the firewall does not support the command, the data plane panels say so.</li>
-</ul>""",
-    "throughput": """
-<p>Traffic through the firewall, computed from the byte counters of <code>show counter
-interface all</code>, read at the end of every fast tick, as the least important command (default: every interval/6
-seconds, see the Overview tab for the interval actually obtained). A rate is the difference
-of two readings divided by the time between them, measured on the local clock at the middle
-of each command, so it is an average over that interval.</p>
-<ul>
-<li>A counter that goes backwards (interface reset or flap) gives a gap, never a negative rate.</li>
-<li>If the firewall does not have the command, or the capture was made with
-<code>--no-iface-counters</code>, the tab says so.</li>
-<li>Counters are not dropped when the tick overruns: a skipped tick only makes the interval
-longer; the rate stays correct.</li>
-</ul>""",
     "tp_total": """
+<p>Computed from the byte counters of <code>show counter interface all</code>, read at the end
+of every fast tick as the least important command: a rate is the difference of two readings
+over the local time between them, so it is an average over that interval. A counter that goes
+backwards (interface reset or flap) gives a gap, never a negative rate; a skipped tick only
+makes the interval longer. With <code>--no-iface-counters</code> there is no data.</p>
 <p>Sum over the <b>physical ports</b> only (so sub-interfaces, aggregates and tunnels are not
 counted twice): received, transmitted and their sum, in Mbit/s. The dashed grey line is
-received + transmitted. The red dots are the throughput that the firewall prints in <code>show
-session info</code> once per cycle, drawn on the nearest interval as a cross-check; the two
+received + transmitted. The red line is the throughput that the firewall prints in <code>show
+session info</code> once per cycle, drawn at its own time as a cross-check; the two
 come from different counters (physical port bytes against the data plane's own figure), so
 they can differ by the traffic that does not become a session (for example dropped or
 management traffic) and by the averaging window.</p>""",
@@ -305,16 +306,9 @@ descriptor, software tags) for the last sample. A pool near 100% runs out of ent
 <p>Management plane load averages (1, 5 and 15 minutes) per cycle. A value above the number of
 management CPU cores means the management plane is saturated; this is separate from the
 data plane.</p>""",
-    "capture": """
-<p>How the capture itself behaved: how long each cycle took and how long every command
-took. A slow cycle or a gap between cycles means the samples are less regular than the
-interval suggests.</p>""",
     "cap_cycles": """
 <p>Total command time per slow cycle in seconds. The warning level is
 <code>cycle_slow_share</code> of the interval; a cycle above it can delay the next one.</p>""",
-    "cap_commands": """
-<p>One row per command: number of samples, failures (no prompt seen), average and maximum
-duration in seconds. A slow command on a loaded firewall is itself a sign of load.</p>""",
 }
 
 def _f(title: str, meaning: str, check: str) -> tuple[str, str, str]:
@@ -326,7 +320,7 @@ FLAG_HELP = {
         "Ingress backlog high",
         "The atomic or total ingress backlog of a data plane reached the warning level in at "
         "least one sample. A full backlog delays packets before they reach the flow stage.",
-        "Open the Ingress backlogs tab: look at the time, whether it is atomic or total, and "
+        "Open the Dataplane Analysis tab (backlog panels): look at the time, atomic or total, and "
         "whether an offender or special tag is listed at the same time."),
     "BACKLOG_OFFENDER": _f(
         "Session dominates the backlog",
@@ -344,7 +338,7 @@ FLAG_HELP = {
         "Command output incomplete",
         "Some samples of a command ended without the CLI prompt (timeout or dropped "
         "connection), so their output may be partial.",
-        "Check the Capture log tab for the command and the durations; rerun with a longer "
+        "Check the Overview tab for the command and the durations; rerun with a longer "
         "interval if the firewall is slow."),
     "CMD_NOT_AVAILABLE": _f(
         "Command not available",
@@ -368,16 +362,16 @@ FLAG_HELP = {
         "Data plane core busy",
         "The highest data plane core average reached cpu_core_warn or cpu_core_crit "
         "(percent).",
-        "Open the Resources tab and see which group is busy. Compare with the POW tab."),
+        "Open the Dataplane Analysis tab and see which core and group are busy. Compare with POW."),
     "CPU_GROUP_HIGH": _f(
         "Data plane group busy",
         "A processing group used at least cpu_group_warn percent in the 60 second window.",
-        "Open the Resources tab; the group name tells which stage is the bottleneck."),
+        "Open the Dataplane Analysis tab (CPU per group); the group name tells the bottleneck."),
     "CYCLE_SLOW": _f(
         "Slow capture cycle",
         "A cycle took more than cycle_slow_share of the interval, so the next cycle may "
         "start late. Threshold: cycle_slow_share.",
-        "Open the Capture log tab and find the slow command. Use a longer interval."),
+        "Open the Overview tab and find the slow command. Use a longer interval."),
     "DELTA_FOREIGN_SAMPLER": _f(
         "Another client reset the delta counters",
         "The firewall keeps one global delta baseline. A sample whose elapsed time is shorter "
@@ -397,17 +391,17 @@ FLAG_HELP = {
         "Packet buffer protection active",
         "Packet buffer protection was active in at least one sample: the firewall considered "
         "the buffer under pressure and acted on offenders.",
-        "Open the Packet buffer tab and read the table of tracked addresses and the time "
+        "Open the Dataplane Analysis tab: read the packet buffer protection table and the time "
         "of the first sample."),
     "PBP_CONGESTION": _f(
         "Packet buffer congestion",
         "Buffer usage reached pbp_congestion_warn percent. Threshold: pbp_congestion_warn.",
-        "Open the Packet buffer tab; check latency and the backlog at the same time."),
+        "Open the Dataplane Analysis tab; check latency and the backlog at the same time."),
     "PBP_LATENCY_HIGH": _f(
         "Packet buffer latency high",
         "The maximum buffer latency reached pbp_latency_warn_ms or pbp_latency_crit_ms "
         "(milliseconds).",
-        "Open the Packet buffer tab and match the time with congestion and CPU."),
+        "Open the Dataplane Analysis tab and match the time with congestion and CPU."),
     "POW_FINDING": _f(
         "POW evaluation item",
         "An item of the POW evaluation (the same rules as the tech support file report) on "
@@ -417,12 +411,12 @@ FLAG_HELP = {
         "Gaps in sampling",
         "Cycles were further apart than gap_ratio times the interval, or sampling ticks "
         "were skipped because earlier work took too long. Threshold: gap_ratio.",
-        "Check the Capture log tab and the network path to the firewall."),
+        "Check the cycle durations in the Overview tab and the network path to the firewall."),
     "SESSIONS_DUMP_TRUNCATED": _f(
         "Session dump incomplete",
         "The paged session dump stopped before the end of the table: page limit, a failed "
         "command or Ctrl+C. The counts of the Session dump panel cover only what was read.",
-        "Raise --sessions-max-pages, or check the Capture log tab for the failed page."),
+        "Raise --sessions-max-pages, or check the Overview tab for the failed command."),
     "SESSIONS_TOP_TALKER": _f(
         "One address holds many sessions",
         "A single source or destination address holds at least sessions_top_share_warn "

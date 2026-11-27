@@ -98,8 +98,18 @@ panos-toolbox runtime report runtime_FW_20260101T000000Z --open
 ```
 
 One offline HTML file next to the folder (`<folder>_runtime.html`), standard library only.
-Tabs: Overview, Findings, POW, Counters, Ingress backlogs, Packet buffer, Sessions, Throughput,
-Resources, Capture log. Every tab and panel has its own collapsed help. Times are UTC.
+Tabs: Overview, Findings, POW, Counters, Dataplane Analysis, Sessions. Every tab and panel has
+its own collapsed help. Times are UTC.
+
+- **Overview** also has the cycle durations chart and the per-command timing table.
+- **Dataplane Analysis** gathers CPU, throughput, ingress backlogs and packet buffer. On top, a
+  correlation chart overlays any metric of the capture (CPU also per core and per second,
+  sessions, throughput, interfaces, backlog, packet buffer, counters, POW groups, management
+  load), by default each as a percentage of its own maximum with the real values in the tooltip;
+  every series keeps its own timestamps. Below it, panels can be dragged, made half or full
+  width and hidden (management load starts hidden). All its time charts share cursor, drag-to-zoom
+  and finding markers. Layout and selected metrics are kept in the browser's local storage
+  (nothing from the capture except metric names, which include interface and counter names).
 
 - **POW** shows per-interval average microseconds, computed from differences of the `ac-count`
   and `ac-total-us` columns between consecutive samples (the "current window" columns keep
@@ -117,7 +127,8 @@ Resources, Capture log. Every tab and panel has its own collapsed help. Times ar
   is left out) or `auto` (default: `exclude`, switching to `rescale` when fewer than
   `foreign_min_valid` samples, default 3, or a quarter of them are clean, so the chart and the
   statistics are never empty). The mean rate is time weighted (total delta over total window).
-  In the page the rate chart has a selector to hide or show the foreign samples (red rings).
+  In the page the rate chart (top of the tab) opens on the busiest counters, any other counter
+  can be added, and a selector hides or shows the foreign samples (red rings).
 - **Throughput** (needs `show counter interface all`, read at the end of every fast tick (skipped first when ticks run late), so at
   X/6): total of the physical ports (received, transmitted, sum) with the `show session info`
   figure as a cross-check, and one chart per configured interface. Rates come from differences

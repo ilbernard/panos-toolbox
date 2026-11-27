@@ -216,10 +216,17 @@ def _delta(samples, th, mode="auto"):
     for c in counters[: th["top_counters"]]:
         top["series"][c["name"]] = [
             (parsed[i][1]["counters"].get(c["name"], {}).get("rate", 0)) for i in range(n)]
+    # every counter, sparse (sample index -> rate, zeros left out), so that any of them can be
+    # plotted in the page
+    sparse = {c["name"]: {str(i): r["counters"][c["name"]]["rate"]
+                          for i, (_, r, *_rest) in enumerate(parsed)
+                          if r["counters"].get(c["name"], {}).get("rate")}
+              for c in counters}
     for c in counters:
         del c["_rates"]
     nused = sum(used)
-    return {"samples": out_samples, "counters": counters, "top": top, "valid": nused,
+    return {"samples": out_samples, "counters": counters, "top": top, "rates": sparse,
+            "valid": nused,
             "excluded": n - nused, "foreign": sum(flags),
             "mode": {"requested": mode, "effective": effective, "reason": reason}}
 
@@ -360,7 +367,7 @@ def _resmon(samples, manifest):
             "t": s.t, "group_max_pct": m["group_max_pct"], "group_max_name": m["group_max_name"],
             "core_max": max(cmax.values()) if cmax else None,
             "core_avg": round(max(cavg.values()), 1) if cavg else None,
-            "util_max": m["util_max_60s"]})
+            "util_max": m["util_max_60s"], "groups": p["groups"]})
         out["last_groups"] = p["groups"]
         out["last_util"] = m["util_max_60s"]
     out["heat"] = _cpu_heat(samples)
@@ -658,7 +665,7 @@ def _findings(blob, th, reader):
         for o in bl["offenders"]:
             f.append(_finding("BACKLOG_OFFENDER", "critical",
                               f"Session {o['id']} holds {o['pct']}% of the ingress backlog",
-                              "show session id output is in the Ingress backlogs tab.",
+                              "show session id output is in the Dataplane Analysis tab.",
                               o["first_seen"]))
     for a in bl["special_tags"]:
         f.append(_finding("BACKLOG_SPECIAL_TAG", "info",

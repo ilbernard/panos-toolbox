@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from panos_toolbox.common.credits import CREDITS_CSS, CREDITS_HTML, CREDITS_PLACEHOLDER
 
+from .report_dataplane import DP_CSS, JS_DATAPLANE
 from .report_help import SECTION_TITLES
 
 TEMPLATE_HEAD = r"""<!doctype html>
@@ -119,6 +120,11 @@ pre.det{margin:4px 0;padding:8px 12px;background:#f7f9fb;border:1px solid var(--
 .sbox{border:1px solid var(--line);border-radius:4px;padding:4px 10px;background:#f7f9fb;font-size:12px;min-width:150px}
 .sbox b{display:block;font-size:13px}
 .sbox.foreign{border:2px solid #b42318;background:#fdecea}
+.picker{margin:0 0 6px}
+.picklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1px 14px;max-height:220px;overflow:auto;border:1px solid var(--line);padding:6px 10px;font-size:12.5px}
+.picklist label{color:var(--ink);overflow-wrap:anywhere}
+.picked{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 8px}
+.picked .pk{font-size:12px;padding:1px 8px;border-radius:10px;background:#f7f9fb}
 .xp{padding:0 6px;line-height:16px;font-size:12px;min-width:22px}
 @media print{
   body{min-width:0;background:#fff}
@@ -131,8 +137,7 @@ pre.det{margin:4px 0;padding:8px 12px;background:#f7f9fb;border:1px solid var(--
 """
 
 _TABS = [("overview", "Overview"), ("findings", "Findings"), ("pow", "POW"),
-         ("counters", "Counters"), ("backlog", "Ingress backlogs"), ("pbp", "Packet buffer"),
-         ("sessions", "Sessions"), ("throughput", "Throughput"), ("resources", "Resources"), ("capture", "Capture log")]
+         ("counters", "Counters"), ("dataplane", "Dataplane Analysis"), ("sessions", "Sessions")]
 
 _TABS_HTML = "\n".join(
     f'<button type="button" role="tab" id="tab-{i}" aria-controls="p-{i}" '
@@ -178,7 +183,7 @@ function foreignNote(){
 }
 const TP = D.throughput || {available:false, t:[], total:{rx_bps:[], tx_bps:[]}, interfaces:{}};
 const CAP = D.capture || {commands:[], cycles:[]}, FND = D.findings || [], TH = D.thresholds || {}, FH = D.flag_help || {};
-const TABS = ['overview','findings','pow','counters','backlog','pbp','sessions','throughput','resources','capture'];
+const TABS = ['overview','findings','pow','counters','dataplane','sessions'];
 const LEVELS = ['critical','warning','info'];
 const PALETTE = ['#1f6f8b','#d9822b','#2f855a','#8e44ad','#b42318','#5d6b7a','#b59a00','#0e7490','#d1478a','#6b8e23'];
 const $ = s => document.querySelector(s);
@@ -315,10 +320,72 @@ function timeLabel(t, span){
   if(span >= 15 * 60e3) return s.slice(11, 16);
   return s.slice(11, 19);
 }
+let clipN = 0;
+function nearestIdx(T, t){
+  let best = -1, bd = Infinity; T.forEach((u, i) => { const d = Math.abs(u - t); if(d < bd){ bd = d; best = i; } });
+  return best;
+}
+const STEPS = new WeakMap();  // cached: asked on every mouse move, one time list per series
+function medianStep(T){
+  if(!STEPS.has(T)){
+    const d = []; for(let i = 1; i < T.length; i++) if(T[i] > T[i - 1]) d.push(T[i] - T[i - 1]);
+    d.sort((a, b) => a - b); STEPS.set(T, d.length ? d[Math.floor(d.length / 2)] : 60e3);
+  }
+  return STEPS.get(T);
+}
+// A sync group makes several charts share the time window, the cursor, the drag-to-zoom and the
+// finding markers: every chart registers a function that moves its own cursor line.
+function syncGroup(t0, t1, onZoom){
+  const g = {full:[t0, t1], zoom:null, markers:[], showMarkers:true, members:[]};
+  g.domain = () => g.zoom || g.full;
+  g.add = (el, move) => g.members.push({el, move});
+  g.cursor = t => { g.members = g.members.filter(m => m.el.isConnected); g.members.forEach(m => m.move(t)); };
+  g.setZoom = (a, b) => {
+    if(a == null) g.zoom = null;
+    else { const lo = Math.max(g.full[0], Math.min(a, b)), hi = Math.min(g.full[1], Math.max(a, b)); if(hi - lo < 2000) return; g.zoom = [lo, hi]; }
+    tipHide(); onZoom();
+  };
+  return g;
+}
+function markerLines(g, t, tol){
+  if(!g || !g.showMarkers) return [];
+  const l = g.markers.filter(m => Math.abs(m.t - t) <= tol).map(m => String(m.level).toUpperCase() + ' ' + m.code + ': ' + m.title);
+  return l.length > 6 ? l.slice(0, 6).concat('... ' + (l.length - 6) + ' more') : l;
+}
+function drawMarkers(svg, g, X, d0, d1, y, h){
+  if(!g || !g.showMarkers) return;
+  for(const m of g.markers){
+    if(m.t < d0 || m.t > d1) continue;
+    const x = X(m.t), c = m.level === 'critical' ? '#b42318' : m.level === 'warning' ? '#b7791f' : '#5d6b7a';
+    svg.appendChild(S('line', {x1:x, x2:x, y1:y, y2:y + h, stroke:c, 'stroke-width':1, 'stroke-dasharray':'1 3', opacity:.8}));
+    svg.appendChild(S('path', {d:'M' + (x - 4) + ' ' + (y - 6) + 'L' + (x + 4) + ' ' + (y - 6) + 'L' + x + ' ' + y + 'Z', fill:c}));
+  }
+}
+// Pointer handling of a synced chart: moving sets the shared cursor, dragging zooms, double click resets.
+function syncPointer(ov, svg, g, W, toTime, left, right, y, h, tip){
+  let from = null;
+  const sel = S('rect', {y, height:h, fill:'#1f6f8b', opacity:.18, visibility:'hidden', 'pointer-events':'none'});
+  svg.appendChild(sel);
+  const px = ev => { const r = svg.getBoundingClientRect(); return Math.max(left, Math.min(right, (ev.clientX - r.left) * (W / r.width))); };
+  ov.addEventListener('mousedown', ev => {
+    if(ev.button !== 0) return; ev.preventDefault(); from = px(ev);
+    const up = e => { window.removeEventListener('mouseup', up); const to = px(e), a = from; from = null; sel.setAttribute('visibility', 'hidden');
+      if(Math.abs(to - a) > 5) g.setZoom(toTime(a), toTime(to)); };
+    window.addEventListener('mouseup', up);
+  });
+  ov.addEventListener('mousemove', ev => {
+    const x = px(ev), t = toTime(x);
+    if(from != null){ sel.setAttribute('x', Math.min(from, x)); sel.setAttribute('width', Math.abs(x - from)); sel.setAttribute('visibility', 'visible'); }
+    g.cursor(t); tipShow(ev, tip(ev, t));
+  });
+  ov.addEventListener('mouseleave', () => { g.cursor(null); tipHide(); });
+  ov.addEventListener('dblclick', () => g.setZoom(null));
+}
 function lineChart(host, o){
   const wrap = E('div', {class:'chart'}), box = E('div'), leg = E('div', {class:'leg'});
-  const hidden = new Set(), T = o.t || [], series = (o.series || []).map((s, i) => Object.assign({color:PALETTE[i % PALETTE.length]}, s));
-  const hasData = T.length && series.some(s => (s.values || []).some(isNum));
+  const hidden = new Set(), series = (o.series || []).map((s, i) => Object.assign({color:PALETTE[i % PALETTE.length]}, s));
+  const G = o.sync || null, timesOf = s => s.t || o.t || [];
+  const hasData = series.some(s => timesOf(s).length && (s.values || []).some(isNum));
   host.appendChild(wrap);
   if(!hasData){ wrap.appendChild(noData(o.empty || 'No data points to draw.')); return null; }
   wrap.appendChild(box);
@@ -337,20 +404,27 @@ function lineChart(host, o){
   function draw(){
     clear(box);
     const W = Math.max(480, Math.floor(wrap.clientWidth || host.clientWidth || 1000)), H = o.height || 260;
-    const L = 62, R = 16, Tp = 22, B = 34, pw = W - L - R, ph = H - Tp - B;
+    const L = 62, R = G ? 62 : 16, Tp = 22, B = 34, pw = W - L - R, ph = H - Tp - B;
+    const all = series.flatMap(s => timesOf(s).filter(isFinite));
+    let t0 = Infinity, t1 = -Infinity;
+    if(G) [t0, t1] = G.domain();
+    else for(const t of all){ if(t < t0) t0 = t; if(t > t1) t1 = t; }
+    if(!(t1 > t0)){ t0 -= 30e3; t1 += 30e3; }
+    const inWin = t => t >= t0 && t <= t1;
     const vis0 = series.filter((s, i) => !hidden.has(i));
     // Logarithmic scale (o.log): values <= 0 cannot be drawn and become gaps.
     const LOG = !!o.log && vis0.some(s => s.values.some(v => isNum(v) && v > 0));
-    const vis = LOG ? vis0.map(s => Object.assign({}, s, {values:s.values.map(v => isNum(v) && v > 0 ? v : null)})) : vis0;
-    let mx = 0, mn = Infinity; vis.forEach(s => s.values.forEach(v => { if(isNum(v)){ if(v > mx) mx = v; if(v > 0 && v < mn) mn = v; } }));
-    const lo = LOG ? Math.floor(Math.log10(mn)) : 0, hi = LOG ? Math.max(lo + 1, Math.ceil(Math.log10(mx))) : 0;
+    const vis = LOG ? vis0.map(s => Object.assign({}, s, {src:s, values:s.values.map(v => isNum(v) && v > 0 ? v : null)})) : vis0;
+    let mx = 0, mn = Infinity; vis.forEach(s => { const T = timesOf(s); s.values.forEach((v, i) => { if(isNum(v) && inWin(T[i])){ if(v > mx) mx = v; if(v > 0 && v < mn) mn = v; } }); });
+    if(!isFinite(mn)) mn = 1;
+    const lo = LOG ? Math.floor(Math.log10(mn)) : 0, hi = LOG ? Math.max(lo + 1, Math.ceil(Math.log10(mx || 1))) : 0;
     const ymax = LOG ? Math.pow(10, hi) : (o.yMax != null ? Math.max(o.yMax, mx) : niceCeil(mx || 1));
     const ymin = LOG ? Math.pow(10, lo) : (o.yMin != null ? o.yMin : 0), yr = (ymax - ymin) || 1;
-    let t0 = Math.min(...T), t1 = Math.max(...T);
-    if(t1 === t0){ t0 -= 30e3; t1 += 30e3; }
     const span = t1 - t0, X = t => L + (t - t0) / span * pw;
     const Y = LOG ? (v => Tp + ph - (Math.log10(v) - lo) / (hi - lo) * ph) : (v => Tp + ph - (v - ymin) / yr * ph);
     const svg = S('svg', {width:W, height:H, viewBox:'0 0 ' + W + ' ' + H, role:'img', 'aria-label':o.title || 'chart'});
+    const clip = 'clip' + (++clipN);
+    svg.appendChild(S('defs', null, S('clipPath', {id:clip}, S('rect', {x:L - 3, y:Tp - 6, width:pw + 6, height:ph + 9}))));
     const ticks = [];
     if(LOG){ const st = Math.max(1, Math.ceil((hi - lo) / 6)); for(let e = lo; e <= hi; e += st) ticks.push(Math.pow(10, e)); }
     else for(let i = 0; i <= 4; i++) ticks.push(ymin + yr * i / 4);
@@ -366,35 +440,60 @@ function lineChart(host, o){
       svg.appendChild(S('text', {x:x, y:H - 16, 'text-anchor':i === 0 ? 'start' : i === nt ? 'end' : 'middle', class:'ax', text:timeLabel(t, span)}));
     }
     svg.appendChild(S('text', {x:W - R, y:H - 3, 'text-anchor':'end', class:'ax', text:'UTC'}));
-    if(o.unit || LOG) svg.appendChild(S('text', {x:L, y:12, 'text-anchor':'end', class:'ax', text:(o.unit || '') + (LOG ? ' (log)' : '')}));
+    if(o.unit || LOG) svg.appendChild(S('text', {x:4, y:12, class:'ax', text:(o.unit || '') + (LOG ? ' (log)' : '')}));
     svg.appendChild(S('line', {x1:L, x2:L, y1:Tp, y2:Tp + ph, class:'axl'}));
     svg.appendChild(S('line', {x1:L, x2:W - R, y1:Tp + ph, y2:Tp + ph, class:'axl'}));
+    drawMarkers(svg, G, X, t0, t1, Tp, ph);
+    const plot = S('g', {'clip-path':'url(#' + clip + ')'});
     for(const s of vis){
-      let d = '', run = 0;
+      const T = timesOf(s);
+      let d = '', run = 0, shown = 0;
       const dots = [];
       s.values.forEach((v, i) => {
         if(!isNum(v) || !isFinite(T[i])){ if(run === 1) dots.push(i - 1); run = 0; return; }
-        d += (run ? 'L' : 'M') + X(T[i]).toFixed(1) + ' ' + Y(v).toFixed(1); run++;
+        d += (run ? 'L' : 'M') + X(T[i]).toFixed(1) + ' ' + Y(v).toFixed(1); run++; if(inWin(T[i])) shown++;
         if(i === s.values.length - 1 && run === 1) dots.push(i);
       });
-      if(d) svg.appendChild(S('path', {d, fill:'none', stroke:s.color, 'stroke-width':1.8, 'stroke-linejoin':'round', 'stroke-dasharray':s.dash || null}));
-      const many = s.values.length > 90;
-      s.values.forEach((v, i) => { if(isNum(v) && (dots.includes(i) || !many)) svg.appendChild(S('circle', {cx:X(T[i]), cy:Y(v), r:many ? 2 : 2.6, fill:s.color})); });
+      if(d) plot.appendChild(S('path', {d, fill:'none', stroke:s.color, 'stroke-width':1.8, 'stroke-linejoin':'round', 'stroke-dasharray':s.dash || null}));
+      const many = shown > 90;
+      s.values.forEach((v, i) => { if(isNum(v) && inWin(T[i]) && (dots.includes(i) || !many)) plot.appendChild(S('circle', {cx:X(T[i]), cy:Y(v), r:many ? 2 : 2.6, fill:s.color})); });
     }
-    (o.marks || []).forEach(i => { const v = vis[0] && vis[0].values[i]; if(isNum(v)) svg.appendChild(S('circle', {cx:X(T[i]), cy:Y(v), r:5, fill:'none', stroke:'#b42318', 'stroke-width':2})); });
+    (o.marks || []).forEach(i => { const v = vis[0] && vis[0].values[i], T = vis[0] ? timesOf(vis[0]) : []; if(isNum(v) && inWin(T[i])) plot.appendChild(S('circle', {cx:X(T[i]), cy:Y(v), r:5, fill:'none', stroke:'#b42318', 'stroke-width':2})); });
+    svg.appendChild(plot);
     const guide = S('line', {y1:Tp, y2:Tp + ph, stroke:'#1c2530', 'stroke-width':1, 'stroke-dasharray':'3 3', visibility:'hidden'});
     svg.appendChild(guide);
-    const ov = S('rect', {x:L, y:Tp, width:pw, height:ph, fill:'transparent'});
-    ov.addEventListener('mousemove', ev => {
-      const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (W / r.width);
-      let best = 0, bd = Infinity; T.forEach((t, i) => { const dd = Math.abs(X(t) - px); if(dd < bd){ bd = dd; best = i; } });
-      guide.setAttribute('x1', X(T[best])); guide.setAttribute('x2', X(T[best])); guide.setAttribute('visibility', 'visible');
-      const lines = [isoOf(T[best]) + ' UTC'];
-      for(const s of vis) lines.push(s.name + ': ' + (isNum(s.values[best]) ? fmtX(s.values[best]) + (o.unit ? ' ' + o.unit : '') : 'n/a'));
-      if(o.extra) lines.push(...o.extra(best));
-      tipShow(ev, lines);
-    });
-    ov.addEventListener('mouseleave', () => { guide.setAttribute('visibility', 'hidden'); tipHide(); });
+    const move = t => { if(t == null || !inWin(t)){ guide.setAttribute('visibility', 'hidden'); return; }
+      guide.setAttribute('x1', X(t)); guide.setAttribute('x2', X(t)); guide.setAttribute('visibility', 'visible'); };
+    const valueText = (s, i) => {
+      const src = s.src || s, v = src.raw ? src.raw[i] : s.values[i], unit = src.raw ? src.unit : o.unit;
+      return isNum(v) ? fmtX(v) + (unit ? ' ' + unit : '') : 'n/a';
+    };
+    const ov = S('rect', {x:L, y:Tp, width:pw, height:ph, fill:'transparent', style:G ? 'cursor:crosshair' : null});
+    if(G){
+      G.add(svg, move);
+      syncPointer(ov, svg, G, W, x => t0 + (x - L) / pw * span, L, L + pw, Tp, ph, (ev, t) => {
+        const lines = [isoOf(t) + ' UTC'];
+        for(const s of vis){
+          const T = timesOf(s), i = nearestIdx(T, t);
+          if(i < 0 || Math.abs(T[i] - t) > Math.max(medianStep(T) * 1.5, span / 200)){ lines.push(s.name + ': n/a'); continue; }
+          lines.push(s.name + ': ' + valueText(s, i) + (Math.abs(T[i] - t) >= 1000 ? '  (' + isoOf(T[i]).slice(11) + ')' : ''));
+        }
+        if(o.extra){ const i = nearestIdx(o.t || [], t); if(i >= 0) lines.push(...o.extra(i)); }
+        return lines.concat(markerLines(G, t, span * 5 / pw));
+      });
+    } else {
+      const T = o.t || [];
+      ov.addEventListener('mousemove', ev => {
+        const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * (W / r.width);
+        const best = nearestIdx(T, t0 + (x - L) / pw * span); if(best < 0) return;
+        move(T[best]);
+        const lines = [isoOf(T[best]) + ' UTC'];
+        for(const s of vis) lines.push(s.name + ': ' + valueText(s, best));
+        if(o.extra) lines.push(...o.extra(best));
+        tipShow(ev, lines);
+      });
+      ov.addEventListener('mouseleave', () => { move(null); tipHide(); });
+    }
     svg.appendChild(ov); box.appendChild(svg);
   }
   const api = {draw, wrap};
@@ -404,6 +503,42 @@ function lineChart(host, o){
 function redrawCharts(){ CHARTS.forEach(c => { if(c.wrap.isConnected && c.wrap.clientWidth > 0) c.draw(); }); }
 let rzT = null;
 window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(redrawCharts, 150); });
+
+// items: [{id, name, group}]; sel: a Set of ids, changed in place; changed() redraws the caller
+function seriesPicker(items, sel, changed, o){
+  o = o || {};
+  const byId = new Map(items.map(it => [it.id, it])), groups = Array.from(new Set(items.map(it => it.group).filter(Boolean)));
+  const chips = E('div', {class:'picked'}), list = E('div', {class:'picklist'}), note = E('p', {class:'hint'});
+  const count = E('summary'), det = E('details', {class:'picker'}, count);
+  let q = '', grp = '';
+  const MAX = 300;
+  const matches = () => items.filter(it => (!grp || it.group === grp) && (!q || (it.name + ' ' + (it.group || '')).toLowerCase().includes(q)));
+  function update(){ refresh(); changed(); }
+  function refresh(){
+    clear(chips); clear(list);
+    for(const id of sel){ const it = byId.get(id); if(!it) continue;
+      const b = E('button', {type:'button', class:'pk', title:'Remove from the chart', 'aria-label':'Remove ' + it.name}, it.name + ' ×');
+      b.addEventListener('click', () => { sel.delete(id); update(); }); chips.appendChild(b); }
+    count.textContent = 'Add or remove ' + (o.what || 'series') + ' (' + sel.size + ' of ' + items.length + ' selected)';
+    const m = matches();
+    m.slice(0, MAX).forEach(it => { const cb = E('input', {type:'checkbox', checked:sel.has(it.id)});
+      cb.addEventListener('change', () => { if(cb.checked) sel.add(it.id); else sel.delete(it.id); update(); });
+      list.appendChild(E('label', null, cb, ' ' + it.name)); });
+    note.textContent = m.length > MAX ? 'Listing the first ' + MAX + ' of ' + m.length + ' matches: search to narrow them down.' : m.length + ' match(es).';
+  }
+  const inp = E('input', {type:'search', size:'30', placeholder:'Search ' + (o.what || 'series'), 'aria-label':'Search ' + (o.what || 'series')});
+  inp.addEventListener('input', () => { q = inp.value.trim().toLowerCase(); refresh(); });
+  const bar = E('div', {class:'bar'}, inp);
+  if(groups.length > 1) bar.appendChild(selectBox('Category', [['', '(all)'], ...groups.map(g => [g, g])], v => { grp = v; refresh(); }));
+  const btn = (text, fn) => { const b = E('button', {type:'button', text}); b.addEventListener('click', () => { fn(); update(); }); bar.appendChild(b); };
+  btn('Add all matching', () => matches().forEach(it => sel.add(it.id)));
+  (o.buttons || []).forEach(([text, ids]) => btn(text, () => { sel.clear(); ids().forEach(id => sel.add(id)); }));
+  btn('Clear', () => sel.clear());
+  det.appendChild(bar); det.appendChild(list); det.appendChild(note);
+  refresh();
+  return {el:E('div', null, det, chips), refresh};
+}
+const lineStyle = i => ({color:PALETTE[i % PALETTE.length], dash:[null, '7 3', '2 3'][Math.floor(i / PALETTE.length) % 3]});
 
 function bars(map, hotAt, midAt){
   const g = E('div', {class:'bars'});
@@ -472,11 +607,13 @@ function renderOverview(){
   if(warns.length || inf.note) ub.appendChild(E('p', {class:'hint', text:'Inflight monitoring is switched on during the capture and always left OFF. Outcome: ' + (inf.note || 'unknown') + '.'}));
   if(un.length){ const ul = E('ul'); un.forEach(k => ul.appendChild(E('li', {class:'mono', text:k + ': the firewall answered "Invalid syntax"'}))); ub.appendChild(ul); }
   else ub.appendChild(E('p', {text:'All optional commands were available on this firewall.'}));
-  const cb = sub('Per-command timing', 'ov_commands', cmdTable());
-  const sc = META.sample_counts || {}, names = Object.keys(sc).sort();
-  const cnt = sub('Samples per command', null, names.length ? E('table', {class:'auto'}, E('tbody', null, ...names.map(n => E('tr', null, E('td', {class:'mono', text:n}), E('td', {class:'r', text:String(sc[n])}))))) : noData());
-  root.appendChild(E('div', {class:'cols'}, ub, cnt));
-  root.appendChild(cb);
+  root.appendChild(ub);
+  const cy = CAP.cycles || [];
+  const cd = sub('Cycle durations', 'cap_cycles');
+  root.appendChild(cd);
+  lineChart(cd, {t:tsOf(cy), unit:'s', title:'Cycle durations', series:[{name:'total command time per cycle', values:cy.map(x => x.total_s)}], extra:i => ['cycle #' + cy[i].n]});
+  if(META.interval_s) cd.appendChild(E('p', {class:'hint', text:'Interval: ' + META.interval_s + ' s. Slow-cycle level: ' + (TH.cycle_slow_share != null ? Math.round(TH.cycle_slow_share * 100) : 50) + '% of the interval.' + (CAP.fast_tick_max_s != null ? ' Longest fast tick: ' + CAP.fast_tick_max_s + ' s.' : '')}));
+  root.appendChild(sub('Per-command timing', 'ov_commands', cmdTable()));
 }
 '''
 
@@ -504,7 +641,7 @@ function renderFindings(){
   const hd = E('div', {class:'sechead', style:'margin-top:18px'}, E('h3', {text:'Flag reference'})); root.appendChild(hd); addHelp(hd, 'flagref');
   const raised = {}; FND.forEach(f => { raised[f.code] = (raised[f.code] || 0) + 1; });
   const codes = Object.keys(FH).sort();
-  const det = E('details'); det.open = true;
+  const det = E('details');
   det.appendChild(E('summary', {text:'Meaning of all ' + codes.length + ' codes, thresholds used and what to check next'}));
   const t = E('table', null, E('thead', null, E('tr', null, ...['Code','Title','Meaning','Threshold keys (value used)','Check next'].map(h => E('th', {text:h})), E('th', {class:'r', text:'Raised'}))));
   const tb = E('tbody'); t.appendChild(tb);
@@ -562,20 +699,43 @@ JS_COUNTERS = r'''
 // ================= Counters
 function renderCounters(){
   const root = clear($('#b-counters'));
-  const cs = DL.counters || [];
+  const cs = DL.counters || [], top = DL.top || {t:[], series:{}}, rates = DL.rates || {}, sm = DL.samples || [];
+  const T = (top.t || []).map(ms), busiest = Object.keys(top.series || {}), sel = new Set(busiest), boxes = new Map();
+  const holder = E('div');
+  let how = 'stats', scale = 'linear';
+  const draw = () => {
+    clear(holder);
+    const keep = i => how === 'all' || (how === 'none' ? !(top.foreign || [])[i] : (top.used || [])[i] !== false);
+    const marks = how === 'none' ? [] : (top.foreign || []).map((f, i) => f && keep(i) ? i : -1).filter(i => i >= 0);
+    lineChart(holder, {t:T, unit:'/s', title:'Counter rates', legend:true, marks, height:320, log:scale === 'log',
+      series:Array.from(sel).map((n, k) => Object.assign({name:n, values:T.map((_, i) => keep(i) ? (rates[n] || {})[i] || 0 : null)}, lineStyle(k))),
+      empty:sel.size ? 'No counter rates to draw.' : 'No counter selected: add one below or tick it in the table.'});
+  };
+  const syncBoxes = () => boxes.forEach((cb, n) => { cb.checked = sel.has(n); });
+  const picker = seriesPicker(cs.map(c => ({id:c.name, name:c.name, group:c.severity})), sel, () => { syncBoxes(); draw(); },
+    {what:'counters', buttons:[['Busiest', () => busiest]]});
+  const bar = E('div', {class:'bar'}, selectBox('Scale', [['linear', 'Linear'], ['log', 'Logarithmic']], v => { scale = v; draw(); }));
+  if((top.foreign || []).some(Boolean)) bar.appendChild(selectBox('Foreign samples', [['stats', 'As in the statistics (' + FMODE + ')'], ['none', 'Hide'], ['all', 'Show all (red rings)']], v => { how = v; draw(); }));
+  const chart = sub('Counter rates', 'ct_rates', bar, picker.el, holder);
+  root.appendChild(chart); draw();
   const tb = sub('Aggregated counters', 'ct_table');
   if(!cs.length) tb.appendChild(noData('No delta counter samples were parsed.'));
   else {
     const sevs = Array.from(new Set(cs.map(c => c.severity))).sort();
     let q = '', sv = 'all';
+    const plot = r => { let cb = boxes.get(r.name);
+      if(!cb){ cb = E('input', {type:'checkbox', 'aria-label':'Plot ' + r.name}); boxes.set(r.name, cb);
+        cb.addEventListener('change', () => { if(cb.checked) sel.add(r.name); else sel.delete(r.name); picker.refresh(); draw(); }); }
+      cb.checked = sel.has(r.name); return cb; };
     const tab = dataTable([
+      {k:'plot', label:'Plot', cls:'nw', num:true, get:r => sel.has(r.name) ? 1 : 0, cell:plot},
       {k:'name', label:'Counter', cls:'mono'}, {k:'severity', label:'Severity', cls:'nw', cell:r => sevBadge(r.severity)},
       {k:'category', label:'Category', cls:'nw'}, {k:'aspect', label:'Aspect', cls:'nw'},
       {k:'samples', label:'Samples', cls:'r', num:true}, {k:'max_rate', label:'Max rate/s', cls:'r', num:true},
       {k:'mean_rate', label:'Mean rate/s', cls:'r', num:true}, {k:'last_rate', label:'Last rate/s', cls:'r', num:true},
       {k:'sum_value', label:'Sum of deltas', cls:'r', num:true}, {k:'description', label:'Description'}], cs, {sort:'max_rate', dir:-1});
     const apply = () => tab.setFilter(r => (sv === 'all' || r.severity === sv) && (!q || (r.name + ' ' + r.description + ' ' + r.category + ' ' + r.aspect).toLowerCase().includes(q)));
-    const inp = E('input', {type:'search', size:'36', placeholder:'Search name or description', 'aria-label':'Search counters'});
+    const inp = E('input', {type:'search', size:'36', placeholder:'Search name or description', 'aria-label':'Search counters in the table'});
     inp.addEventListener('input', () => { q = inp.value.trim().toLowerCase(); apply(); });
     const seg = E('div', {class:'seg', role:'group', 'aria-label':'Filter by severity'});
     ['all', ...sevs].forEach(s => {
@@ -588,22 +748,6 @@ function renderCounters(){
     tb.appendChild(tab.el);
   }
   root.appendChild(tb);
-  const top = DL.top || {t:[], series:{}}, names = Object.keys(top.series || {});
-  const sm = DL.samples || [];
-  root.appendChild(sub('Rate of the busiest counters', 'ct_rates', (function(){
-    const h = E('div'), holder = E('div'), nfo = (top.foreign || []).filter(Boolean).length;
-    let how = 'stats';
-    const show = () => {
-      clear(holder);
-      const keep = i => how === 'all' || (how === 'none' ? !(top.foreign || [])[i] : (top.used || [])[i] !== false);
-      const marks = how === 'none' ? [] : (top.foreign || []).map((f, i) => f && keep(i) ? i : -1).filter(i => i >= 0);
-      lineChart(holder, {t:(top.t || []).map(ms), unit:'/s', title:'Counter rates', legend:true, marks,
-        series:names.map(n => ({name:n, values:top.series[n].map((v, i) => keep(i) ? v : null)})), empty:'No counter rates to draw.'});
-    };
-    if(nfo) h.appendChild(E('div', {class:'bar'}, selectBox('Foreign samples', [['stats', 'As in the statistics (' + FMODE + ')'], ['none', 'Hide'], ['all', 'Show all (red rings)']], v => { how = v; show(); })));
-    h.appendChild(holder); show();
-    return h;
-  })()));
   const strip = E('div', {class:'strip'});
   sm.forEach((s, i) => strip.appendChild(E('div', {class:'sbox' + (s.foreign ? ' foreign' : ''), title:s.foreign ? 'Another client reset the delta baseline during this window (mode: ' + FMODE + ')' : ''},
     E('b', {text:'#' + (i + 1) + '  ' + hms(s.t) + ' UTC'}), E('span', {text:'elapsed ' + (isNum(s.elapsed) ? fmtX(s.elapsed) + ' s' : 'n/a') + ', ' + s.n_counters + ' counters'}),
@@ -614,72 +758,8 @@ function renderCounters(){
 }
 '''
 
-JS_BACKLOG = r'''
-// ================= Ingress backlogs and packet buffer
-function renderBacklog(){
-  const root = clear($('#b-backlog'));
-  if(!BL.available){ root.appendChild(naMsg('the ingress-backlogs command')); return; }
-  const ser = BL.series || [], keys = [];
-  const by = {}; ser.forEach(x => { const k = x.slot + ' / ' + x.dp; if(!by[k]){ by[k] = []; keys.push(k); } by[k].push(x); });
-  keys.sort((a, b) => Math.max(...by[b].map(x => x.total || 0)) - Math.max(...by[a].map(x => x.total || 0)));
-  const cb = sub('Backlog usage', 'bl_chart');
-  if(!keys.length) cb.appendChild(noData());
-  else {
-    const holder = E('div');
-    const show = k => { clear(holder); const l = by[k];
-      lineChart(holder, {t:l.map(x => ms(x.t)), unit:'%', yMax:100, title:'Ingress backlog usage', series:[{name:'atomic %', values:l.map(x => x.atomic)}, {name:'total %', values:l.map(x => x.total)}],
-        extra:i => ['sessions in list: ' + l[i].real + ', special tags: ' + l[i].special]}); };
-    cb.appendChild(E('div', {class:'bar'}, selectBox('Slot / data plane', keys.map(k => [k, k]), show)));
-    cb.appendChild(holder); show(keys[0]);
-  }
-  root.appendChild(cb);
-  const tags = BL.special_tags || [];
-  root.appendChild(sub('Special tags (not sessions)', 'bl_tags', tags.length ? dataTable([
-    {k:'name', label:'Tag', cls:'mono'}, {k:'pct_max', label:'Max %', cls:'r', num:true}, {k:'count_max', label:'Max count', cls:'r', num:true},
-    {k:'samples', label:'Samples', cls:'r', num:true}], tags, {sort:'pct_max', dir:-1, cls:'auto'}).el : E('p', {text:'No special tags were seen.'})));
-  const off = BL.offenders || [], ob = sub('Offending sessions', 'bl_offenders');
-  if(!off.length) ob.appendChild(E('p', {text:'No session held a large share of the backlog.'}));
-  else {
-    const t = E('table', null, E('thead', null, E('tr', null, ...['', 'Session id', 'First seen (UTC)', 'Max %', 'Group', 'Count', 'Slot / DP'].map(h => E('th', {text:h})))));
-    const tbd = E('tbody'); t.appendChild(tbd);
-    off.forEach((o, i) => {
-      const pre = E('pre', {class:'det'}); pre.textContent = o.detail || '(no show session id output was stored)';
-      const dr = E('tr', null, E('td', {colspan:'7'}, pre)); dr.hidden = i > 0;
-      const b = E('button', {type:'button', class:'xp', 'aria-expanded':String(i === 0), 'aria-label':'Detail of session ' + o.id, text:i === 0 ? '-' : '+'});
-      b.addEventListener('click', () => { dr.hidden = !dr.hidden; b.textContent = dr.hidden ? '+' : '-'; b.setAttribute('aria-expanded', String(!dr.hidden)); });
-      tbd.appendChild(E('tr', null, E('td', null, b), E('td', {class:'mono', text:String(o.id)}), E('td', {class:'nw', text:sec(o.first_seen)}), E('td', {class:'r', text:fmtX(o.pct)}),
-        E('td', {text:String(o.grp_id == null ? '' : o.grp_id)}), E('td', {class:'r', text:fmtN(o.count)}), E('td', {text:o.slot + ' / ' + o.dp})));
-      tbd.appendChild(dr);
-    });
-    ob.appendChild(E('div', {class:'scroll'}, t));
-  }
-  root.appendChild(ob);
-}
-function renderPbp(){
-  const root = clear($('#b-pbp'));
-  if(!PBP.available){ root.appendChild(naMsg('the packet buffer protection commands')); return; }
-  const ser = PBP.series || [];
-  const act = []; ser.forEach((x, i) => { if(x.active) act.push(i); });
-  const c1 = sub('Packet buffer congestion', 'pbp_congestion');
-  lineChart(c1, {t:tsOf(ser), unit:'%', yMax:100, title:'Packet buffer congestion', series:[{name:'congestion %', values:ser.map(x => x.congestion_pct)}], marks:act.length <= 40 ? act : [],
-    extra:i => ['used / total: ' + fmtN(ser[i].used) + ' / ' + fmtN(ser[i].total), 'protection active: ' + (ser[i].active ? 'yes' : 'no')]});
-  if(act.length) c1.appendChild(E('p', {class:'hint', text:(act.length <= 40 ? 'Red rings mark the ' : 'Protection was active in ') + act.length + ' sample(s)' + (act.length <= 40 ? ' where protection was active.' : ' (too many to mark).')}));
-  if(PBP.basis) c1.appendChild(E('p', {class:'hint', text:'Basis: ' + PBP.basis}));
-  root.appendChild(c1);
-  const lat = PBP.latency || [];
-  const c2 = sub('Packet buffer latency', 'pbp_latency');
-  lineChart(c2, {t:tsOf(lat), unit:'ms', title:'Packet buffer latency', series:[{name:'latest ms', values:lat.map(x => x.latest_ms)}, {name:'max ms', values:lat.map(x => x.max_ms)}]});
-  root.appendChild(c2);
-  const en = PBP.entries || [], keys = [];
-  en.forEach(e => Object.keys(e).forEach(k => { if(!keys.includes(k)) keys.push(k); }));
-  root.appendChild(sub('Last packet buffer protection table' + (PBP.entries_t ? ' (' + sec(PBP.entries_t) + ' UTC)' : ''), 'pbp_entries',
-    en.length ? dataTable(keys.map(k => ({k, label:k.replace(/_/g, ' '), cls:'mono' + (/^(pcs|percentage|packets_total|dropped|time_till_discard)$/.test(k) ? ' r' : ''), num:/^(pcs|percentage|packets_total|dropped|time_till_discard)$/.test(k),
-      get:r => /^(pcs|percentage|packets_total|dropped|time_till_discard)$/.test(k) ? Number(r[k]) : String(r[k] == null ? '' : r[k]), cell:r => String(r[k] == null ? '' : r[k])})), en, {cls:'auto'}).el : E('p', {text:'The table was empty in every sample.'})));
-}
-'''
-
 JS_SESSIONS = r'''
-// ================= Sessions and resources
+// ================= Sessions
 function renderSessionDump(root){
   const box = sub('Session dump', 'ss_dump');
   if(!SD.available){
@@ -722,177 +802,12 @@ function renderSessions(){
   });
   c.appendChild(g); root.appendChild(c);
 }
-// ---- CPU heatmap: one row per core, one cell per second (see analysis._cpu_heat)
-const heatColor = v => isNum(v) ? 'rgba(180,35,24,' + (0.06 + 0.94 * v / 100).toFixed(2) + ')' : '';
-function cpuHeat(host, H){
-  const ids = (H.cores || []).map(String), n = ids.length, stepMs = (H.step_s || 1) * 1000;
-  const ncell = n ? H.cells[ids[0]].length : 0;
-  if(!n || !ncell){ host.appendChild(noData('No per-second CPU data in this capture.')); return; }
-  const t0 = H.t0_ms, span = ncell * stepMs, thr = +(TH.cpu_core_warn || 80);
-  const wrap = E('div', {class:'chart'}), box = E('div'); wrap.appendChild(box); host.appendChild(wrap);
-  function draw(){
-    clear(box);
-    const W = Math.max(480, Math.floor(wrap.clientWidth || host.clientWidth || 1000));
-    const L = 62, PK = 46, Rr = 16 + PK, T = 16, B = 28, LEG = 26, pw = W - L - Rr;
-    const rp = Math.min(18, Math.max(8, Math.floor(420 / n))), ph = n * rp;
-    const nb = Math.max(1, Math.floor(pw / 2)), bw = pw / nb, bt = span / nb;
-    const svg = S('svg', {width:W, height:T + ph + B + LEG, viewBox:'0 0 ' + W + ' ' + (T + ph + B + LEG), role:'img', 'aria-label':'CPU per core heatmap'});
-    svg.appendChild(S('rect', {x:L, y:T, width:pw, height:ph, fill:'#eef1f4'}));
-    const cols = [];  // per row: value per pixel column
-    ids.forEach((id, k) => {
-      const row = H.cells[id], vals = new Array(nb).fill(null), y = T + k * rp;
-      let pk = null;
-      for(let j = 0; j < row.length; j++){
-        const v = row[j]; if(!isNum(v)) continue;
-        if(pk === null || v > pk) pk = v;
-        const a = Math.floor(j * stepMs / bt), b = Math.max(a, Math.ceil((j + 1) * stepMs / bt) - 1);
-        for(let c = a; c <= Math.min(b, nb - 1); c++) if(vals[c] === null || v > vals[c]) vals[c] = v;
-      }
-      cols.push(vals);
-      let i = 0;
-      while(i < nb){
-        const v = vals[i]; if(v === null){ i++; continue; }
-        let j = i; while(j + 1 < nb && vals[j + 1] === v) j++;
-        const hot = v >= thr;
-        svg.appendChild(S('rect', {x:L + i * bw, y, width:(j - i + 1) * bw, height:rp + 0.3, fill:heatColor(v), stroke:hot ? '#1c2530' : null, 'stroke-width':hot ? 1 : null}));
-        i = j + 1;
-      }
-      const fs = Math.max(8, Math.min(11, rp - 1)), yc = y + rp / 2 + fs * 0.35;
-      svg.appendChild(S('text', {x:L - 6, y:yc, 'text-anchor':'end', class:'ax', 'font-size':fs, text:'core ' + id}));
-      if(pk !== null){
-        svg.appendChild(S('rect', {x:W - Rr + 4, y, width:PK - 8, height:rp + 0.3, fill:heatColor(pk)}));
-        if(rp >= 8) svg.appendChild(S('text', {x:W - Rr + 4 + (PK - 8) / 2, y:yc, 'text-anchor':'middle', 'font-size':fs, fill:pk >= 55 ? '#fff' : '#1c2530', text:String(pk)}));
-      }
-    });
-    svg.appendChild(S('text', {x:W - Rr + 4 + (PK - 8) / 2, y:T - 3, 'text-anchor':'middle', class:'ax', text:'peak'}));
-    const nt = Math.max(2, Math.min(8, Math.floor(pw / 110)));
-    for(let i = 0; i <= nt; i++){
-      const t = t0 + span * i / nt, x = L + pw * i / nt;
-      svg.appendChild(S('line', {x1:x, x2:x, y1:T + ph, y2:T + ph + 4, class:'axl'}));
-      svg.appendChild(S('text', {x, y:T + ph + 17, 'text-anchor':i === 0 ? 'start' : i === nt ? 'end' : 'middle', class:'ax', text:timeLabel(t, span)}));
-    }
-    svg.appendChild(S('text', {x:W - Rr, y:T + ph + 17 + 9, 'text-anchor':'end', class:'ax', text:'UTC'}));
-    svg.appendChild(S('line', {x1:L, x2:L + pw, y1:T + ph, y2:T + ph, class:'axl'}));
-    const ly = T + ph + B + 4, gid = 'hmg' + Math.random().toString(36).slice(2, 8);
-    svg.appendChild(S('defs', null, S('linearGradient', {id:gid, x1:0, x2:1, y1:0, y2:0}, S('stop', {offset:0, 'stop-color':heatColor(0)}), S('stop', {offset:1, 'stop-color':heatColor(100)}))));
-    svg.appendChild(S('text', {x:L, y:ly + 9, class:'ax', text:'0%'}));
-    svg.appendChild(S('rect', {x:L + 26, y:ly, width:140, height:11, fill:'url(#' + gid + ')', stroke:'#d8dde3'}));
-    svg.appendChild(S('text', {x:L + 172, y:ly + 9, class:'ax', text:'100%'}));
-    svg.appendChild(S('rect', {x:L + 226, y:ly, width:14, height:11, fill:'#eef1f4', stroke:'#d8dde3'}));
-    svg.appendChild(S('text', {x:L + 246, y:ly + 9, class:'ax', text:'no data'}));
-    svg.appendChild(S('rect', {x:L + 316, y:ly + 0.5, width:14, height:10, fill:heatColor(thr), stroke:'#1c2530', 'stroke-width':1}));
-    svg.appendChild(S('text', {x:L + 336, y:ly + 9, class:'ax', text:'at or above ' + thr + '% (cpu_core_warn)'}));
-    const ov = S('rect', {x:L, y:T, width:pw, height:ph, fill:'transparent'});
-    ov.addEventListener('mousemove', ev => {
-      const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (W / r.width), py = (ev.clientY - r.top) * (W / r.width);
-      const k = Math.max(0, Math.min(n - 1, Math.floor((py - T) / rp))), c = Math.max(0, Math.min(nb - 1, Math.floor((px - L) / bw)));
-      const a = t0 + c * bt, b = a + bt, v = cols[k][c];
-      tipShow(ev, ['core ' + ids[k], isoOf(a) + ' - ' + isoOf(b) + ' UTC', isNum(v) ? 'max ' + v + ' %' : 'no data']);
-    });
-    ov.addEventListener('mouseleave', tipHide);
-    svg.appendChild(ov); box.appendChild(svg);
-  }
-  CHARTS.push({draw, wrap}); draw();
-  const um = H.unmeasured || [];
-  if(um.length) host.appendChild(E('p', {class:'hint', text:'Not measured by the firewall (printed as *): core ' + um.join(', core ') + '. Not drawn.'}));
-  if((H.step_s || 1) > 1) host.appendChild(E('p', {class:'hint', text:'Long capture: every cell is the maximum of ' + H.step_s + ' seconds.'}));
-}
-function renderResources(){
-  const root = clear($('#b-resources'));
-  const ser = RM.series || [];
-  if(!RM.available){ root.appendChild(naMsg('the resource-monitor command')); }
-  else {
-    const T = tsOf(ser);
-    const a = sub('Data plane CPU per cycle', 'res_cpu');
-    lineChart(a, {t:T, unit:'%', yMax:100, title:'Core CPU', series:[{name:'busiest core (max 60 s)', values:ser.map(x => x.core_max)}, {name:'highest core average (60 s)', values:ser.map(x => x.core_avg)}]});
-    root.appendChild(a);
-    const hm = sub('CPU per core (heatmap)', 'res_heat');
-    if(RM.heat) cpuHeat(hm, RM.heat); else hm.appendChild(noData('No per-second CPU table could be parsed.'));
-    root.appendChild(hm);
-    const g = sub('CPU per group', 'res_groups'), cols = E('div', {class:'cols two'});
-    const l = E('div', null, E('h4', {text:'Busiest group per cycle', style:'margin:6px 0'}));
-    lineChart(l, {t:T, unit:'%', yMax:100, title:'Busiest group', height:220, series:[{name:'busiest group %', values:ser.map(x => x.group_max_pct)}], extra:i => ['group: ' + (ser[i].group_max_name || 'n/a')]});
-    const r = E('div', null, E('h4', {text:'Last sample, every group', style:'margin:6px 0'}), bars(RM.last_groups, +(TH.cpu_group_warn || 80), 50));
-    cols.appendChild(l); cols.appendChild(r); g.appendChild(cols); root.appendChild(g);
-    const um = {}; ser.forEach(x => Object.keys(x.util_max || {}).forEach(k => { um[k] = Math.max(um[k] || 0, x.util_max[k]); }));
-    root.appendChild(sub('Resource utilization, maximum over the capture (60 s figures)', 'res_util', bars(um, 90, 70)));
-  }
-  const ld = sub('Management plane load average', 'res_mgmt');
-  lineChart(ld, {t:tsOf(LOAD), title:'Load average', series:[{name:'1 min', values:LOAD.map(x => x.load1)}, {name:'5 min', values:LOAD.map(x => x.load5)}, {name:'15 min', values:LOAD.map(x => x.load15)}]});
-  root.appendChild(ld);
-}
-// ================= Throughput (from "show counter interface all" in every fast tick)
-const bpsM = v => isNum(v) ? v / 1e6 : null;
-function renderThroughput(){
-  const root = clear($('#b-throughput'));
-  if(!TP.available){ root.appendChild(naMsg('the interface counters (show counter interface all)')); return; }
-  const T = (TP.t || []).map(ms), rx = (TP.total.rx_bps || []).map(bpsM), tx = (TP.total.tx_bps || []).map(bpsM);
-  const sum = rx.map((v, i) => isNum(v) && isNum(tx[i]) ? v + tx[i] : null);
-  // the figure the firewall reports in "show session info" (kbps), once per cycle, put on the nearest interval
-  const ref = T.map(() => null), half = (TP.dt || []).map(d => d * 500);
-  SS.forEach(x => { const t = ms(x.t); if(!isNum(x.kbps) || !isFinite(t)) return;
-    let best = -1, bd = Infinity; T.forEach((u, i) => { const dd = Math.abs(u - t); if(dd < bd){ bd = dd; best = i; } });
-    if(best >= 0 && bd <= Math.max(half[best] || 0, 1000)) ref[best] = x.kbps / 1000; });
-  const a = sub('Total throughput', 'tp_total');
-  lineChart(a, {t:T, unit:'Mbit/s', title:'Total throughput of the physical ports', legend:true, series:[
-    {name:'received (all physical ports)', values:rx}, {name:'transmitted (all physical ports)', values:tx},
-    {name:'received + transmitted', values:sum, dash:'5 4', color:PALETTE[5]},
-    {name:'firewall figure (show session info, per cycle)', values:ref, color:PALETTE[4]}],
-    extra:i => ['interval: ' + fmtX((TP.dt || [])[i]) + ' s']});
-  const peak = Math.max(0, ...sum.filter(isNum)), ok = sum.filter(isNum);
-  a.appendChild(E('p', {class:'hint', text:'Peak received + transmitted ' + fmtX(peak) + ' Mbit/s, mean ' + fmtX(ok.length ? ok.reduce((p, q) => p + q, 0) / ok.length : 0) +
-    ' Mbit/s over ' + ok.length + ' interval(s); average interval ' + fmtX((TP.dt || []).reduce((p, q) => p + q, 0) / Math.max(1, (TP.dt || []).length)) + ' s.' +
-    ((TP.total.rx_bps || []).some(v => v == null) ? ' Some intervals have no total (a port counter went backwards).' : '')}));
-  root.appendChild(a);
-
-  const names = Object.keys(TP.interfaces || {});
-  const rows = names.map(n => { const f = TP.interfaces[n], r = f.rx_bps.map(bpsM), t = f.tx_bps.map(bpsM);
-    const s2 = r.map((v, i) => (isNum(v) ? v : 0) + (isNum(t[i]) ? t[i] : 0));
-    return {name:n, f, r, t, peak:Math.max(0, ...s2), mean:s2.length ? s2.reduce((p, q) => p + q, 0) / s2.length : 0}; });
-  const b = sub('Throughput per interface', 'tp_ifaces');
-  if(!rows.length) b.appendChild(noData('No interface counters were parsed.'));
-  else {
-    let q = '', busy = true, order = 'peak';
-    const grid = E('div', {class:'cols two'}), note = E('p', {class:'hint'});
-    const LIMIT = 60;
-    const paint = () => {
-      clear(grid);
-      let list = rows.filter(r => (!busy || r.peak > 0) && (!q || r.name.toLowerCase().includes(q)));
-      list.sort((x, y) => order === 'name' ? x.name.localeCompare(y.name, undefined, {numeric:true}) : y.peak - x.peak);
-      const total = list.length; list = list.slice(0, LIMIT);
-      list.forEach(r => { const h = E('div', null, E('h4', {text:r.name + '   peak ' + fmtX(r.peak) + ' Mbit/s, mean ' + fmtX(r.mean) + ' Mbit/s', style:'margin:8px 0 0'}));
-        lineChart(h, {t:T, unit:'Mbit/s', title:'Throughput of ' + r.name, height:170, series:[{name:'received', values:r.r, color:PALETTE[0]}, {name:'transmitted', values:r.t, color:PALETTE[1]}], legend:true});
-        grid.appendChild(h); });
-      note.textContent = (total > LIMIT ? 'Showing the first ' + LIMIT + ' of ' + total + ' interfaces. ' : total + ' interface(s). ') +
-        (TP.skipped_idle ? TP.skipped_idle + ' physical port(s) without configuration and without traffic are not listed. ' : '') + (TP.resets ? TP.resets + ' counter reset(s) left a gap.' : '');
-      if(!total) grid.appendChild(noData('No interface matches.'));
-      redrawCharts();
-    };
-    const inp = E('input', {type:'search', size:'24', placeholder:'Filter by name', 'aria-label':'Filter interfaces'});
-    inp.addEventListener('input', () => { q = inp.value.trim().toLowerCase(); paint(); });
-    const cb = E('input', {type:'checkbox', checked:true, 'aria-label':'Only interfaces with traffic'});
-    cb.addEventListener('change', () => { busy = cb.checked; paint(); });
-    b.appendChild(E('div', {class:'bar'}, inp, E('label', null, cb, ' only interfaces with traffic'),
-      selectBox('Sort by', [['peak', 'peak throughput'], ['name', 'name']], v => { order = v; paint(); })));
-    b.appendChild(note); b.appendChild(grid); paint();
-  }
-  root.appendChild(b);
-}
-function renderCapture(){
-  const root = clear($('#b-capture'));
-  const cy = CAP.cycles || [];
-  const a = sub('Cycle durations', 'cap_cycles');
-  lineChart(a, {t:tsOf(cy), unit:'s', title:'Cycle durations', series:[{name:'total command time per cycle', values:cy.map(x => x.total_s)}], extra:i => ['cycle #' + cy[i].n]});
-  if(META.interval_s) a.appendChild(E('p', {class:'hint', text:'Interval: ' + META.interval_s + ' s. Slow-cycle level: ' + (TH.cycle_slow_share != null ? Math.round(TH.cycle_slow_share * 100) : 50) + '% of the interval.' + (CAP.fast_tick_max_s != null ? ' Longest fast tick: ' + CAP.fast_tick_max_s + ' s.' : '')}));
-  root.appendChild(a);
-  root.appendChild(sub('Commands', 'cap_commands', cmdTable()));
-}
 '''
 
 JS_MAIN = r'''
 // ================= Tabs and start
 const built = {};
-const RENDER = {overview:renderOverview, findings:renderFindings, pow:renderPow, counters:renderCounters, backlog:renderBacklog, pbp:renderPbp, sessions:renderSessions, throughput:renderThroughput, resources:renderResources, capture:renderCapture};
+const RENDER = {overview:renderOverview, findings:renderFindings, pow:renderPow, counters:renderCounters, dataplane:renderDataplane, sessions:renderSessions};
 let cur = 'overview';
 function showTab(id, noHash){
   if(!TABS.includes(id)) id = 'overview';
@@ -923,8 +838,8 @@ showTab(tabFromHash() || 'overview', true);
 
 _STORE = "\n".join(f'<div data-hid="{i}">__HB_{i}__ __HP_{i}__</div>' for i in SECTION_TITLES)
 
-TEMPLATE = (TEMPLATE_HEAD + TEMPLATE_CSS + CREDITS_CSS
+TEMPLATE = (TEMPLATE_HEAD + TEMPLATE_CSS + DP_CSS + CREDITS_CSS
             + TEMPLATE_BODY.replace("__TABS__", _TABS_HTML).replace("__PANELS__", _PANELS_HTML)
             .replace("__HELPSTORE__", _STORE).replace(CREDITS_PLACEHOLDER, CREDITS_HTML)
-            + JS_CORE + JS_OVERVIEW + JS_FINDINGS + JS_POW + JS_COUNTERS + JS_BACKLOG
-            + JS_SESSIONS + JS_MAIN)
+            + JS_CORE + JS_OVERVIEW + JS_FINDINGS + JS_POW + JS_COUNTERS + JS_SESSIONS
+            + JS_DATAPLANE + JS_MAIN)

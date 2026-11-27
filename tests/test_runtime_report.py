@@ -55,6 +55,27 @@ def test_render_combined_and_node_syntax(tmp_path):
     assert res.returncode == 0, res.stderr
 
 
+def test_tabs_and_dataplane_data(tmp_path):
+    blob = analysis.analyze(build_capture(tmp_path, ("drops",)))
+    page = analyzer.render(blob)
+    assert re.findall(r'id="tab-([a-z]+)"', page) == [
+        "overview", "findings", "pow", "counters", "dataplane", "sessions"]
+    assert "Samples per command" not in page
+    # every aggregated counter can be plotted, not only the busiest ones
+    delta = blob["delta"]
+    assert set(delta["rates"]) == {c["name"] for c in delta["counters"]}
+    assert delta["rates"]["pkt_demo_recv"] == {str(i): 200 for i in range(4)}
+    # a counter that appears in one sample only is stored for that sample only
+    assert list(delta["rates"]["late_demo_counter"]) == ["1"]
+    assert all(x["groups"] for x in blob["resmon"]["series"])
+
+
+def test_counter_rates_beyond_the_busiest(tmp_path):
+    blob = analysis.analyze(build_capture(tmp_path, ("drops",)), {"top_counters": 1})
+    assert len(blob["delta"]["top"]["series"]) == 1
+    assert len(blob["delta"]["rates"]) == len(blob["delta"]["counters"]) > 1
+
+
 def test_empty_capture_renders(tmp_path):
     folder = tmp_path / "empty"
     (folder / "raw").mkdir(parents=True)
